@@ -1,0 +1,205 @@
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { OrderStatus, PayableStatus, Prisma, Role, SourceType } from '@prisma/client';
+import { AuthUser } from '../auth/current-user.decorator';
+import { EbarimtService } from '../ebarimt/ebarimt.service';
+import { InventoryService } from '../inventory/inventory.service';
+import { assertWarehouseAccess } from '../inventory/warehouse-scope';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateReturnDto } from './dto/create-return.dto';
+
+const RETURN_INCLUDE = {
+  items: { include: { orderItem: { include: { product: true } } } },
+  createdBy: { select: { id: true, fullName: true, role: true } },
+};
+
+@Injectable()
+export class ReturnsService {
+  private readonly log = new Logger(ReturnsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly inventory: InventoryService,
+    private readonly ebarimt: EbarimtService,
+  ) {}
+
+  async create(orderId: string, dto: CreateReturnDto, user: AuthUser) {
+    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER && user.role !== Role.BORLUULAGCH) {
+      throw new ForbiddenException('Only cashiers, managers, or admin can process returns');
+    }
+
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const created = await this.prisma.$transaction(
+          async (tx) => this.processReturn(tx, orderId, dto, user),
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
+        await this.ebarimt.refundForReturn({
+          returnId: created.id,
+          orderNumber: created.orderNumber,
+          receiptId: created.receiptId,
+          amount: created.refundAmount,
+          items: created.ebarimtItems,
+        });
+        return this.prisma.order.findUniqueOrThrow({
+          where: { id: orderId },
+          include: {
+            items: { include: { product: true } },
+            zone: true,
+            payments: { orderBy: { createdAt: 'asc' } },
+            createdBy: { select: { id: true, fullName: true, role: true } },
+            completedBy: { select: { id: true, fullName: true, role: true } },
+            feeOverrides: {
+              orderBy: { createdAt: 'desc' },
+              include: { actor: { select: { fullName: true, role: true } } },
+            },
+            returns: { include: RETURN_INCLUDE, orderBy: { createdAt: 'desc' } },
+            supplierPayables: true,
+          },
+        });
+      } catch (err) {
+        lastError = err;
+        const code = (err as { code?: string }).code;
+        if (code === 'P2034' && attempt < maxAttempts) {
+          this.log.warn(`Return retry ${attempt} for order ${orderId} (serialization conflict)`);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw lastError;
+  }
+
+  private async processReturn(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    dto: CreateReturnDto,
+    user: AuthUser,
+  ) {
+    const order = await tx.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: { include: { product: true, returnItems: true } },
+        payments: true,
+      },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    assertWarehouseAccess(user, order.warehouseId);
+    if (order.status !== OrderStatus.COMPLETED && order.status !== OrderStatus.READY_FOR_LOADING) {
+      throw new BadRequestException('Returns are only allowed after the order is paid');
+    }
+
+    const byId = new Map(order.items.map((i) => [i.id, i]));
+    const stockRestore: Array<{ productId: string; quantity: Prisma.Decimal }> = [];
+    const returnLines: Array<{
+      orderItemId: string;
+      quantity: Prisma.Decimal;
+      lineRefund: number;
+      sourceType: SourceType;
+      name: string;
+      unitPrice: number;
+    }> = [];
+    let refundAmount = 0;
+
+    for (const line of dto.items) {
+      const item = byId.get(line.orderItemId);
+      if (!item || item.orderId !== orderId) {
+        throw new BadRequestException(`Order item ${line.orderItemId} does not belong to this order`);
+      }
+      const qty = new Prisma.Decimal(line.quantity);
+      if (qty.lte(0)) throw new BadRequestException('Return quantity must be positive');
+      const already = item.returnItems.reduce(
+        (sum, r) => sum.plus(r.quantity),
+        new Prisma.Decimal(0),
+      );
+      const remaining = new Prisma.Decimal(item.quantity.toString()).minus(already);
+      if (qty.gt(remaining)) {
+        throw new BadRequestException(
+          `Cannot return ${qty.toString()} of ${item.product.nameMn}; remaining ${remaining.toString()}`,
+        );
+      }
+      const lineRefund = Math.round(item.unitPrice * Number(qty));
+      refundAmount += lineRefund;
+      returnLines.push({
+        orderItemId: item.id,
+        quantity: qty,
+        lineRefund,
+        sourceType: item.sourceType,
+        name: item.product.nameMn,
+        unitPrice: item.unitPrice,
+      });
+      if (order.status === OrderStatus.COMPLETED && item.sourceType === SourceType.INTERNAL) {
+        stockRestore.push({ productId: item.productId, quantity: qty });
+      }
+    }
+
+    if (refundAmount <= 0) {
+      throw new BadRequestException('Refund amount must be greater than 0');
+    }
+
+    const salesReturn = await tx.salesReturn.create({
+      data: {
+        orderId,
+        reason: dto.reason.trim(),
+        refundAmount,
+        refundMethod: dto.refundMethod,
+        createdById: user.id,
+        ebarimtStatus: 'PENDING',
+        items: {
+          create: returnLines.map((l) => ({
+            orderItemId: l.orderItemId,
+            quantity: l.quantity,
+            lineRefund: l.lineRefund,
+          })),
+        },
+      },
+    });
+
+    if (stockRestore.length) {
+      // Returned goods go back to the warehouse the order was taken from.
+      await this.inventory.restoreForReturn(tx, stockRestore, {
+        warehouseId: order.warehouseId,
+        refType: 'RETURN',
+        refId: salesReturn.id,
+        reason: `Return on ${order.orderNumber}`,
+        actorId: user.id,
+      });
+    }
+
+    for (const line of returnLines) {
+      if (line.sourceType !== SourceType.EXTERNAL_SUPPLIER) continue;
+      const payable = await tx.supplierPayable.findFirst({
+        where: { orderItemId: line.orderItemId, status: PayableStatus.OPEN },
+      });
+      if (!payable) continue;
+      const nextQty = new Prisma.Decimal(payable.quantity.toString()).minus(line.quantity);
+      const nextAmount = Math.max(0, payable.amountMnt - line.lineRefund);
+      await tx.supplierPayable.update({
+        where: { id: payable.id },
+        data: {
+          quantity: nextQty.lt(0) ? new Prisma.Decimal(0) : nextQty,
+          amountMnt: nextAmount,
+          status: nextAmount === 0 || nextQty.lte(0) ? PayableStatus.VOID : PayableStatus.OPEN,
+        },
+      });
+    }
+
+    this.log.log(
+      `Return ${salesReturn.id} on ${order.orderNumber} refund=${refundAmount} ${dto.refundMethod} by ${user.email}`,
+    );
+
+    return {
+      id: salesReturn.id,
+      refundAmount,
+      orderNumber: order.orderNumber,
+      receiptId: order.receiptId,
+      ebarimtItems: returnLines.map((l) => ({
+        name: l.name,
+        qty: Number(l.quantity),
+        unitPrice: l.unitPrice,
+        totalAmount: l.lineRefund,
+      })),
+    };
+  }
+}

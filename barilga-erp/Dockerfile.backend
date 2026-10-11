@@ -1,0 +1,44 @@
+# NestJS API — multi-stage production image
+# Build: docker build -f Dockerfile.backend -t barilga-api .
+# Runtime: Prisma migrate deploy then node dist/main.js
+
+FROM node:20-alpine AS deps
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl python3 make g++
+COPY package.json package-lock.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+RUN npm ci --workspace=@barilga/api --include-workspace-root
+
+FROM node:20-alpine AS build
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
+COPY apps/api ./apps/api
+WORKDIR /app/apps/api
+RUN npx prisma generate --schema=prisma/schema.prisma
+RUN npx nest build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl \
+  && addgroup -g 1001 -S barilga \
+  && adduser -S barilga -u 1001 -G barilga
+ENV NODE_ENV=production
+ENV API_PORT=4000
+
+COPY --from=build --chown=barilga:barilga /app/package.json ./package.json
+COPY --from=build --chown=barilga:barilga /app/node_modules ./node_modules
+COPY --from=build --chown=barilga:barilga /app/apps/api/package.json ./apps/api/package.json
+COPY --from=build --chown=barilga:barilga /app/apps/api/dist ./apps/api/dist
+COPY --from=build --chown=barilga:barilga /app/apps/api/prisma ./apps/api/prisma
+COPY --chown=barilga:barilga docker/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
+RUN chmod +x /usr/local/bin/api-entrypoint.sh \
+  && mkdir -p /app/logs \
+  && chown -R barilga:barilga /app/logs
+
+WORKDIR /app/apps/api
+USER barilga
+EXPOSE 4000
+ENTRYPOINT ["api-entrypoint.sh"]

@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: barilga-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: barilga
+      POSTGRES_PASSWORD: barilga
+      POSTGRES_DB: barilga_erp
+    ports:
+      - "5432:5432"
+    volumes:
+      - barilga_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U barilga -d barilga_erp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  barilga_pg:

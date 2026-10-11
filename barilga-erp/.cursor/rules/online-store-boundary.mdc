@@ -1,0 +1,15 @@
+---
+description: Online shop is a separate site and domain, tightly coupled to this ERP database and API
+alwaysApply: true
+---
+
+# Online store boundary
+
+The owner wants the customer online shop separate from the internal ERP, on its own domain. Database, stock, prices, orders, payments, and business rules stay one system.
+
+- Staff ERP (POS, warehouse, credit, invoices, HR) and the public shop are different sites. Do not mix shop pages into the staff UI, and do not expose staff screens on the shop domain.
+- One PostgreSQL database and one Nest API. The shop reads and writes products, stock, prices, orders, and payments through that API. Do not create a second product, stock, or order database.
+- `Product.stockQty` and warehouse balances are the shop's stock. A shop sale must reserve or deduct the same stock the ERP uses.
+- Current code has public shop pages inside `apps/web` (`/order`, `/track`). New shop work belongs in a separate storefront that can be deployed on the shop domain, still calling this API.
+- Do not fork payment, order, or stock logic for the shop. Extend the existing services.
+---

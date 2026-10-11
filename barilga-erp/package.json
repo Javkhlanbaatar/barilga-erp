@@ -1,0 +1,39 @@
+{
+  "name": "barilga-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Construction ERP & e-commerce for the Mongolian market",
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @barilga/web",
+    "start:dev": "npm run start:dev -w @barilga/api",
+    "dev:api": "npm run start:dev -w @barilga/api",
+    "dev:web": "npm run dev -w @barilga/web",
+    "seed": "npm run prisma:seed -w @barilga/api",
+    "prisma:migrate": "npm run prisma:migrate -w @barilga/api",
+    "build": "npm run build -w @barilga/api && npm run build -w @barilga/web",
+    "db:up": "node scripts/local-pg.mjs",
+    "db:docker": "docker compose up -d postgres",
+    "db:migrate": "npm run prisma:migrate -w @barilga/api",
+    "db:seed": "npm run prisma:seed -w @barilga/api",
+    "start:prod": "pm2 start ecosystem.config.js",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "bcrypt@5.1.1": true,
+    "esbuild@0.28.2": true,
+    "@embedded-postgres/windows-x64@18.4.0-beta.17": true
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17"
+  }
+}
