@@ -16,6 +16,7 @@ import {
   OverrideFeesDto,
   QuoteOrderDto,
 } from './dto/order.dto';
+import { GatherService } from './gather.service';
 import { OrdersService } from './orders.service';
 
 @Controller('orders')
@@ -24,6 +25,7 @@ export class OrdersController {
   constructor(
     private readonly orders: OrdersService,
     private readonly returns: ReturnsService,
+    private readonly gather: GatherService,
   ) {}
 
   @Post('quote')
@@ -67,6 +69,20 @@ export class OrdersController {
   @Roles(Role.BORLUULAGCH)
   override(@Param('id') id: string, @Body() dto: OverrideFeesDto, @CurrentUser() user: AuthUser) {
     return this.orders.overrideFees(id, dto, user);
+  }
+
+  /** Where this order's stock would be collected from (other warehouses → its dispatch warehouse). */
+  @Get(':id/gather-plan')
+  @Roles(...OVERSIGHT_ROLES)
+  gatherPlan(@Param('id') id: string) {
+    return this.gather.plan(id);
+  }
+
+  /** Sends the planned transfers into the dispatch warehouse, linked to this order. */
+  @Post(':id/gather')
+  @Roles(...OVERSIGHT_ROLES)
+  gatherStock(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.gather.gather(id, user);
   }
 
   /** Only for orders with no recorded payment; paid orders need a refund process that is not defined yet. */

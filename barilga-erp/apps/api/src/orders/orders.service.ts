@@ -7,7 +7,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType } from '@prisma/client';
+import { BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { isFallbackPicker, isHiredTransport, isPosActor, isTransportActor, isWarehouseActor } from '../auth/rbac';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
@@ -166,6 +166,24 @@ export class OrdersService {
     });
   }
 
+  /**
+   * Staff locked to a warehouse may only act on that warehouse's orders. Must run BEFORE any write.
+   * Orders from before warehouses existed (warehouseId null) belong to the default warehouse.
+   */
+  private async assertOrderAccess(user: AuthUser, warehouseId: string | null) {
+    if (!lockedWarehouseId(user)) return;
+    const fallback = warehouseId ? undefined : await this.inventory.defaultWarehouseId();
+    assertWarehouseAccess(user, warehouseId, fallback);
+  }
+
+  /** List filter for a locked user's own warehouse (including pre-warehouse orders when it is the default). */
+  private async orderScope(user: AuthUser): Promise<Prisma.OrderWhereInput> {
+    const locked = lockedWarehouseId(user);
+    if (!locked) return {};
+    const isDefault = locked === (await this.inventory.defaultWarehouseId());
+    return isDefault ? { OR: [{ warehouseId: locked }, { warehouseId: null }] } : { warehouseId: locked };
+  }
+
   /** A linked customer must exist and be active, and the customer module must be switched on. */
   private async resolveCustomerId(customerId?: string): Promise<string | null> {
     if (!customerId) return null;
@@ -255,9 +273,22 @@ export class OrdersService {
         `Order ${order.orderNumber} created; ${recorded.length} payment split(s)`,
       );
     } catch (err) {
-      await this.prisma.order.update({
-        where: { id: order.id },
-        data: { status: OrderStatus.CANCELLED, notes: `${dto.notes ?? ''}\nPayment setup failed`.trim() },
+      // Cancel only if no money was recorded. If a split is already PAID (e.g. the failure came after the
+      // payments were written), leave the order as it is so the cash is not hidden behind a CANCELLED order.
+      await this.prisma.$transaction(async (tx) => {
+        const paid = await tx.payment.count({ where: { orderId: order.id, status: PaymentStatus.PAID } });
+        if (paid > 0) {
+          this.log.error(`Order ${order.orderNumber}: payment setup failed after money was recorded; left for manual review`);
+          return;
+        }
+        await tx.payment.updateMany({
+          where: { orderId: order.id, status: PaymentStatus.UNPAID },
+          data: { status: PaymentStatus.EXPIRED, nextPollAt: null },
+        });
+        await tx.order.updateMany({
+          where: { id: order.id, status: OrderStatus.PENDING_PAYMENT },
+          data: { status: OrderStatus.CANCELLED, notes: `${dto.notes ?? ''}\nPayment setup failed`.trim() },
+        });
       });
       throw err;
     }
@@ -277,6 +308,7 @@ export class OrdersService {
     }
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { payments: true } });
     if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
     if (order.status !== OrderStatus.PENDING_PAYMENT) {
       throw new BadRequestException('Fees can only be overridden before payment');
     }
@@ -341,6 +373,9 @@ export class OrdersService {
     if (!isPosActor(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can cancel orders');
     }
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
     const who = user.fullName ?? user.name ?? user.email ?? user.id;
     await this.payments.cancelUnpaidOrder(orderId, reason?.trim() ? `${reason.trim()} (by ${who})` : `Cancelled by ${who}`);
     return this.findOne(orderId, user);
@@ -456,10 +491,20 @@ export class OrdersService {
     }
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('Order not found');
-    assertWarehouseAccess(user, order.warehouseId);
+    await this.assertOrderAccess(user, order.warehouseId);
     if (order.status !== OrderStatus.READY_FOR_LOADING) {
       throw new BadRequestException(
         `Illegal transition ${order.status} → COMPLETED. Order must be PAID (READY_FOR_LOADING).`,
+      );
+    }
+    // Stock being collected for this order has not reached the dispatch warehouse yet: loading now would
+    // ship goods that are not there (and push its balance negative). Receive or cancel those transfers first.
+    const gathering = await this.prisma.stockTransfer.count({
+      where: { orderId, status: TransferStatus.IN_TRANSIT },
+    });
+    if (gathering > 0) {
+      throw new ConflictException(
+        `${gathering} transfer(s) collecting stock for this order are still in transit; receive them first`,
       );
     }
     const hired = this.hiredTransportNotes(order.deliveryMethod, order, dto);
@@ -510,7 +555,12 @@ export class OrdersService {
               reason: `Order ${withItems.orderNumber} completed`,
               actorId: user.id,
             });
+            // A manager may already have assigned a supplier before completion (assignSupplier creates
+            // the OPEN payable then); never owe the supplier twice for the same line.
+            const open = await tx.supplierPayable.findMany({ where: { orderId, status: 'OPEN' } });
+            const alreadyOwed = new Set(open.map((p) => p.orderItemId));
             for (const payable of plan.payables) {
+              if (alreadyOwed.has(payable.orderItemId)) continue;
               await tx.supplierPayable.create({ data: { orderId, ...payable } });
             }
             return tx.order.findUniqueOrThrow({ where: { id: orderId }, include: ORDER_INCLUDE });
@@ -540,8 +590,8 @@ export class OrdersService {
     }
     const where: Prisma.OrderWhereInput = {};
     if (status) where.status = status;
-    const locked = lockedWarehouseId(user);
-    if (locked) where.warehouseId = locked;
+    const scope = await this.orderScope(user);
+    Object.assign(where, scope);
     const rows = await this.prisma.order.findMany({
       where,
       include: ORDER_INCLUDE,
@@ -555,9 +605,9 @@ export class OrdersService {
     if (!isWarehouseActor(user.role)) {
       throw new ForbiddenException('Warehouse staff, cashiers, managers, or admin can view release tickets');
     }
-    const locked = lockedWarehouseId(user);
+    const scope = await this.orderScope(user);
     const rows = await this.prisma.order.findMany({
-      where: { status: OrderStatus.READY_FOR_LOADING, ...(locked ? { warehouseId: locked } : {}) },
+      where: { status: OrderStatus.READY_FOR_LOADING, ...scope },
       include: ORDER_INCLUDE,
       orderBy: { createdAt: 'asc' },
       take: 200,
@@ -569,12 +619,12 @@ export class OrdersService {
     if (!isWarehouseActor(user.role)) {
       throw new ForbiddenException('Warehouse staff, cashiers, managers, or admin can view release tickets');
     }
-    const locked = lockedWarehouseId(user);
+    const scope = await this.orderScope(user);
     const rows = await this.prisma.order.findMany({
       where: {
         status: OrderStatus.COMPLETED,
         preparedById: { not: null },
-        ...(locked ? { warehouseId: locked } : {}),
+        ...scope,
       },
       include: ORDER_INCLUDE,
       orderBy: { preparedAt: 'desc' },
@@ -589,6 +639,7 @@ export class OrdersService {
     }
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
     if (!isHiredTransport(order.deliveryMethod)) {
       throw new BadRequestException('Hired transport notes apply only to company delivery (not self-pickup or customer driver)');
     }
@@ -737,7 +788,7 @@ export class OrdersService {
   async findOne(id: string, user: AuthUser) {
     const order = await this.prisma.order.findUnique({ where: { id }, include: ORDER_INCLUDE });
     if (!order) throw new NotFoundException('Order not found');
-    assertWarehouseAccess(user, order.warehouseId);
+    await this.assertOrderAccess(user, order.warehouseId);
     if (user.role === Role.ACHIGCH_BELTGEGCH && order.status === OrderStatus.PENDING_PAYMENT) {
       throw new ForbiddenException();
     }
@@ -748,6 +799,9 @@ export class OrdersService {
     if (user.role !== Role.BORLUULAGCH && user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
       throw new ForbiddenException('Only cashiers, managers, or admin can issue E-Barimt');
     }
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
     await this.ebarimt.issueForOrder(orderId, { quiet: false });
     return this.findOne(orderId, user);
   }

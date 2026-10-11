@@ -60,6 +60,11 @@ function matchValue(value: any, cond: any): boolean {
   return true;
 }
 
+const NESTED_ITEMS: Record<string, { table: string; fk: string }> = {
+  stockTransfer: { table: 'stockTransferItem', fk: 'transferId' },
+  salesReturn: { table: 'returnItem', fk: 'returnId' },
+};
+
 class Table {
   rows: Row[] = [];
   constructor(
@@ -111,6 +116,9 @@ class Table {
               const p = this.db.product.rows.find((x) => x.id === i.productId);
               if (p) item.product = { ...p };
             }
+            if (isPlain(include.items) && include.items.include?.returnItems) {
+              item.returnItems = this.db.returnItem.rows.filter((r) => r.orderItemId === i.id).map((r) => ({ ...r }));
+            }
             return item;
           });
       }
@@ -141,13 +149,14 @@ class Table {
   async create(args: Row) {
     const now = new Date();
     const data = Object.fromEntries(Object.entries(args.data).filter(([, v]) => v !== undefined));
-    // Nested `items: { create: [...] }` (only stock transfers use it in these tests).
-    const nestedItems = this.name === 'stockTransfer' && isPlain(data.items) ? (data.items.create as Row[]) : null;
+    // Nested `items: { create: [...] }` for the parents that use it.
+    const nested = NESTED_ITEMS[this.name];
+    const nestedItems = nested && isPlain(data.items) ? (data.items.create as Row[]) : null;
     if (nestedItems) delete data.items;
     const row: Row = { id: randomUUID(), createdAt: now, updatedAt: now, ...this.defaults(), ...data };
     this.rows.push(row);
     for (const item of nestedItems ?? []) {
-      await this.db.stockTransferItem.create({ data: { ...item, transferId: row.id } });
+      await (this.db as any)[nested!.table].create({ data: { ...item, [nested!.fk]: row.id } });
     }
     return { ...row };
   }
@@ -211,6 +220,7 @@ export class FakeDb {
   stockTransferItem = new Table(this, 'stockTransferItem', () => ({}));
   featureFlag = new Table(this, 'featureFlag', () => ({ updatedById: null }));
   user = new Table(this, 'user', () => ({ isActive: true, warehouseId: null }));
+  salesReturn = new Table(this, 'salesReturn', () => ({ refundStatus: 'PENDING_PAYOUT' }));
 
   constructor() {
     // Mirrors the migration: there is always exactly one default warehouse.
@@ -230,6 +240,10 @@ export class FakeDb {
       if (cond.none && mine.some((p) => this.payment.matches(p, cond.none))) return false;
       return true;
     }
+    if (table === 'stockTransferItem' && key === 'transfer') {
+      const transfer = this.stockTransfer.rows.find((t) => t.id === row.transferId);
+      return !!transfer && this.stockTransfer.matches(transfer, cond);
+    }
     if (table === 'returnItem' && key === 'orderItem') {
       const item = this.orderItem.rows.find((i) => i.id === row.orderItemId);
       return !!item && this.orderItem.matches(item, cond);
@@ -242,6 +256,7 @@ export class FakeDb {
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
+      this.salesReturn,
     ];
   }
 

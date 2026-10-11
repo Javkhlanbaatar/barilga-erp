@@ -14,6 +14,7 @@ const TRANSFER_INCLUDE = {
   sentBy: { select: { id: true, fullName: true } },
   receivedBy: { select: { id: true, fullName: true } },
   cancelledBy: { select: { id: true, fullName: true } },
+  order: { select: { id: true, orderNumber: true } },
 } as const;
 
 const SERIALIZABLE = { isolationLevel: Prisma.TransactionIsolationLevel.Serializable };
@@ -47,7 +48,8 @@ export class TransfersService {
     if (locked !== warehouseId) throw new ForbiddenException(`Only staff of that warehouse can ${what}`);
   }
 
-  async send(dto: CreateTransferDto, user: AuthUser) {
+  /** `orderId` links the transfer to the order it collects stock for (set by the gather flow, never by clients). */
+  async send(dto: CreateTransferDto, user: AuthUser, opts: { orderId?: string } = {}) {
     if (dto.fromWarehouseId === dto.toWarehouseId) {
       throw new BadRequestException('Source and destination must be different warehouses');
     }
@@ -103,6 +105,7 @@ export class TransfersService {
               fromWarehouseId: from.id,
               toWarehouseId: to.id,
               notes: dto.notes || null,
+              orderId: opts.orderId ?? null,
               sentById: user.id,
               items: { create: productIds.map((productId) => ({ productId, quantity: quantities.get(productId)! })) },
             },

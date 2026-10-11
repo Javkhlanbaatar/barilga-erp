@@ -269,6 +269,8 @@ model Order {
   returns              SalesReturn[]
   supplierPayables     SupplierPayable[]
   stockReconciliations StockReconciliationAudit[]
+  /// Transfers that collect this order's stock from other warehouses into its dispatch warehouse.
+  gatherTransfers      StockTransfer[]
 
   @@index([status])
   @@index([orderNumber])
@@ -559,6 +561,9 @@ model StockTransfer {
   toWarehouseId   String         @map("to_warehouse_id")
   toWarehouse     Warehouse      @relation("TransferTo", fields: [toWarehouseId], references: [id])
   notes           String?
+  /// Set when the transfer collects stock for an order (its dispatch warehouse is the destination).
+  orderId         String?        @map("order_id")
+  order           Order?         @relation(fields: [orderId], references: [id])
   sentById        String         @map("sent_by_id")
   sentBy          User           @relation("TransferSentBy", fields: [sentById], references: [id])
   sentAt          DateTime       @default(now()) @map("sent_at")
@@ -577,6 +582,7 @@ model StockTransfer {
   @@index([status])
   @@index([fromWarehouseId])
   @@index([toWarehouseId])
+  @@index([orderId])
   @@map("inv_stock_transfers")
 }
 

@@ -85,7 +85,12 @@ export class ReturnsService {
       },
     });
     if (!order) throw new NotFoundException('Order not found');
-    assertWarehouseAccess(user, order.warehouseId);
+    // Pre-warehouse orders (warehouseId null) belong to the default warehouse.
+    assertWarehouseAccess(
+      user,
+      order.warehouseId,
+      order.warehouseId ? undefined : await this.inventory.defaultWarehouseId(tx),
+    );
     if (order.status !== OrderStatus.COMPLETED && order.status !== OrderStatus.READY_FOR_LOADING) {
       throw new BadRequestException('Returns are only allowed after the order is paid');
     }
@@ -101,6 +106,12 @@ export class ReturnsService {
       unitPrice: number;
     }> = [];
     let refundAmount = 0;
+
+    // Each line is checked against what is still returnable in the database, so the same line twice in one
+    // request would slip past that cap.
+    if (new Set(dto.items.map((l) => l.orderItemId)).size !== dto.items.length) {
+      throw new BadRequestException('Each order line may appear only once in a return');
+    }
 
     for (const line of dto.items) {
       const item = byId.get(line.orderItemId);
@@ -119,7 +130,11 @@ export class ReturnsService {
           `Cannot return ${qty.toString()} of ${item.product.nameMn}; remaining ${remaining.toString()}`,
         );
       }
-      const lineRefund = Math.round(item.unitPrice * Number(qty));
+      // Rounding each partial return separately could add up to more than the line was sold for; cap at what
+      // is left of the line total, and the final return of a line refunds exactly that remainder.
+      const refundedBefore = item.returnItems.reduce((sum, r) => sum + r.lineRefund, 0);
+      const moneyLeft = Math.max(0, item.lineTotal - refundedBefore);
+      const lineRefund = qty.eq(remaining) ? moneyLeft : Math.min(Math.round(item.unitPrice * Number(qty)), moneyLeft);
       refundAmount += lineRefund;
       returnLines.push({
         orderItemId: item.id,
