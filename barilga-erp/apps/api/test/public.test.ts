@@ -103,6 +103,7 @@ describe('public order creation is sanitised', () => {
     payments: [{ method: 'CASH', amount: 1 }],
     billType: 'COMPANY',
     customerRegNumber: '1234567',
+    customerId: 'someone-elses-customer',
   };
 
   it('forces QPay, drops staff-only fields and returns only the narrow public shape', async () => {
@@ -112,6 +113,7 @@ describe('public order creation is sanitised', () => {
     assert.equal(sent.paymentMethod, 'QPAY');
     assert.equal(sent.payments, undefined);
     assert.equal(sent.billType, undefined);
+    assert.equal(sent.customerId, undefined, 'a visitor cannot attach the order to a registered customer');
     assert.deepEqual(sent.items, [{ productId: 'p1', quantity: 2, sourceType: 'INTERNAL' }]);
     assert.equal(sent.customerPhone, '99112233');
     assert.deepEqual(res, { narrow: true, trackingToken: 'tok' });

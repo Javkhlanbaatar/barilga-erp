@@ -45,6 +45,12 @@ function matchValue(value: any, cond: any): boolean {
       case 'startsWith':
         if (!String(value ?? '').startsWith(String(arg))) return false;
         break;
+      case 'contains': {
+        // Like Postgres LIKE: case-sensitive unless mode: 'insensitive'.
+        const fold = (s: string) => (cond.mode === 'insensitive' ? s.toLowerCase() : s);
+        if (!fold(String(value ?? '')).includes(fold(String(arg)))) return false;
+        break;
+      }
       case 'mode':
         break;
       default:
@@ -135,8 +141,14 @@ class Table {
   async create(args: Row) {
     const now = new Date();
     const data = Object.fromEntries(Object.entries(args.data).filter(([, v]) => v !== undefined));
+    // Nested `items: { create: [...] }` (only stock transfers use it in these tests).
+    const nestedItems = this.name === 'stockTransfer' && isPlain(data.items) ? (data.items.create as Row[]) : null;
+    if (nestedItems) delete data.items;
     const row: Row = { id: randomUUID(), createdAt: now, updatedAt: now, ...this.defaults(), ...data };
     this.rows.push(row);
+    for (const item of nestedItems ?? []) {
+      await this.db.stockTransferItem.create({ data: { ...item, transferId: row.id } });
+    }
     return { ...row };
   }
   private apply(row: Row, data: Row) {
@@ -191,6 +203,14 @@ export class FakeDb {
   warehouse = new Table(this, 'warehouse', () => ({ isActive: true, isDefault: false }));
   stockBalance = new Table(this, 'stockBalance', () => ({ quantity: new Prisma.Decimal(0) }));
   stockMovement = new Table(this, 'stockMovement', () => ({ refType: null, refId: null, reason: null, actorId: null }));
+  customer = new Table(this, 'customer', () => ({ isActive: true, regNumber: null, email: null, address: null, notes: null }));
+  stockTransfer = new Table(this, 'stockTransfer', () => ({
+    status: 'IN_TRANSIT', notes: null, sentAt: new Date(), receivedById: null, receivedAt: null,
+    cancelledById: null, cancelledAt: null, cancelReason: null,
+  }));
+  stockTransferItem = new Table(this, 'stockTransferItem', () => ({}));
+  featureFlag = new Table(this, 'featureFlag', () => ({ updatedById: null }));
+  user = new Table(this, 'user', () => ({ isActive: true, warehouseId: null }));
 
   constructor() {
     // Mirrors the migration: there is always exactly one default warehouse.
@@ -221,6 +241,7 @@ export class FakeDb {
     return [
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
+      this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
     ];
   }
 
