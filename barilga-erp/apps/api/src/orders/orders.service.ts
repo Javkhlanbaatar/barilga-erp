@@ -10,6 +10,7 @@ import {
 import { AccountEntryKind, BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { searchKey } from '../common/translit';
+import { assertCashDrawerOpen } from '../cash/cash-drawer';
 import { partnerPayable } from '../customers/partner-payable';
 import { isFallbackPicker, isHiredTransport, isPosActor, isTransportActor, isWarehouseActor } from '../auth/rbac';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
@@ -283,6 +284,7 @@ export class OrdersService {
         throw new BadRequestException(`Төлбөрийн хуваалт ${sum}₮ нь нийт дүн ${breakdown.totalMnt}₮-тэй тэнцэхгүй / Payment splits do not equal the total`);
       }
     }
+    if (splitMethods.includes(CheckoutPaymentMethod.CASH)) await assertCashDrawerOpen(this.prisma, user.id);
     const billType = dto.billType ?? BillType.CITIZEN;
     const customerRegNumber = dto.customerRegNumber?.trim() || null;
     if (billType === BillType.COMPANY) {
@@ -708,6 +710,7 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('Order not found');
     await this.assertOrderAccess(user, order.warehouseId);
+    if (method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
     await this.payments.payRemaining(orderId, method, user.id);
     return this.findOne(orderId, user);
   }
@@ -729,6 +732,7 @@ export class OrdersService {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('Order not found');
     await this.assertOrderAccess(user, order.warehouseId);
+    if (method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
     await this.payments.settleCredit(orderId, method, amountMnt, user.id);
     return this.findOne(orderId, user);
   }

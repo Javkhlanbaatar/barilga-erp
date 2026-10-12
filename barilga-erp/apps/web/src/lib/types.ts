@@ -537,6 +537,7 @@ export type FeatureKey =
   | 'PRICE_LISTS'
   | 'PARTNER_ACCOUNTS'
   | 'HR'
+  | 'CASH_SESSIONS'
   | 'INVOICES'
   | 'EBARIMT'
   | 'ONLINE_SHOP';

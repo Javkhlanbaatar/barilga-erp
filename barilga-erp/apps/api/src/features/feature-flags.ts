@@ -14,6 +14,7 @@ export const FEATURES = {
   PRICE_LISTS: { default: true, nameMn: 'Харилцагчийн үнийн жагсаалт (өртөг, бартер г.м.)' },
   PARTNER_ACCOUNTS: { default: true, nameMn: 'Харилцагчийн тооцоо (авлага, өглөг, хасалт)' },
   HR: { default: true, nameMn: 'Ирц ба цалин' },
+  CASH_SESSIONS: { default: true, nameMn: 'Касс нээх/хаах (бэлэн мөнгө авахад касс нээлттэй байх)' },
   INVOICES: { default: true, nameMn: 'Нэхэмжлэх илгээх ба бүртгэл' },
   EBARIMT: { default: false, nameMn: 'И-баримт (POSAPI-аар ERP-ээс автоматаар гаргах)' },
   ONLINE_SHOP: { default: true, nameMn: 'Онлайн захиалга (нийтийн сайт)' },

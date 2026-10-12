@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { CashDrawerBar } from '@/components/cash-drawer';
+import { PosLookup } from '@/components/pos-lookup';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { CustomerPicker } from '@/components/customer-picker';
@@ -12,6 +14,38 @@ import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
 type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT' | 'INVOICE';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
+/** A sale put on hold (хүлээлгэсэн): kept in this browser for this cashier until it is resumed or the day ends. */
+type HeldSale = {
+  id: string;
+  at: string;
+  label: string;
+  lines: Array<{ productId: string; quantity: number; sourceType: 'INTERNAL' | 'EXTERNAL_SUPPLIER'; supplierName: string }>;
+  customer: Customer | null;
+  customerName: string;
+  customerPhone: string;
+};
+
+const heldKey = (userId: string) => `pos_held_${userId}`;
+const todayUb = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date());
+
+function readHeld(userId: string): HeldSale[] {
+  try {
+    const all = JSON.parse(localStorage.getItem(heldKey(userId)) ?? '[]') as HeldSale[];
+    // Yesterday's held carts are dropped: prices and stock may have changed.
+    return all.filter((h) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(h.at)) === todayUb());
+  } catch {
+    return [];
+  }
+}
+
+function writeHeld(userId: string, held: HeldSale[]) {
+  try {
+    localStorage.setItem(heldKey(userId), JSON.stringify(held));
+  } catch {
+    // private window: holds last only for this page
+  }
+}
+
 type CartLine = {
   product: Product;
   quantity: number;
@@ -99,7 +133,13 @@ export default function CheckoutPOS() {
   const scanRef = useRef<HTMLInputElement>(null);
   const productsRef = useRef<Product[]>([]);
   const cartAddRef = useRef<(p: Product) => void>(() => undefined);
+  const holdRef = useRef<() => void>(() => undefined);
   const scanBuffer = useRef('');
+  const [userId, setUserId] = useState('');
+  const [held, setHeld] = useState<HeldSale[]>([]);
+  const [showHeld, setShowHeld] = useState(false);
+  const [lookupOpen, setLookupOpen] = useState(false);
+  const [cashRefresh, setCashRefresh] = useState(0);
 
   const ourDelivery = deliveryType === 'OUR_DELIVERY';
   const selectedZone = zones.find((z) => z.id === zoneId);
@@ -108,6 +148,9 @@ export default function CheckoutPOS() {
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');
     const role = raw ? (JSON.parse(raw) as AuthUser).role : null;
+    const uid = raw ? (JSON.parse(raw) as AuthUser).id : '';
+    setUserId(uid);
+    if (uid) setHeld(readHeld(uid));
     if (!hasRole(role, POS_ROLES)) {
       router.replace(homeForRole(role));
       return;
@@ -229,6 +272,16 @@ export default function CheckoutPOS() {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'F2') {
+        e.preventDefault();
+        setLookupOpen(true);
+        return;
+      }
+      if (e.key === 'F8') {
+        e.preventDefault();
+        holdRef.current();
+        return;
+      }
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
@@ -305,6 +358,51 @@ export default function CheckoutPOS() {
     if (c.address && !address) setAddress(c.address);
   }
 
+  /** Puts the current cart aside so the next customer can be served; resume it later from the list. */
+  function holdSale() {
+    if (!cart.length || !userId) return;
+    const label = customer?.name || customerName.trim() || `${cart.length} бараа · ${tugrik(quote?.breakdown.totalMnt ?? 0)}`;
+    const entry: HeldSale = {
+      id: `${Date.now()}`,
+      at: new Date().toISOString(),
+      label,
+      lines: cart.map((l) => ({ productId: l.product.id, quantity: l.quantity, sourceType: l.sourceType, supplierName: l.supplierName })),
+      customer,
+      customerName,
+      customerPhone,
+    };
+    const next = [entry, ...readHeld(userId)];
+    writeHeld(userId, next);
+    setHeld(next);
+    setCart([]);
+    pickCustomer(null);
+    setScanFlash(`Хүлээлгэлээ: ${label}`);
+  }
+
+  function resumeSale(h: HeldSale) {
+    if (cart.length && !window.confirm('Одоогийн сагсыг хүлээлгээд сонгосныг нээх үү?')) return;
+    if (cart.length) holdSale();
+    const rest = readHeld(userId).filter((x) => x.id !== h.id);
+    writeHeld(userId, rest);
+    setHeld(rest);
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const lines = h.lines.filter((l) => byId.has(l.productId)).map((l) => ({ ...l, product: byId.get(l.productId)! }));
+    setCart(lines);
+    if (h.customer) pickCustomer(h.customer);
+    setCustomerName(h.customerName);
+    setCustomerPhone(h.customerPhone);
+    setShowHeld(false);
+    if (lines.length < h.lines.length) setError('Зарим бараа идэвхгүй болсон тул сагснаас хасагдлаа');
+  }
+
+  function dropHeld(id: string) {
+    const rest = readHeld(userId).filter((x) => x.id !== id);
+    writeHeld(userId, rest);
+    setHeld(rest);
+  }
+
+  holdRef.current = holdSale;
+
   async function handleCheckout() {
     setBusy(true);
     setError('');
@@ -330,6 +428,7 @@ export default function CheckoutPOS() {
           payments: paymentsPayload(),
         }),
       });
+      setCashRefresh((n) => n + 1);
       router.push(`/orders/${order.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Захиалга үүсгэж чадсангүй');
@@ -371,7 +470,46 @@ export default function CheckoutPOS() {
     <Shell>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-xl font-bold text-amber-500">Борлуулагч — Шинэ захиалга</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-xl font-bold text-amber-500">Борлуулагч — Шинэ захиалга</h2>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="btn-ghost text-sm" onClick={() => setLookupOpen(true)}>
+                Лавлах (F2)
+              </button>
+              <button type="button" className="btn-ghost text-sm" disabled={!cart.length} onClick={holdSale}>
+                Хүлээлгэх (F8)
+              </button>
+              {held.length > 0 && (
+                <button type="button" className="btn-primary text-sm" onClick={() => setShowHeld((v) => !v)}>
+                  Хүлээлгэсэн ({held.length})
+                </button>
+              )}
+            </div>
+          </div>
+          {features.enabled('CASH_SESSIONS') && <CashDrawerBar refreshKey={cashRefresh} />}
+          {showHeld && held.length > 0 && (
+            <ul className="divide-y divide-slate-800 rounded-xl border border-slate-700 text-sm">
+              {held.map((h) => (
+                <li key={h.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                  <span>
+                    <b>{h.label}</b>{' '}
+                    <span className="text-xs text-slate-400">
+                      · {h.lines.length} бараа · {new Intl.DateTimeFormat('mn-MN', { timeZone: 'Asia/Ulaanbaatar', hour: '2-digit', minute: '2-digit' }).format(new Date(h.at))}
+                    </span>
+                  </span>
+                  <span className="flex gap-2">
+                    <button type="button" className="btn-primary text-xs" onClick={() => resumeSale(h)}>
+                      Нээх
+                    </button>
+                    <button type="button" className="btn-ghost text-xs" onClick={() => dropHeld(h.id)}>
+                      Устгах
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {lookupOpen && <PosLookup products={products} onClose={() => setLookupOpen(false)} onAdd={(p) => add(p)} />}
           {warehouses.length > 1 && (
             <div className="text-xs text-slate-400">
               {warehouseLocked ? (

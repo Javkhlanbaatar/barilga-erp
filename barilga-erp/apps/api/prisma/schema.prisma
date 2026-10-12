@@ -162,6 +162,9 @@ model User {
   baseSalaryMnt        Int?                       @map("base_salary_mnt")
   payrollAdjustments   PayrollAdjustment[]        @relation("PayrollAdjustmentFor")
   payrollAdjustmentsBy PayrollAdjustment[]        @relation("PayrollAdjustmentBy")
+  cashSessions         CashSession[]              @relation("CashSessionOf")
+  cashSessionsClosed   CashSession[]              @relation("CashSessionClosedBy")
+  cashMovements        CashMovement[]             @relation("CashMovementBy")
   transfersReceived    StockTransfer[]            @relation("TransferReceivedBy")
   transfersCancelled   StockTransfer[]            @relation("TransferCancelledBy")
   featureFlagChanges   FeatureFlag[]              @relation("FeatureFlagUpdatedBy")
@@ -869,4 +872,60 @@ model Invoice {
   @@index([customerId])
   @@index([createdAt])
   @@map("ord_invoices")
+}
+
+enum CashSessionStatus {
+  OPEN
+  CLOSED
+}
+
+enum CashMovementKind {
+  /** Money put into the drawer (change float top-up). */
+  IN
+  /** Money taken out (bank deposit, petty expense). */
+  OUT
+}
+
+/**
+ * One cashier's shift at the drawer: counted float at the start, cash in/out during it, counted cash at the
+ * end. The expected cash is worked out from the payments and refunds the cashier recorded in the window.
+ */
+model CashSession {
+  id              String            @id @default(uuid())
+  userId          String            @map("user_id")
+  user            User              @relation("CashSessionOf", fields: [userId], references: [id])
+  warehouseId     String?           @map("warehouse_id")
+  status          CashSessionStatus @default(OPEN)
+  openedAt        DateTime          @default(now()) @map("opened_at")
+  openingFloatMnt Int               @map("opening_float_mnt")
+  closedAt        DateTime?         @map("closed_at")
+  closedById      String?           @map("closed_by_id")
+  closedBy        User?             @relation("CashSessionClosedBy", fields: [closedById], references: [id])
+  /// Frozen at close: what the system expected, what was counted, and the difference (counted − expected).
+  expectedCashMnt Int?              @map("expected_cash_mnt")
+  countedCashMnt  Int?              @map("counted_cash_mnt")
+  differenceMnt   Int?              @map("difference_mnt")
+  closingNote     String?           @map("closing_note")
+  movements       CashMovement[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([userId, status])
+  @@index([openedAt])
+  @@map("cash_sessions")
+}
+
+model CashMovement {
+  id          String           @id @default(uuid())
+  sessionId   String           @map("session_id")
+  session     CashSession      @relation(fields: [sessionId], references: [id])
+  kind        CashMovementKind
+  amountMnt   Int              @map("amount_mnt")
+  reason      String
+  createdById String           @map("created_by_id")
+  createdBy   User             @relation("CashMovementBy", fields: [createdById], references: [id])
+  createdAt   DateTime         @default(now())
+
+  @@index([sessionId])
+  @@map("cash_movements")
 }

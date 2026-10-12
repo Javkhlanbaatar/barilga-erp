@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -23,6 +23,16 @@ export class InventoryController {
     @Query('warehouseId') warehouseId?: string,
   ) {
     return this.inventory.listStock(q ?? search, { warehouseId: lockedWarehouseId(user) ?? (warehouseId || null) });
+  }
+
+  /**
+   * Read-only "where is it": how many of one product each active warehouse holds and what is on its way.
+   * Any staff may ask, so a cashier can send a customer to the shop that has it.
+   */
+  @Get('availability/:productId')
+  @Roles(Role.ADMIN, Role.MANAGER, Role.BORLUULAGCH, Role.ACHIGCH_BELTGEGCH)
+  availability(@Param('productId') productId: string) {
+    return this.inventory.availability(productId);
   }
 
   @Get('reconciliation')

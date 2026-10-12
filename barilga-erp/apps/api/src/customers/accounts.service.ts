@@ -4,6 +4,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { PaymentService } from '../payment/payment.service';
 import { lockedWarehouseId } from '../inventory/warehouse-scope';
 import { partnerPayable } from './partner-payable';
+import { assertCashDrawerOpen } from '../cash/cash-drawer';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddAccountEntryDto, EditAccountEntryDto } from './dto/account.dto';
 
@@ -293,6 +294,7 @@ export class AccountsService {
     const owed = open.reduce((s, p) => s + p.amountMnt, 0);
     if (owed === 0) throw new BadRequestException('Энэ харилцагч (таны агуулахад) өргүй / Nothing is owed here');
     if (amountMnt > owed) throw new BadRequestException(`Нийт өр ${owed}₮ / Only ${owed}₮ is owed`);
+    if (method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
     let left = amountMnt;
     const applied: Array<{ orderNumber: string; amountMnt: number }> = [];
     for (const row of open) {

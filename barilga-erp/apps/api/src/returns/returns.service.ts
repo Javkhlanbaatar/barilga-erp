@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { OrderStatus, PayableStatus, PaymentStatus, PayMethod, Prisma, RefundStatus, Role, SourceType } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
+import { assertCashDrawerOpen } from '../cash/cash-drawer';
 import { InventoryService } from '../inventory/inventory.service';
 import { assertWarehouseAccess } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
@@ -26,6 +27,8 @@ export class ReturnsService {
     if (user.role !== Role.ADMIN && user.role !== Role.MANAGER && user.role !== Role.BORLUULAGCH) {
       throw new ForbiddenException('Only cashiers, managers, or admin can process returns');
     }
+    // Cash handed back comes out of someone's drawer.
+    if (dto.refundMethod === PayMethod.CASH) await assertCashDrawerOpen(this.prisma, user.id);
 
     const maxAttempts = 3;
     let lastError: unknown;

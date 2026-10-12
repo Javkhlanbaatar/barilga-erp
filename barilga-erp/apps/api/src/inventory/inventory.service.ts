@@ -52,6 +52,28 @@ export class InventoryService {
 
   // ───────── warehouses ─────────
 
+  /** Per active warehouse: on hand and in transit to it, for one product. */
+  async availability(productId: string) {
+    const [product, warehouses, balances, transit] = await Promise.all([
+      this.prisma.product.findUnique({ where: { id: productId }, select: { id: true, sku: true, nameMn: true, unit: true, priceMnt: true } }),
+      this.prisma.warehouse.findMany({ where: { isActive: true }, orderBy: [{ isDefault: 'desc' }, { name: 'asc' }], select: { id: true, code: true, name: true } }),
+      this.prisma.stockBalance.findMany({ where: { productId } }),
+      this.prisma.stockTransferItem.findMany({
+        where: { productId, transfer: { status: 'IN_TRANSIT' } },
+        select: { quantity: true, transfer: { select: { toWarehouseId: true } } },
+      }),
+    ]);
+    if (!product) return null;
+    return {
+      product,
+      warehouses: warehouses.map((w) => ({
+        ...w,
+        quantity: Number(balances.find((b) => b.warehouseId === w.id)?.quantity ?? 0),
+        inTransit: transit.filter((t) => t.transfer.toWarehouseId === w.id).reduce((s, t) => s + Number(t.quantity), 0),
+      })),
+    };
+  }
+
   async defaultWarehouseId(db: Db | PrismaService = this.prisma): Promise<string> {
     const w = await db.warehouse.findFirst({ where: { isDefault: true } });
     if (!w) throw new ConflictException('No default warehouse is configured');

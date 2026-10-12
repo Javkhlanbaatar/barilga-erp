@@ -130,6 +130,11 @@ class Table {
       const child = (this.db as any)[owned.table] as Table;
       out.items = child.rows.filter((r: Row) => r[owned.fk] === row.id).map((r: Row) => ({ ...r }));
     }
+    // Other to-many lists by parent table: relation name → [child table, foreign key].
+    const TO_MANY: Record<string, Record<string, [string, string]>> = { cashSession: { movements: ['cashMovement', 'sessionId'] } };
+    for (const [rel, [table, fk]] of Object.entries(TO_MANY[this.name] ?? {})) {
+      if (include?.[rel]) out[rel] = ((this.db as any)[table] as Table).rows.filter((r: Row) => r[fk] === row.id).map((r: Row) => ({ ...r }));
+    }
     if (include?.invoice && this.name === 'order') {
       const inv = this.db.invoice.rows.find((i) => i.orderId === row.id);
       out.invoice = inv ? { ...inv } : null;
@@ -302,6 +307,8 @@ export class FakeDb {
   attendance = new Table(this, 'attendance', () => ({ checkOut: null, status: 'ON_TIME', notes: null }));
   payroll = new Table(this, 'payroll', () => ({ status: 'DRAFT', paidAt: null, paidById: null }));
   payrollAdjustment = new Table(this, 'payrollAdjustment', () => ({}));
+  cashSession = new Table(this, 'cashSession', () => ({ status: 'OPEN', openedAt: new Date(), closedAt: null, closedById: null, expectedCashMnt: null, countedCashMnt: null, differenceMnt: null, closingNote: null, warehouseId: null }));
+  cashMovement = new Table(this, 'cashMovement', () => ({}));
   priceList = new Table(this, 'priceList', () => ({ isActive: true, notes: null }));
   priceListItem = new Table(this, 'priceListItem', () => ({}));
   accountEntry = new Table(this, 'accountEntry', () => ({ refType: null, refId: null, occurredAt: new Date() }));
@@ -353,7 +360,7 @@ export class FakeDb {
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
-      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.attendance, this.payroll, this.payrollAdjustment, this.priceList, this.priceListItem,
+      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.attendance, this.payroll, this.payrollAdjustment, this.cashSession, this.cashMovement, this.priceList, this.priceListItem,
       this.accountEntry, this.editAudit, this.invoice,
     ];
   }

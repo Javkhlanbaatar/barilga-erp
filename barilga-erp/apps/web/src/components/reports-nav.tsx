@@ -15,6 +15,13 @@ export const REPORTS: Array<{ href: string; label: string; hint: string; roles: 
     roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'],
   },
   {
+    href: '/reports/cash',
+    label: 'Касс',
+    hint: 'Ээлж бүрийн касс: байх ёстой, тоолсон, илүү/дутуу',
+    roles: ['ADMIN', 'MANAGER'],
+    feature: 'CASH_SESSIONS',
+  },
+  {
     href: '/reports/warehouse',
     label: 'Агуулах',
     hint: 'Эхний/эцсийн үлдэгдэл, орлого, зарлага, шилжүүлэг',
