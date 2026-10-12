@@ -68,5 +68,16 @@ export const CATALOG_READ_ROLES = [
 
 export const REPORT_ROLES = [Role.ADMIN, Role.MANAGER, Role.BORLUULAGCH] as const;
 
+/**
+ * Send and receive warehouse transfers. Staff are further limited to their own warehouse
+ * (TransfersService); cancelling is OVERSIGHT_ROLES only.
+ */
+export const TRANSFER_ROLES = [
+  Role.ADMIN,
+  Role.MANAGER,
+  Role.ACHIGCH_BELTGEGCH,
+  Role.BORLUULAGCH,
+] as const;
+
 /** Cashiers, managers, and admin can process sales returns. */
 export const RETURN_ROLES = [Role.ADMIN, Role.MANAGER, Role.BORLUULAGCH] as const;

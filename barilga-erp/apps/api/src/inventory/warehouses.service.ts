@@ -51,6 +51,12 @@ export class WarehousesService {
       if (stocked > 0) {
         throw new ConflictException('This warehouse still holds stock; move or adjust it to zero first');
       }
+      const inTransit = await this.prisma.stockTransfer.count({
+        where: { status: 'IN_TRANSIT', OR: [{ fromWarehouseId: id }, { toWarehouseId: id }] },
+      });
+      if (inTransit > 0) {
+        throw new ConflictException('Transfers into or out of this warehouse are still in transit; receive or cancel them first');
+      }
       const people = await this.prisma.user.count({ where: { warehouseId: id, isActive: true } });
       if (people > 0) {
         throw new ConflictException('Active users are still assigned to this warehouse; reassign them first');

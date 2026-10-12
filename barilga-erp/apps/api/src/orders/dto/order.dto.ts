@@ -107,6 +107,12 @@ export class CreateOrderDto extends QuoteOrderDto {
   @MaxLength(64)
   warehouseId?: string;
 
+  /** Registered customer (staff only; the public shop never sets it). Name/phone are still required as the snapshot. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  customerId?: string;
+
   @IsString()
   @MaxLength(120)
   customerName!: string;

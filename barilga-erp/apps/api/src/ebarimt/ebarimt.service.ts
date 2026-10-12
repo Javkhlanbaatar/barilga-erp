@@ -50,9 +50,11 @@ export class EbarimtService {
       return { ok: true as const, skipped: true, order };
     }
 
-    const allPaid =
-      order.payments.length > 0 && order.payments.every((p) => p.status === PaymentStatus.PAID);
-    if (!allPaid || order.status === OrderStatus.PENDING_PAYMENT) {
+    // Invoices replaced by a fee override (EXPIRED) or that failed are not money owed; judge only the live ones.
+    const live = order.payments.filter((p) => p.status !== PaymentStatus.EXPIRED && p.status !== PaymentStatus.FAILED);
+    const allPaid = live.length > 0 && live.every((p) => p.status === PaymentStatus.PAID);
+    const paidStatus = order.status === OrderStatus.READY_FOR_LOADING || order.status === OrderStatus.COMPLETED;
+    if (!allPaid || !paidStatus) {
       if (opts.quiet) {
         this.log.log(`Skip E-Barimt for ${order.orderNumber}: not fully paid`);
         return { ok: false as const, error: 'not_fully_paid' };

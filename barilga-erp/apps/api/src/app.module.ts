@@ -3,7 +3,9 @@ import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { CustomersModule } from './customers/customers.module';
 import { EbarimtModule } from './ebarimt/ebarimt.module';
+import { FeaturesModule } from './features/features.module';
 import { HealthController } from './health.controller';
 import { HrModule } from './hr/hr.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -21,7 +23,9 @@ import { UsersModule } from './users/users.module';
     ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../.env'] }),
     ScheduleModule.forRoot(),
     PrismaModule,
+    FeaturesModule,
     AuthModule,
+    CustomersModule,
     UsersModule,
     CatalogModule,
     InventoryModule,

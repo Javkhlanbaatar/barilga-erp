@@ -98,46 +98,63 @@ enum PayrollStatus {
   PAID
 }
 
+enum CustomerType {
+  INDIVIDUAL
+  COMPANY
+}
+
+/// Same legal entity on both sides, so a transfer only moves stock (no sale, no E-Barimt).
+enum TransferStatus {
+  IN_TRANSIT
+  RECEIVED
+  CANCELLED
+}
+
 model User {
-  id           String   @id @default(uuid())
-  username     String   @unique
-  email        String?  @unique
+  id           String     @id @default(uuid())
+  username     String     @unique
+  email        String?    @unique
   passwordHash String
-  fullName     String   @map("name")
+  fullName     String     @map("name")
   phone        String?
   role         Role
-  isActive     Boolean  @default(true) @map("active")
+  isActive     Boolean    @default(true) @map("active")
   /// Home warehouse/shop. Null = not tied to one (ADMIN/MANAGER see all; others fall back to the default warehouse).
-  warehouseId  String?  @map("warehouse_id")
+  warehouseId  String?    @map("warehouse_id")
   warehouse    Warehouse? @relation("UserWarehouse", fields: [warehouseId], references: [id])
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
-  stockMovements  StockMovement[]    @relation("StockMovementActor")
-  orders          Order[]            @relation("CreatedBy")
-  completedOrders Order[]            @relation("CompletedBy")
-  preparedOrders  Order[]            @relation("PreparedBy")
-  feeOverrides    FeeOverrideAudit[]
-  returns         SalesReturn[]      @relation("ReturnCreatedBy")
+  stockMovements       StockMovement[]            @relation("StockMovementActor")
+  orders               Order[]                    @relation("CreatedBy")
+  completedOrders      Order[]                    @relation("CompletedBy")
+  preparedOrders       Order[]                    @relation("PreparedBy")
+  feeOverrides         FeeOverrideAudit[]
+  returns              SalesReturn[]              @relation("ReturnCreatedBy")
   stockReconciliations StockReconciliationAudit[] @relation("StockReconciledBy")
   attendance           Attendance[]
   payrolls             Payroll[]
+  customersCreated     Customer[]                 @relation("CustomerCreatedBy")
+  transfersSent        StockTransfer[]            @relation("TransferSentBy")
+  transfersReceived    StockTransfer[]            @relation("TransferReceivedBy")
+  transfersCancelled   StockTransfer[]            @relation("TransferCancelledBy")
+  featureFlagChanges   FeatureFlag[]              @relation("FeatureFlagUpdatedBy")
 
   @@map("sys_users")
 }
 
 model Zone {
-  id                    String   @id @default(uuid())
-  code                  ZoneCode @unique
-  nameMn                String
-  nameEn                String
-  description           String
-  baseDeliveryFeeMnt    Int
-  nightDiscountApplies  Boolean  @default(true)
-  active                Boolean  @default(true)
-  sortOrder             Int      @default(0)
-  updatedAt             DateTime @updatedAt
-  orders                Order[]
+  id                   String   @id @default(uuid())
+  code                 ZoneCode @unique
+  nameMn               String
+  nameEn               String
+  description          String
+  baseDeliveryFeeMnt   Int
+  nightDiscountApplies Boolean  @default(true)
+  active               Boolean  @default(true)
+  sortOrder            Int      @default(0)
+  updatedAt            DateTime @updatedAt
+  orders               Order[]
 
   @@map("log_delivery_zones")
 }
@@ -158,89 +175,93 @@ model VehicleType {
 }
 
 model Product {
-  id          String      @id @default(uuid())
-  sku         String      @unique
-  nameMn      String
-  nameEn      String
-  unit        String
-  priceMnt    Int
-  weightKg    Decimal     @db.Decimal(12, 3)
-  lengthM     Decimal     @db.Decimal(10, 2)
-  volumeM3      Decimal @db.Decimal(10, 3)
-  stockQty      Decimal @map("stock_quantity") @db.Decimal(12, 3)
-  minStockLevel Decimal @map("min_stock_level") @db.Decimal(12, 3) @default(0)
-  imageUrl      String? @map("image_url")
-  description   String?
-  category      String  @default("General")
-  sourceType    SourceType @default(INTERNAL) @map("source_type")
-  active        Boolean @default(true)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  orderItems  OrderItem[]
+  id             String              @id @default(uuid())
+  sku            String              @unique
+  nameMn         String
+  nameEn         String
+  unit           String
+  priceMnt       Int
+  weightKg       Decimal             @db.Decimal(12, 3)
+  lengthM        Decimal             @db.Decimal(10, 2)
+  volumeM3       Decimal             @db.Decimal(10, 3)
+  stockQty       Decimal             @map("stock_quantity") @db.Decimal(12, 3)
+  minStockLevel  Decimal             @default(0) @map("min_stock_level") @db.Decimal(12, 3)
+  imageUrl       String?             @map("image_url")
+  description    String?
+  category       String              @default("General")
+  sourceType     SourceType          @default(INTERNAL) @map("source_type")
+  active         Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  orderItems     OrderItem[]
   stockBalances  StockBalance[]
   stockMovements StockMovement[]
+  transferItems  StockTransferItem[]
 
   @@map("inv_products")
 }
 
 model Order {
-  id                   String          @id @default(uuid())
-  orderNumber          String          @unique
-  status               OrderStatus     @default(PENDING_PAYMENT)
-  customerName         String
-  customerPhone        String
-  deliveryAddress      String?
-  notes                String?
+  id              String      @id @default(uuid())
+  orderNumber     String      @unique
+  status          OrderStatus @default(PENDING_PAYMENT)
+  customerName    String
+  customerPhone   String
+  /// Registered customer, when staff picked one. Name/phone above stay as the snapshot printed on the order.
+  customerId      String?     @map("customer_id")
+  customer        Customer?   @relation(fields: [customerId], references: [id])
+  deliveryAddress String?
+  notes           String?
 
-  zoneId               String
-  zone                 Zone            @relation(fields: [zoneId], references: [id])
-  deliveryMethod       DeliveryMethod
-  timeCondition        TimeCondition   @default(STANDARD)
-  unloadingRequested   Boolean         @default(false)
+  zoneId             String
+  zone               Zone           @relation(fields: [zoneId], references: [id])
+  deliveryMethod     DeliveryMethod
+  timeCondition      TimeCondition  @default(STANDARD)
+  unloadingRequested Boolean        @default(false)
 
-  totalWeightKg        Decimal         @db.Decimal(12, 3)
-  maxLengthM           Decimal         @db.Decimal(10, 2)
-  totalVolumeM3        Decimal         @db.Decimal(12, 3)
-  assignedVehicle      VehicleCode?
-  driverName           String?        @map("driver_name")
-  vehicleNumber        String?        @map("vehicle_number")
-  driverPhone          String?        @map("driver_phone")
-  trackingToken        String         @unique @map("tracking_token")
+  totalWeightKg   Decimal      @db.Decimal(12, 3)
+  maxLengthM      Decimal      @db.Decimal(10, 2)
+  totalVolumeM3   Decimal      @db.Decimal(12, 3)
+  assignedVehicle VehicleCode?
+  driverName      String?      @map("driver_name")
+  vehicleNumber   String?      @map("vehicle_number")
+  driverPhone     String?      @map("driver_phone")
+  trackingToken   String       @unique @map("tracking_token")
 
-  subtotalMnt          Int
-  deliveryFeeMnt       Int
-  unloadingFeeMnt      Int
-  timeAdjustmentMnt    Int
-  totalMnt             Int
-  feesOverridden       Boolean         @default(false)
+  subtotalMnt       Int
+  deliveryFeeMnt    Int
+  unloadingFeeMnt   Int
+  timeAdjustmentMnt Int
+  totalMnt          Int
+  feesOverridden    Boolean @default(false)
 
   /// Warehouse/shop the stock is taken from (set at creation; null only on pre-warehouse history = default warehouse).
-  warehouseId          String?         @map("warehouse_id")
-  warehouse            Warehouse?      @relation("OrderWarehouse", fields: [warehouseId], references: [id])
+  warehouseId String?    @map("warehouse_id")
+  warehouse   Warehouse? @relation("OrderWarehouse", fields: [warehouseId], references: [id])
 
-  createdById          String
-  createdBy            User            @relation("CreatedBy", fields: [createdById], references: [id])
-  completedById        String?
-  completedBy          User?           @relation("CompletedBy", fields: [completedById], references: [id])
-  completedAt          DateTime?
-  preparedById         String?         @map("prepared_by_id")
-  preparedBy           User?           @relation("PreparedBy", fields: [preparedById], references: [id])
-  preparedAt           DateTime?       @map("prepared_at")
+  createdById   String
+  createdBy     User      @relation("CreatedBy", fields: [createdById], references: [id])
+  completedById String?
+  completedBy   User?     @relation("CompletedBy", fields: [completedById], references: [id])
+  completedAt   DateTime?
+  preparedById  String?   @map("prepared_by_id")
+  preparedBy    User?     @relation("PreparedBy", fields: [preparedById], references: [id])
+  preparedAt    DateTime? @map("prepared_at")
 
-  billType             BillType        @default(CITIZEN)
-  customerRegNumber    String?
-  receiptId            String?
-  lottery              String?
-  qrCode               String?         @db.Text
-  ebarimtStatus        EbarimtStatus   @default(NOT_ISSUED)
-  ebarimtError         String?
-  ebarimtIssuedAt      DateTime?
-  ebarimtNextRetryAt   DateTime?
-  ebarimtAttempts      Int             @default(0)
-  ebarimtPayload       Json?
+  billType           BillType      @default(CITIZEN)
+  customerRegNumber  String?
+  receiptId          String?
+  lottery            String?
+  qrCode             String?       @db.Text
+  ebarimtStatus      EbarimtStatus @default(NOT_ISSUED)
+  ebarimtError       String?
+  ebarimtIssuedAt    DateTime?
+  ebarimtNextRetryAt DateTime?
+  ebarimtAttempts    Int           @default(0)
+  ebarimtPayload     Json?
 
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   items                OrderItem[]
   payments             Payment[]
@@ -248,27 +269,30 @@ model Order {
   returns              SalesReturn[]
   supplierPayables     SupplierPayable[]
   stockReconciliations StockReconciliationAudit[]
+  /// Transfers that collect this order's stock from other warehouses into its dispatch warehouse.
+  gatherTransfers      StockTransfer[]
 
   @@index([status])
   @@index([orderNumber])
   @@index([warehouseId])
+  @@index([customerId])
   @@map("ord_orders")
 }
 
 model OrderItem {
-  id           String     @id @default(uuid())
-  orderId      String
-  order        Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId    String
-  product      Product    @relation(fields: [productId], references: [id])
-  quantity     Decimal    @db.Decimal(12, 3)
-  unitPrice    Int
-  weightKg     Decimal    @db.Decimal(12, 3)
-  lengthM      Decimal    @db.Decimal(10, 2)
-  volumeM3     Decimal    @db.Decimal(10, 3)
-  lineTotal    Int
-  sourceType   SourceType @default(INTERNAL) @map("source_type")
-  supplierName String?    @map("supplier_name")
+  id                   String                     @id @default(uuid())
+  orderId              String
+  order                Order                      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId            String
+  product              Product                    @relation(fields: [productId], references: [id])
+  quantity             Decimal                    @db.Decimal(12, 3)
+  unitPrice            Int
+  weightKg             Decimal                    @db.Decimal(12, 3)
+  lengthM              Decimal                    @db.Decimal(10, 2)
+  volumeM3             Decimal                    @db.Decimal(10, 3)
+  lineTotal            Int
+  sourceType           SourceType                 @default(INTERNAL) @map("source_type")
+  supplierName         String?                    @map("supplier_name")
   returnItems          ReturnItem[]
   payables             SupplierPayable[]
   stockReconciliations StockReconciliationAudit[]
@@ -277,19 +301,19 @@ model OrderItem {
 }
 
 model SalesReturn {
-  id              String     @id @default(uuid())
+  id              String       @id @default(uuid())
   orderId         String
-  order           Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order           Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   reason          String
-  refundAmount    Int        @map("refund_amount")
-  refundMethod    PayMethod  @map("refund_method")
+  refundAmount    Int          @map("refund_amount")
+  refundMethod    PayMethod    @map("refund_method")
   refundStatus    RefundStatus @default(PENDING_PAYOUT) @map("refund_status")
-  createdById     String     @map("created_by_id")
-  createdBy       User       @relation("ReturnCreatedBy", fields: [createdById], references: [id])
-  ebarimtRefundId String?    @map("ebarimt_refund_id")
-  ebarimtStatus   String?    @map("ebarimt_status")
-  ebarimtError    String?    @map("ebarimt_error")
-  createdAt       DateTime   @default(now())
+  createdById     String       @map("created_by_id")
+  createdBy       User         @relation("ReturnCreatedBy", fields: [createdById], references: [id])
+  ebarimtRefundId String?      @map("ebarimt_refund_id")
+  ebarimtStatus   String?      @map("ebarimt_status")
+  ebarimtError    String?      @map("ebarimt_error")
+  createdAt       DateTime     @default(now())
   items           ReturnItem[]
 
   @@index([orderId])
@@ -362,10 +386,12 @@ model Warehouse {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  users      User[]           @relation("UserWarehouse")
-  orders     Order[]          @relation("OrderWarehouse")
-  balances   StockBalance[]
-  movements  StockMovement[]
+  users        User[]          @relation("UserWarehouse")
+  orders       Order[]         @relation("OrderWarehouse")
+  balances     StockBalance[]
+  movements    StockMovement[]
+  transfersOut StockTransfer[] @relation("TransferFrom")
+  transfersIn  StockTransfer[] @relation("TransferTo")
 
   @@map("inv_warehouses")
 }
@@ -422,23 +448,23 @@ model StockMovement {
 }
 
 model Payment {
-  id              String         @id @default(uuid())
-  orderId         String
-  order           Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  method          PayMethod
-  provider        String         @default("QPAY")
-  status          PaymentStatus  @default(UNPAID)
-  amountMnt       Int
-  qpayInvoiceId   String?
-  qpayQrText      String?
-  qpayQrImage     String?        @db.Text
-  qpayPayload     Json?
-  paidAt          DateTime?
-  pollAttempts    Int            @default(0)
-  nextPollAt      DateTime?
-  lastPollError   String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  id            String        @id @default(uuid())
+  orderId       String
+  order         Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  method        PayMethod
+  provider      String        @default("QPAY")
+  status        PaymentStatus @default(UNPAID)
+  amountMnt     Int
+  qpayInvoiceId String?
+  qpayQrText    String?
+  qpayQrImage   String?       @db.Text
+  qpayPayload   Json?
+  paidAt        DateTime?
+  pollAttempts  Int           @default(0)
+  nextPollAt    DateTime?
+  lastPollError String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   @@index([orderId])
   @@index([status, nextPollAt])
@@ -466,33 +492,119 @@ model FeeOverrideAudit {
 }
 
 model Attendance {
-  id        String            @id @default(uuid())
+  id        String           @id @default(uuid())
   userId    String
-  user      User              @relation(fields: [userId], references: [id])
+  user      User             @relation(fields: [userId], references: [id])
   checkIn   DateTime
   checkOut  DateTime?
-  status    AttendanceStatus  @default(ON_TIME)
+  status    AttendanceStatus @default(ON_TIME)
   notes     String?
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
 
   @@index([userId, checkIn])
   @@map("hr_attendance")
 }
 
 model Payroll {
-  id                String        @id @default(uuid())
-  userId            String
-  user              User          @relation(fields: [userId], references: [id])
-  periodMonth       String        @map("period_month")
-  baseSalary        Int           @map("base_salary")
-  fulfillmentBonus  Int           @map("fulfillment_bonus")
-  netSalary         Int           @map("net_salary")
-  status            PayrollStatus @default(DRAFT)
-  createdAt         DateTime      @default(now())
-  updatedAt         DateTime      @updatedAt
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id])
+  periodMonth      String        @map("period_month")
+  baseSalary       Int           @map("base_salary")
+  fulfillmentBonus Int           @map("fulfillment_bonus")
+  netSalary        Int           @map("net_salary")
+  status           PayrollStatus @default(DRAFT)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   @@unique([userId, periodMonth])
   @@index([periodMonth])
   @@map("hr_payrolls")
+}
+
+/// A registered customer (person or company). Credit, invoices and contracts will hang off this in later phases.
+model Customer {
+  id          String       @id @default(uuid())
+  type        CustomerType
+  name        String
+  phone       String
+  /// Company registration number (РД) or a citizen's register number. Unique when present.
+  regNumber   String?      @unique @map("reg_number")
+  email       String?
+  address     String?
+  notes       String?
+  /// Lower-cased name + phone + register number, maintained by the app. Search matches against this so it
+  /// is case-insensitive for Cyrillic even on a database created with the C locale (where ILIKE is ASCII-only).
+  searchText  String       @default("") @map("search_text")
+  isActive    Boolean      @default(true) @map("active")
+  createdById String?      @map("created_by_id")
+  createdBy   User?        @relation("CustomerCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  orders Order[]
+
+  @@index([phone])
+  @@index([name])
+  @@map("crm_customers")
+}
+
+/// Moving stock from one shop/warehouse to another. Sending takes it out of the source (TRANSFER_OUT);
+/// receiving puts it into the destination (TRANSFER_IN). In between it is in transit and in neither.
+model StockTransfer {
+  id              String         @id @default(uuid())
+  transferNumber  String         @unique @map("transfer_number")
+  status          TransferStatus @default(IN_TRANSIT)
+  fromWarehouseId String         @map("from_warehouse_id")
+  fromWarehouse   Warehouse      @relation("TransferFrom", fields: [fromWarehouseId], references: [id])
+  toWarehouseId   String         @map("to_warehouse_id")
+  toWarehouse     Warehouse      @relation("TransferTo", fields: [toWarehouseId], references: [id])
+  notes           String?
+  /// Set when the transfer collects stock for an order (its dispatch warehouse is the destination).
+  orderId         String?        @map("order_id")
+  order           Order?         @relation(fields: [orderId], references: [id])
+  sentById        String         @map("sent_by_id")
+  sentBy          User           @relation("TransferSentBy", fields: [sentById], references: [id])
+  sentAt          DateTime       @default(now()) @map("sent_at")
+  receivedById    String?        @map("received_by_id")
+  receivedBy      User?          @relation("TransferReceivedBy", fields: [receivedById], references: [id])
+  receivedAt      DateTime?      @map("received_at")
+  cancelledById   String?        @map("cancelled_by_id")
+  cancelledBy     User?          @relation("TransferCancelledBy", fields: [cancelledById], references: [id])
+  cancelledAt     DateTime?      @map("cancelled_at")
+  cancelReason    String?        @map("cancel_reason")
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  items StockTransferItem[]
+
+  @@index([status])
+  @@index([fromWarehouseId])
+  @@index([toWarehouseId])
+  @@index([orderId])
+  @@map("inv_stock_transfers")
+}
+
+model StockTransferItem {
+  id         String        @id @default(uuid())
+  transferId String        @map("transfer_id")
+  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId  String        @map("product_id")
+  product    Product       @relation(fields: [productId], references: [id])
+  quantity   Decimal       @db.Decimal(12, 3)
+
+  @@unique([transferId, productId])
+  @@map("inv_stock_transfer_items")
+}
+
+/// Admin on/off switch for a module. A missing row means the module's built-in default applies.
+model FeatureFlag {
+  key         String   @id
+  enabled     Boolean
+  updatedById String?  @map("updated_by_id")
+  updatedBy   User?    @relation("FeatureFlagUpdatedBy", fields: [updatedById], references: [id])
+  updatedAt   DateTime @updatedAt
+
+  @@map("sys_feature_flags")
 }

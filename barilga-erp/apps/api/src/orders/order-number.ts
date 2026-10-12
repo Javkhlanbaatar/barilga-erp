@@ -8,12 +8,40 @@ export function ulaanbaatarYmd(date: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: UB_TZ }).format(date).replaceAll('-', '');
 }
 
-export function isOrderNumberConflict(err: unknown): boolean {
+/** True when `err` is a unique violation on a column whose name contains `field`. */
+export function isUniqueConflictOn(err: unknown, field: string): boolean {
   const e = err as { code?: string; meta?: { target?: unknown } } | null;
   if (!e || e.code !== 'P2002') return false;
   const target = e.meta?.target;
-  if (Array.isArray(target)) return target.some((t) => String(t).includes('orderNumber'));
-  return String(target ?? '').includes('orderNumber');
+  if (Array.isArray(target)) return target.some((t) => String(t).includes(field));
+  return String(target ?? '').includes(field);
+}
+
+export function isOrderNumberConflict(err: unknown): boolean {
+  return isUniqueConflictOn(err, 'orderNumber');
+}
+
+/**
+ * Allocates `<prefix>NNNN` (counting rows that already use today's prefix) and creates the row with it,
+ * moving to the next candidate whenever the UNIQUE constraint rejects one. Same scheme as order numbers.
+ */
+export async function createWithUniqueNumber<T>(opts: {
+  prefix: string;
+  countExisting: (prefix: string) => Promise<number>;
+  create: (number: string) => Promise<T>;
+  isConflict: (err: unknown) => boolean;
+  label: string;
+}): Promise<T> {
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const existing = await opts.countExisting(opts.prefix);
+    const number = `${opts.prefix}${String(existing + 1 + attempt).padStart(4, '0')}`;
+    try {
+      return await opts.create(number);
+    } catch (err) {
+      if (!opts.isConflict(err)) throw err;
+    }
+  }
+  throw new ConflictException(`Could not allocate ${opts.label}; please retry`);
 }
 
 /**
@@ -29,15 +57,11 @@ export async function createWithUniqueOrderNumber<T>(
   create: (orderNumber: string) => Promise<T>,
   now: Date = new Date(),
 ): Promise<T> {
-  const prefix = `BR-${ulaanbaatarYmd(now)}-`;
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const existing = await prisma.order.count({ where: { orderNumber: { startsWith: prefix } } });
-    const orderNumber = `${prefix}${String(existing + 1 + attempt).padStart(4, '0')}`;
-    try {
-      return await create(orderNumber);
-    } catch (err) {
-      if (!isOrderNumberConflict(err)) throw err;
-    }
-  }
-  throw new ConflictException('Could not allocate an order number; please retry');
+  return createWithUniqueNumber({
+    prefix: `BR-${ulaanbaatarYmd(now)}-`,
+    countExisting: (prefix) => prisma.order.count({ where: { orderNumber: { startsWith: prefix } } }),
+    create,
+    isConflict: isOrderNumberConflict,
+    label: 'an order number',
+  });
 }

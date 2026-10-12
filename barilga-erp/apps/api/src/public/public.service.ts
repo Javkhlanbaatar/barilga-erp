@@ -94,6 +94,8 @@ export class PublicService {
       payments: undefined,
       // Anonymous customers never choose the warehouse; the default one fulfils web orders for now.
       warehouseId: undefined,
+      // Linking to a registered customer is staff-only: a visitor must not attach orders to someone else.
+      customerId: undefined,
       billType: undefined,
       customerRegNumber: undefined,
     };
