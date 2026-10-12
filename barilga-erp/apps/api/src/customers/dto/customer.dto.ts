@@ -52,6 +52,25 @@ export class CreateCustomerDto {
   @IsString()
   @MaxLength(64)
   priceListId?: string | null;
+
+  /** Partner kinds (managers/admin only; checked in the service). */
+  @IsOptional()
+  @IsBoolean()
+  buysFromUs?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  creditAllowed?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sellsToUs?: boolean;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(120)
+  barterContract?: string | null;
 }
 
 export class UpdateCustomerDto {
@@ -96,6 +115,25 @@ export class UpdateCustomerDto {
   @IsString()
   @MaxLength(64)
   priceListId?: string | null;
+
+  /** Partner kinds (managers/admin only; checked in the service). */
+  @IsOptional()
+  @IsBoolean()
+  buysFromUs?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  creditAllowed?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  sellsToUs?: boolean;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(120)
+  barterContract?: string | null;
 
   /** Deactivating hides the customer from POS search; managers/admin only (checked in the service). */
   @IsOptional()

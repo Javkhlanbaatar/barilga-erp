@@ -95,12 +95,14 @@ export enum CheckoutPaymentMethod {
   CARD = 'CARD',
   /** Released on account (зарлагын баримтаар): paid later; needs a registered customer. */
   CREDIT = 'CREDIT',
+  /** Bank transfer into the company account, recorded by the cashier. */
+  TRANSFER = 'TRANSFER',
 }
 
 /** A customer paying (part of) what they owe on an order released on account. */
 export class SettleCreditDto {
-  @IsEnum(['CASH', 'CARD'])
-  method!: 'CASH' | 'CARD';
+  @IsEnum(['CASH', 'CARD', 'TRANSFER'])
+  method!: 'CASH' | 'CARD' | 'TRANSFER';
 
   @IsInt()
   @Min(1)

@@ -18,7 +18,7 @@ export function owedOnOrder(order: Order) {
 export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order) => void }) {
   const owed = owedOnOrder(order);
   const [amount, setAmount] = useState(owed);
-  const [method, setMethod] = useState<'CASH' | 'CARD'>('CASH');
+  const [method, setMethod] = useState<'CASH' | 'CARD' | 'TRANSFER'>('CASH');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -26,7 +26,7 @@ export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!window.confirm(`${tugrik(amount)} ${method === 'CASH' ? 'бэлнээр' : 'картаар'} төлбөр авсан уу?`)) return;
+    if (!window.confirm(`${tugrik(amount)} ${method === 'CASH' ? 'бэлнээр' : method === 'CARD' ? 'картаар' : 'шилжүүлгээр'} төлбөр авсан уу?`)) return;
     setBusy(true);
     setError('');
     try {
@@ -67,14 +67,14 @@ export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order
           />
         </label>
         <div className="flex gap-1">
-          {(['CASH', 'CARD'] as const).map((m) => (
+          {(['CASH', 'CARD', 'TRANSFER'] as const).map((m) => (
             <button
               key={m}
               type="button"
               className={`rounded-md px-3 py-2 text-sm ${method === m ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
               onClick={() => setMethod(m)}
             >
-              {m === 'CASH' ? 'Бэлэн' : 'Карт'}
+              {m === 'CASH' ? 'Бэлэн' : m === 'CARD' ? 'Карт' : 'Шилжүүлэг'}
             </button>
           ))}
         </div>

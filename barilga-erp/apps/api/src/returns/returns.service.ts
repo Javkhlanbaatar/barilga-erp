@@ -155,6 +155,9 @@ export class ReturnsService {
 
     // Goods released on account and not yet paid for: returning them lowers the debt; no money is handed
     // back for goods that were never paid. While anything is owed, the debt is reduced first.
+    if (dto.refundMethod === PayMethod.OFFSET) {
+      throw new BadRequestException('A refund is paid out (cash, card, QPay, transfer) or taken off a debt (CREDIT)');
+    }
     const credit = order.payments.find((p) => p.method === PayMethod.CREDIT && p.status === PaymentStatus.UNPAID);
     if (credit && credit.amountMnt > 0) {
       if (dto.refundMethod !== PayMethod.CREDIT) {

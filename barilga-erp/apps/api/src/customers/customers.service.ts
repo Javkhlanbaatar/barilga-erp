@@ -46,6 +46,30 @@ export class CustomersService {
   }
 
   /**
+   * Partner kinds decide money matters (who may take goods on account, who is a supplier or barter partner),
+   * so only managers/admin may change them. Returns the fields to write.
+   */
+  private partnerKinds(
+    dto: { buysFromUs?: boolean; creditAllowed?: boolean; sellsToUs?: boolean; barterContract?: string | null },
+    user: AuthUser,
+    current?: { buysFromUs: boolean; creditAllowed: boolean; sellsToUs: boolean; barterContract: string | null },
+  ) {
+    const next = {
+      ...(dto.buysFromUs !== undefined ? { buysFromUs: dto.buysFromUs } : {}),
+      ...(dto.creditAllowed !== undefined ? { creditAllowed: dto.creditAllowed } : {}),
+      ...(dto.sellsToUs !== undefined ? { sellsToUs: dto.sellsToUs } : {}),
+      ...(dto.barterContract !== undefined ? { barterContract: dto.barterContract?.trim() || null } : {}),
+    };
+    const changes = Object.entries(next).some(([k, v]) => !current || current[k as keyof typeof current] !== v);
+    const defaultsOnly =
+      !current && (next.creditAllowed ?? false) === false && (next.sellsToUs ?? false) === false && !next.barterContract && (next.buysFromUs ?? true);
+    if (changes && !defaultsOnly && !seesAllWarehouses(user.role)) {
+      throw new ForbiddenException('Only a manager or admin can change what a partner is (credit, supplier, barter)');
+    }
+    return next;
+  }
+
+  /**
    * Only managers/admin decide who buys at cost or barter prices. Returns the id to store (null = retail),
    * or undefined when the request does not touch the price list.
    */
@@ -125,6 +149,7 @@ export class CustomersService {
   async create(dto: CreateCustomerDto, user: AuthUser) {
     const regNumber = this.checkRegNumber(dto.type, dto.regNumber);
     const priceListId = await this.checkPriceList(dto.priceListId, user);
+    const kinds = this.partnerKinds(dto, user);
     try {
       const created = await this.prisma.customer.create({
         data: {
@@ -136,6 +161,7 @@ export class CustomersService {
           address: dto.address || null,
           notes: dto.notes || null,
           priceListId: priceListId ?? null,
+          ...kinds,
           searchText: CustomersService.searchText({ name: dto.name, phone: dto.phone, regNumber }),
           createdById: user.id,
         },
@@ -156,6 +182,7 @@ export class CustomersService {
     const regNumber =
       dto.regNumber !== undefined ? this.checkRegNumber(existing.type, dto.regNumber) : existing.regNumber;
     const priceListId = await this.checkPriceList(dto.priceListId, user, existing.priceListId);
+    const kinds = this.partnerKinds(dto, user, existing);
     try {
       return await this.prisma.customer.update({
         where: { id },
@@ -168,6 +195,7 @@ export class CustomersService {
           ...(dto.notes !== undefined ? { notes: dto.notes || null } : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
           ...(priceListId !== undefined ? { priceListId } : {}),
+          ...kinds,
           searchText: CustomersService.searchText({
             name: dto.name ?? existing.name,
             phone: dto.phone ?? existing.phone,

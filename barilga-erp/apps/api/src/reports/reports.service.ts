@@ -24,6 +24,7 @@ export type DailyReport = {
     cashMnt: number;
     qpayMnt: number;
     cardMnt: number;
+    transferMnt: number;
     pendingMnt: number;
     deliveryFeesMnt: number;
     unloadingFeesMnt: number;
@@ -36,6 +37,7 @@ export type DailyReport = {
     cashMnt: number;
     qpayMnt: number;
     cardMnt: number;
+    transferMnt: number;
     count: number;
   };
   payments: PaymentMethodTotals[];
@@ -195,17 +197,25 @@ export class ReportsService {
       cashMnt: refundByMethod.get(PayMethod.CASH)?._sum.refundAmount ?? 0,
       qpayMnt: refundByMethod.get(PayMethod.QPAY)?._sum.refundAmount ?? 0,
       cardMnt: refundByMethod.get(PayMethod.CARD)?._sum.refundAmount ?? 0,
+      transferMnt: refundByMethod.get(PayMethod.TRANSFER)?._sum.refundAmount ?? 0,
       count: refundGroups.reduce((s, r) => s + r._count._all, 0),
       totalMnt: 0,
     };
-    refunds.totalMnt = refunds.cashMnt + refunds.qpayMnt + refunds.cardMnt;
+    // Debt lowered by a return (CREDIT) hands out no money, so it is not in the refund total.
+    refunds.totalMnt = refunds.cashMnt + refunds.qpayMnt + refunds.cardMnt + refunds.transferMnt;
 
     const paidMap = new Map(paidSplits.map((row) => [row.method, row]));
     const pendingMap = new Map(pendingSplits.map((row) => [row.method, row]));
-    const payments: PaymentMethodTotals[] = [PayMethod.CASH, PayMethod.QPAY, PayMethod.CARD].map(
+    // Money methods only: CREDIT (owed) and OFFSET (netted) are not money received.
+    const refundedBy: Partial<Record<PayMethod, number>> = {
+      CASH: refunds.cashMnt,
+      QPAY: refunds.qpayMnt,
+      CARD: refunds.cardMnt,
+      TRANSFER: refunds.transferMnt,
+    };
+    const payments: PaymentMethodTotals[] = [PayMethod.CASH, PayMethod.QPAY, PayMethod.CARD, PayMethod.TRANSFER].map(
       (method) => {
-        const refunded =
-          method === PayMethod.CASH ? refunds.cashMnt : method === PayMethod.QPAY ? refunds.qpayMnt : refunds.cardMnt;
+        const refunded = refundedBy[method] ?? 0;
         const grossMnt = paidMap.get(method)?._sum.amountMnt ?? 0;
         // Net of refunds paid out the same way. Not clamped at zero: a day with more refunds than takings
         // must show the shortfall, not hide it.
@@ -222,7 +232,8 @@ export class ReportsService {
     const cashMnt = payments.find((p) => p.method === PayMethod.CASH)?.paidMnt ?? 0;
     const qpayMnt = payments.find((p) => p.method === PayMethod.QPAY)?.paidMnt ?? 0;
     const cardMnt = payments.find((p) => p.method === PayMethod.CARD)?.paidMnt ?? 0;
-    const revenueMnt = cashMnt + qpayMnt + cardMnt;
+    const transferMnt = payments.find((p) => p.method === PayMethod.TRANSFER)?.paidMnt ?? 0;
+    const revenueMnt = cashMnt + qpayMnt + cardMnt + transferMnt;
     const pendingMnt = payments.reduce((sum, p) => sum + p.pendingMnt, 0);
 
     // Products sold, net of anything already returned.
@@ -284,6 +295,7 @@ export class ReportsService {
         cashMnt,
         qpayMnt,
         cardMnt,
+        transferMnt,
         pendingMnt,
         deliveryFeesMnt,
         unloadingFeesMnt,

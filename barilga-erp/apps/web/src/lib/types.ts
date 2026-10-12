@@ -309,6 +309,7 @@ export type DailyReport = {
     cashMnt: number;
     qpayMnt: number;
     cardMnt: number;
+    transferMnt?: number;
     pendingMnt: number;
     deliveryFeesMnt: number;
     unloadingFeesMnt: number;
@@ -324,7 +325,7 @@ export type DailyReport = {
     count: number;
   };
   payments: Array<{
-    method: 'CASH' | 'QPAY' | 'CARD';
+    method: 'CASH' | 'QPAY' | 'CARD' | 'TRANSFER';
     grossMnt?: number;
     paidMnt: number;
     pendingMnt: number;
@@ -429,6 +430,11 @@ export type Customer = {
   isActive: boolean;
   createdAt: string;
   priceListId?: string | null;
+  /** What the partner is to us (managers set these). */
+  buysFromUs?: boolean;
+  creditAllowed?: boolean;
+  sellsToUs?: boolean;
+  barterContract?: string | null;
 };
 
 export type CustomerDetail = Customer & {
@@ -491,6 +497,7 @@ export type FeatureKey =
   | 'UNLOADING'
   | 'CREDIT_SALES'
   | 'PRICE_LISTS'
+  | 'PARTNER_ACCOUNTS'
   | 'HR'
   | 'ONLINE_SHOP';
 
@@ -521,6 +528,7 @@ export type StockReceipt = {
   warehouse: { id: string; code: string; name: string };
   supplierName: string;
   supplierInvoiceNo: string | null;
+  supplierCustomer?: { id: string; name: string } | null;
   notes: string | null;
   receivedBy: { id: string; fullName: string } | null;
   receivedAt: string;
@@ -572,5 +580,23 @@ export type WarehouseReport = {
     to: string;
     sentAt: string;
     items: Array<{ sku: string; nameMn: string; unit: string; quantity: number }>;
+  }>;
+};
+
+/** Two-way partner account (харилцагчийн тооцоо). net > 0: they owe us; net < 0: we owe them. */
+export type AccountStatement = {
+  customer: { id: string; name: string; barterContract: string | null };
+  receivableMnt: number;
+  payableMnt: number;
+  netMnt: number;
+  lines: Array<{
+    at: string;
+    kind: 'ON_ACCOUNT' | 'PAID_BY_THEM' | 'RETURNED' | 'PURCHASE' | 'PAYMENT_TO_PARTNER' | 'OFFSET' | 'ADJUSTMENT';
+    description: string;
+    effectMnt: number;
+    balanceMnt: number;
+    orderId?: string;
+    entryId?: string;
+    editable?: boolean;
   }>;
 };

@@ -26,7 +26,7 @@ export default function OrderDetailPage() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnReason, setReturnReason] = useState('');
-  const [refundMethod, setRefundMethod] = useState<'CASH' | 'QPAY' | 'CARD' | 'CREDIT'>('CASH');
+  const [refundMethod, setRefundMethod] = useState<'CASH' | 'QPAY' | 'CARD' | 'TRANSFER' | 'CREDIT'>('CASH');
   const [returnQty, setReturnQty] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [vehicleNumber, setVehicleNumber] = useState('');
@@ -591,10 +591,11 @@ export default function OrderDetailPage() {
                   Энэ захиалгад {tugrik(owedOnOrder(order))} өр байгаа тул буцаалт өрөөс хасагдана (мөнгө олгохгүй).
                 </p>
               ) : (
-                <select className="mt-1 w-full" value={refundMethod} onChange={(e) => setRefundMethod(e.target.value as 'CASH' | 'QPAY' | 'CARD')}>
+                <select className="mt-1 w-full" value={refundMethod} onChange={(e) => setRefundMethod(e.target.value as 'CASH' | 'QPAY' | 'CARD' | 'TRANSFER')}>
                   <option value="CASH">Cash</option>
                   <option value="CARD">Card</option>
                   <option value="QPAY">QPay</option>
+                  <option value="TRANSFER">Банкны шилжүүлэг</option>
                 </select>
               )}
             </label>

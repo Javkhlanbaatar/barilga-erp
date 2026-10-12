@@ -12,6 +12,7 @@ export const FEATURES = {
   UNLOADING: { default: false, nameMn: 'Буулгалтын үйлчилгээ (хураамжтай)' },
   CREDIT_SALES: { default: true, nameMn: 'Зарлагаар олгох (дараа төлөх)' },
   PRICE_LISTS: { default: true, nameMn: 'Харилцагчийн үнийн жагсаалт (өртөг, бартер г.м.)' },
+  PARTNER_ACCOUNTS: { default: true, nameMn: 'Харилцагчийн тооцоо (авлага, өглөг, хасалт)' },
   HR: { default: true, nameMn: 'Ирц ба цалин' },
   ONLINE_SHOP: { default: true, nameMn: 'Онлайн захиалга (нийтийн сайт)' },
 } as const;

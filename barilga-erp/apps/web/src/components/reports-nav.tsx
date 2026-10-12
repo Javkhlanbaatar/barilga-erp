@@ -28,6 +28,19 @@ export const REPORTS: Array<{ href: string; label: string; hint: string; roles: 
     roles: ['ADMIN', 'MANAGER'],
     feature: 'PICKING',
   },
+  {
+    href: '/reports/accounts',
+    label: 'Харилцагчийн тооцоо',
+    hint: 'Авлага, өглөг, бартер — хэн хэнд хэдэн төгрөг өртэй',
+    roles: ['ADMIN', 'MANAGER'],
+    feature: 'PARTNER_ACCOUNTS',
+  },
+  {
+    href: '/reports/edits',
+    label: 'Засварын түүх',
+    hint: 'Худалдан авсан үнэ, тооцооны мөрийг хэн, хэзээ, яагаад өөрчилсөн',
+    roles: ['ADMIN'],
+  },
 ];
 
 /** The reports this user may open (role + switched-on module). */

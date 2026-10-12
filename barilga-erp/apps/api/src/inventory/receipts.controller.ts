@@ -1,11 +1,11 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
-import { CreateReceiptDto } from './dto/receipt.dto';
+import { CreateReceiptDto, EditReceiptCostDto } from './dto/receipt.dto';
 import { ReceiptsService } from './receipts.service';
 
 /** Goods receipts: managers/admin anywhere; warehouse staff only into their own warehouse. */
@@ -31,5 +31,16 @@ export class ReceiptsController {
   @Post()
   create(@Body() dto: CreateReceiptDto, @CurrentUser() user: AuthUser) {
     return this.receipts.create(dto, user);
+  }
+
+  /** Correct a purchase price later (managers/admin; logged for the admin edit report). */
+  @Patch(':id/items/:itemId/cost')
+  editCost(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: EditReceiptCostDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.receipts.editItemCost(id, itemId, dto.unitCostMnt, dto.reason, user);
   }
 }

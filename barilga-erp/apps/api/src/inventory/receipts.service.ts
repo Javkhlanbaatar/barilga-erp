@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma, StockMovementType } from '@prisma/client';
+import { AccountEntryKind, Prisma, StockMovementType } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { createWithUniqueNumber, isUniqueConflictOn, ulaanbaatarYmd } from '../orders/order-number';
 import { PrismaService } from '../prisma/prisma.service';
@@ -10,6 +10,7 @@ import { lockedWarehouseId, seesAllWarehouses } from './warehouse-scope';
 const RECEIPT_INCLUDE = {
   warehouse: { select: { id: true, code: true, name: true } },
   receivedBy: { select: { id: true, fullName: true } },
+  supplierCustomer: { select: { id: true, name: true } },
   items: { include: { product: { select: { id: true, sku: true, nameMn: true, unit: true } } } },
 } as const;
 
@@ -52,6 +53,10 @@ export class ReceiptsService {
           async (tx) => {
             const warehouse = await tx.warehouse.findUnique({ where: { id: dto.warehouseId } });
             if (!warehouse || !warehouse.isActive) throw new BadRequestException('Warehouse not found or inactive');
+            const partner = dto.supplierCustomerId
+              ? await tx.customer.findUnique({ where: { id: dto.supplierCustomerId } })
+              : null;
+            if (dto.supplierCustomerId && !partner) throw new BadRequestException('Supplier partner not found');
             const productIds = [...lines.keys()];
             const products = await tx.product.findMany({ where: { id: { in: productIds } } });
             if (products.length !== productIds.length) throw new BadRequestException('Product not found');
@@ -62,6 +67,7 @@ export class ReceiptsService {
                 warehouseId: warehouse.id,
                 supplierName: dto.supplierName,
                 supplierInvoiceNo: dto.supplierInvoiceNo || null,
+                supplierCustomerId: partner?.id ?? null,
                 notes: dto.notes || null,
                 receivedById: user.id,
                 items: {
@@ -88,6 +94,21 @@ export class ReceiptsService {
                 await tx.product.update({ where: { id: productId }, data: { lastCostMnt: line.unitCostMnt } });
               }
             }
+            // Goods from a registered partner, with prices: we now owe them that much (their account).
+            const owed = ReceiptsService.costTotal([...lines.values()]);
+            if (partner && owed > 0) {
+              await tx.accountEntry.create({
+                data: {
+                  customerId: partner.id,
+                  kind: AccountEntryKind.PURCHASE,
+                  amountMnt: owed,
+                  description: `Бараа орлого ${receiptNumber}${dto.supplierInvoiceNo ? ` (падаан ${dto.supplierInvoiceNo})` : ''}`,
+                  refType: 'RECEIPT',
+                  refId: receipt.id,
+                  createdById: user.id,
+                },
+              });
+            }
             return receipt;
           },
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -95,6 +116,67 @@ export class ReceiptsService {
     });
     this.log.log(`Receipt ${created.receiptNumber} into ${dto.warehouseId} from "${dto.supplierName}" by ${user.id}`);
     return this.get(created.id, user);
+  }
+
+  /** Purchase value of the lines that carry a cost. */
+  static costTotal(lines: Array<{ quantity: Prisma.Decimal | number | string; unitCostMnt: number | null }>) {
+    return Math.round(lines.reduce((s, l) => s + (l.unitCostMnt === null ? 0 : Number(l.quantity) * l.unitCostMnt), 0));
+  }
+
+  /**
+   * A manager corrects a purchase price later. The receipt line, the partner account (if any) and — when this
+   * is the newest priced receipt of the product — its last cost follow; before/after/reason go to the edit log.
+   */
+  async editItemCost(receiptId: string, itemId: string, unitCostMnt: number | null, reason: string, user: AuthUser) {
+    if (!seesAllWarehouses(user.role)) throw new ForbiddenException('Only a manager or admin can change purchase prices');
+    await this.prisma.$transaction(async (tx) => {
+      const item = await tx.stockReceiptItem.findFirst({ where: { id: itemId, receiptId }, include: { receipt: true } });
+      if (!item) throw new NotFoundException('Receipt line not found');
+      if (item.unitCostMnt === unitCostMnt) throw new BadRequestException('The price is unchanged');
+      await tx.stockReceiptItem.update({ where: { id: itemId }, data: { unitCostMnt } });
+
+      const newer = await tx.stockReceiptItem.count({
+        where: { productId: item.productId, unitCostMnt: { not: null }, receipt: { receivedAt: { gt: item.receipt.receivedAt } } },
+      });
+      if (newer === 0 && unitCostMnt !== null) {
+        await tx.product.update({ where: { id: item.productId }, data: { lastCostMnt: unitCostMnt } });
+      }
+
+      if (item.receipt.supplierCustomerId) {
+        const all = await tx.stockReceiptItem.findMany({ where: { receiptId } });
+        const owed = ReceiptsService.costTotal(all);
+        const entry = await tx.accountEntry.findFirst({ where: { refType: 'RECEIPT', refId: receiptId } });
+        if (entry) {
+          await tx.accountEntry.update({ where: { id: entry.id }, data: { amountMnt: owed } });
+        } else if (owed > 0) {
+          await tx.accountEntry.create({
+            data: {
+              customerId: item.receipt.supplierCustomerId,
+              kind: AccountEntryKind.PURCHASE,
+              amountMnt: owed,
+              description: `Бараа орлого ${item.receipt.receiptNumber}`,
+              refType: 'RECEIPT',
+              refId: receiptId,
+              createdById: user.id,
+            },
+          });
+        }
+      }
+
+      await tx.editAudit.create({
+        data: {
+          entityType: 'RECEIPT_ITEM',
+          entityId: itemId,
+          summary: `Худалдан авсан үнэ засав — ${item.receipt.receiptNumber}`,
+          before: { unitCostMnt: item.unitCostMnt, productId: item.productId, quantity: Number(item.quantity) },
+          after: { unitCostMnt, productId: item.productId, quantity: Number(item.quantity) },
+          reason,
+          actorId: user.id,
+        },
+      });
+    });
+    this.log.log(`Receipt ${receiptId} line ${itemId} cost → ${unitCostMnt} by ${user.id}: ${reason}`);
+    return this.get(receiptId, user);
   }
 
   private scope(user: AuthUser): Prisma.StockReceiptWhereInput {

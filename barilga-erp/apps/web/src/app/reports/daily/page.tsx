@@ -15,12 +15,14 @@ const METHOD_LABEL: Record<DailyReport['payments'][number]['method'], string> = 
   CASH: 'Cash',
   QPAY: 'QPay',
   CARD: 'Card (POS)',
+  TRANSFER: 'Шилжүүлэг',
 };
 
 const BAR_COLOR: Record<DailyReport['payments'][number]['method'], string> = {
   CASH: 'bg-emerald-500',
   QPAY: 'bg-sky-500',
   CARD: 'bg-violet-500',
+  TRANSFER: 'bg-amber-500',
 };
 
 export default function DailyReportPage() {

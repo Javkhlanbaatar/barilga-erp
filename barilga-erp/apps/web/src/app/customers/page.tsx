@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { hasRole, homeForRole, OVERSIGHT_ROLES, POS_ROLES } from '@/lib/rbac';
+import { AccountPanel } from '@/components/account-panel';
 import { useFeatures } from '@/lib/features';
 import { AuthUser, Customer, CustomerDetail, CustomerType, PriceList } from '@/lib/types';
 
@@ -19,7 +20,20 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED: 'Цуцалсан',
 };
 
-const emptyForm = { type: 'INDIVIDUAL' as CustomerType, name: '', phone: '', regNumber: '', email: '', address: '', notes: '', priceListId: '' };
+const emptyForm = {
+  type: 'INDIVIDUAL' as CustomerType,
+  name: '',
+  phone: '',
+  regNumber: '',
+  email: '',
+  address: '',
+  notes: '',
+  priceListId: '',
+  buysFromUs: true,
+  creditAllowed: false,
+  sellsToUs: false,
+  barterContract: '',
+};
 
 export default function CustomersPage() {
   const router = useRouter();
@@ -83,6 +97,13 @@ export default function CustomersPage() {
     return () => window.clearTimeout(handle);
   }, [me, load]);
 
+  // Opened from a report (?focus=<id>): show that customer straight away.
+  useEffect(() => {
+    if (!me) return;
+    const focus = new URLSearchParams(window.location.search).get('focus');
+    if (focus) void api<CustomerDetail>(`/customers/${focus}`).then(setDetail).catch(() => undefined);
+  }, [me]);
+
   async function openDetail(c: Customer) {
     try {
       setDetail(await api<CustomerDetail>(`/customers/${c.id}`));
@@ -107,6 +128,10 @@ export default function CustomersPage() {
       address: c.address ?? '',
       notes: c.notes ?? '',
       priceListId: c.priceListId ?? '',
+      buysFromUs: c.buysFromUs ?? true,
+      creditAllowed: c.creditAllowed ?? false,
+      sellsToUs: c.sellsToUs ?? false,
+      barterContract: c.barterContract ?? '',
     });
     setFormError('');
     setModal('edit');
@@ -127,6 +152,15 @@ export default function CustomersPage() {
       notes: form.notes.trim() || empty,
       // Only managers/admin decide who buys at cost or barter prices.
       ...(isOversight && pricing ? { priceListId: form.priceListId || empty } : {}),
+      // What the partner is to us: managers/admin only.
+      ...(isOversight
+        ? {
+            buysFromUs: form.buysFromUs,
+            creditAllowed: form.creditAllowed,
+            sellsToUs: form.sellsToUs,
+            barterContract: form.barterContract.trim() || empty,
+          }
+        : {}),
     };
     try {
       if (modal === 'create') {
@@ -223,6 +257,12 @@ export default function CustomersPage() {
                 {detail.email && <p className="text-sm text-slate-400">{detail.email}</p>}
                 {detail.address && <p className="text-sm text-slate-400">{detail.address}</p>}
                 {detail.notes && <p className="text-xs text-slate-500 mt-1">{detail.notes}</p>}
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {detail.buysFromUs !== false && <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px]">Бараа авдаг</span>}
+                  {detail.creditAllowed && <span className="rounded-full border border-amber-600 px-2 py-0.5 text-[11px] text-amber-200">Зарлагаар авах эрхтэй</span>}
+                  {detail.sellsToUs && <span className="rounded-full border border-sky-600 px-2 py-0.5 text-[11px] text-sky-200">Нийлүүлэгч</span>}
+                  {detail.barterContract && <span className="rounded-full border border-emerald-600 px-2 py-0.5 text-[11px] text-emerald-200">Бартер: {detail.barterContract}</span>}
+                </div>
                 {pricing && (
                   <p className="text-xs mt-1">
                     Үнэ: <span className="text-emerald-300">{detail.priceList?.name ?? 'Жижиглэн үнэ'}</span>
@@ -293,6 +333,12 @@ export default function CustomersPage() {
         </aside>
       </div>
 
+      {detail && features.enabled('PARTNER_ACCOUNTS') && (
+        <div className="mt-4">
+          <AccountPanel key={detail.id} customerId={detail.id} canManage={isOversight} />
+        </div>
+      )}
+
       {modal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
           <form onSubmit={save} className="card w-full max-w-md space-y-3">
@@ -337,6 +383,27 @@ export default function CustomersPage() {
               Хаяг
               <input className="mt-1 w-full" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
             </label>
+            {isOversight && (
+              <fieldset className="rounded-lg border border-slate-700 p-2 space-y-1 text-sm">
+                <legend className="px-1 text-xs text-slate-400">Харилцагчийн төрөл (менежер)</legend>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={form.buysFromUs} onChange={(e) => setForm({ ...form, buysFromUs: e.target.checked })} />
+                  Манайхаас бараа авдаг
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={form.creditAllowed} onChange={(e) => setForm({ ...form, creditAllowed: e.target.checked })} />
+                  Зарлагаар (дараа төлөхөөр) авах эрхтэй
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={form.sellsToUs} onChange={(e) => setForm({ ...form, sellsToUs: e.target.checked })} />
+                  Манайх түүнээс бараа авдаг (нийлүүлэгч)
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Бартерын гэрээ (дугаар / тайлбар, хоосон бол бартергүй)
+                  <input className="mt-1 w-full" value={form.barterContract} onChange={(e) => setForm({ ...form, barterContract: e.target.value })} />
+                </label>
+              </fieldset>
+            )}
             {isOversight && pricing && (
               <label className="block text-xs text-slate-400">
                 Үнийн жагсаалт

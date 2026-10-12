@@ -8,6 +8,7 @@ import { REPORT_ROLES } from '../auth/rbac';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { DailyQueryDto } from './dto/daily-query.dto';
 import { WarehouseReportQueryDto } from './dto/warehouse-query.dto';
+import { EditsReportService } from './edits-report.service';
 import { FulfillmentReportService } from './fulfillment-report.service';
 import { ReportsService } from './reports.service';
 import { WarehouseReportService } from './warehouse-report.service';
@@ -19,6 +20,7 @@ export class ReportsController {
     private readonly reports: ReportsService,
     private readonly warehouseReport: WarehouseReportService,
     private readonly fulfillmentReport: FulfillmentReportService,
+    private readonly editsReport: EditsReportService,
   ) {}
 
   @Get('daily')
@@ -47,5 +49,12 @@ export class ReportsController {
   @RequireFeature('PICKING')
   fulfillment(@Query() query: WarehouseReportQueryDto) {
     return this.fulfillmentReport.report(query);
+  }
+
+  /** Later edits of money figures, for the admin. */
+  @Get('edits')
+  @Roles(Role.ADMIN)
+  edits(@Query() query: WarehouseReportQueryDto) {
+    return this.editsReport.report(query);
   }
 }

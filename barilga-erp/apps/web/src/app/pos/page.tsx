@@ -10,7 +10,7 @@ import { useFeatures } from '@/lib/features';
 import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
 import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
-type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'CREDIT';
+type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
 type CartLine = {
   product: Product;
@@ -57,6 +57,7 @@ export default function CheckoutPOS() {
   const [splitCard, setSplitCard] = useState(0);
   const [splitQpay, setSplitQpay] = useState(0);
   const [splitCredit, setSplitCredit] = useState(0);
+  const [splitTransfer, setSplitTransfer] = useState(0);
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
@@ -230,7 +231,7 @@ export default function CheckoutPOS() {
   const totalMnt = b?.totalMnt ?? 0;
   const creditOffered = features.enabled('CREDIT_SALES');
   const deliveryOffered = features.enabled('DELIVERY');
-  const splitSum = splitCash + splitCard + splitQpay + splitCredit;
+  const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit;
   const linePrice = new Map((quote?.lines ?? []).map((l) => [l.productId, l]));
   const splitOk = paymentMode === 'SPLIT' && totalMnt > 0 && splitSum === totalMnt && splitSum > 0;
 
@@ -240,6 +241,7 @@ export default function CheckoutPOS() {
         { method: 'CASH' as const, amount: splitCash, status: 'PAID' },
         { method: 'CARD' as const, amount: splitCard, status: 'PAID' },
         { method: 'QPAY' as const, amount: splitQpay, status: 'PENDING' },
+        { method: 'TRANSFER' as const, amount: splitTransfer, status: 'PAID' },
         { method: 'CREDIT' as const, amount: splitCredit, status: 'PENDING' },
       ].filter((p) => p.amount > 0);
     }
@@ -300,7 +302,7 @@ export default function CheckoutPOS() {
       : 'Захиалга баталгаажуулах + QPay'
     : paymentMethod === 'CREDIT' && paymentMode === 'SINGLE'
       ? 'Зарлагаар олгох (дараа төлнө)'
-      : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : 'хувааж'})`;
+      : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж'})`;
   const canSubmit =
     !busy &&
     cart.length > 0 &&
@@ -613,6 +615,7 @@ export default function CheckoutPOS() {
                   setSplitCard(0);
                   setSplitQpay(0);
                   setSplitCredit(0);
+                  setSplitTransfer(0);
                 }}
                 className={chipClass(paymentMode === 'SPLIT', 'bg-slate-100 text-slate-950 border-slate-100 font-bold')}
               >
@@ -629,6 +632,13 @@ export default function CheckoutPOS() {
                 </button>
                 <button type="button" onClick={() => setPaymentMethod('CARD')} className={chipClass(paymentMethod === 'CARD', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}>
                   Карт (POS)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('TRANSFER')}
+                  className={`col-span-3 ${chipClass(paymentMethod === 'TRANSFER', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}`}
+                >
+                  Банкны шилжүүлэг (орсныг шалгасан)
                 </button>
                 {creditOffered && (
                   <button
@@ -673,6 +683,16 @@ export default function CheckoutPOS() {
                     className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitQpay}
                     onChange={(e) => setSplitQpay(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                  />
+                </label>
+                <label className="block text-slate-400">
+                  Банкны шилжүүлэг
+                  <input
+                    type="number"
+                    min={0}
+                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
+                    value={splitTransfer}
+                    onChange={(e) => setSplitTransfer(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
                 {creditOffered && (

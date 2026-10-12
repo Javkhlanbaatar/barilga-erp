@@ -215,6 +215,7 @@ export class OrdersService {
     const list = customer.priceList?.isActive && (await this.features.isEnabled('PRICE_LISTS')) ? customer.priceList : null;
     return {
       id: customer.id,
+      creditAllowed: customer.creditAllowed,
       priceListId: list?.id ?? null,
       priceListName: list?.name ?? null,
       prices: list ? new Map(list.items.map((i) => [i.productId, i.priceMnt])) : undefined,
@@ -231,6 +232,9 @@ export class OrdersService {
       // Releasing goods on account needs someone to owe the money: a registered customer.
       if (this.features) await this.features.assertEnabled('CREDIT_SALES');
       if (!customer) throw new BadRequestException('Зарлагаар олгоход бүртгэлтэй харилцагч сонгоно уу / On-account sale needs a registered customer');
+      if (!customer.creditAllowed) {
+        throw new ForbiddenException('Энэ харилцагчид зарлагаар олгох эрх менежерээс олгогдоогүй / Customer may not take goods on account');
+      }
     }
     const zoneId = await this.resolveZoneId(dto.zoneId, dto.deliveryMethod);
     const unloadingRequested = isZeroFeeMethod(dto.deliveryMethod) ? false : dto.unloadingRequested;
@@ -619,7 +623,7 @@ export class OrdersService {
   }
 
   /** The customer pays (part of) what they owe on an order released on account. */
-  async settleCredit(orderId: string, method: 'CASH' | 'CARD', amountMnt: number, user: AuthUser) {
+  async settleCredit(orderId: string, method: 'CASH' | 'CARD' | 'TRANSFER', amountMnt: number, user: AuthUser) {
     if (!isPosActor(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can take payments');
     }

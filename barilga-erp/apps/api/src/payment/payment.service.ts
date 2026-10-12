@@ -39,6 +39,9 @@ function appendNote(existing: string | null | undefined, line: string) {
   return [existing?.trim(), line].filter(Boolean).join('\n');
 }
 
+/** How an on-account debt is paid: money (cash, card, bank transfer) or netting against what we owe them. */
+export type SettleMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'OFFSET';
+
 @Injectable()
 export class PaymentService {
   private readonly log = new Logger(PaymentService.name);
@@ -357,7 +360,7 @@ export class PaymentService {
    * owed any more the CREDIT row is closed (PAID at 0₮) and the E-Barimt is issued, because the sale is now
    * fully paid.
    */
-  async settleCredit(orderId: string, method: 'CASH' | 'CARD', amountMnt: number, actorId: string) {
+  async settleCredit(orderId: string, method: SettleMethod, amountMnt: number, actorId: string) {
     if (!Number.isInteger(amountMnt) || amountMnt <= 0) throw new BadRequestException('Amount must be a positive whole number');
     const result = await this.prisma.$transaction(
       async (tx) => {
@@ -371,7 +374,7 @@ export class PaymentService {
         await tx.payment.create({
           data: {
             orderId,
-            method: method === 'CARD' ? PayMethod.CARD : PayMethod.CASH,
+            method: PayMethod[method],
             provider: method,
             amountMnt,
             status: PaymentStatus.PAID,
@@ -592,6 +595,7 @@ export class PaymentService {
     if (raw === 'CARD') return PayMethod.CARD;
     if (raw === 'QPAY') return PayMethod.QPAY;
     if (raw === 'CREDIT') return PayMethod.CREDIT;
+    if (raw === 'TRANSFER') return PayMethod.TRANSFER;
     throw new BadRequestException(`Unsupported payment method ${raw}`);
   }
 

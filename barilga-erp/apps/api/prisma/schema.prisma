@@ -59,6 +59,23 @@ enum PayMethod {
   CARD
   /// Goods released on account (зарлагын баримтаар): an UNPAID row holding what the customer still owes.
   CREDIT
+  /// Bank transfer into the company account (шилжүүлэг).
+  TRANSFER
+  /// Settled by netting against what we owe the same partner (хасалт); no money moves.
+  OFFSET
+}
+
+/// A line in the two-way account with a partner: what WE owe THEM (positive) — goods bought from them, and
+/// what reduces it (our payments, offsets). What they owe us comes from their on-account orders.
+enum AccountEntryKind {
+  /// We received goods/services from the partner (бараа авсан).
+  PURCHASE
+  /// We paid the partner (бэлэн / шилжүүлэг).
+  PAYMENT_TO_PARTNER
+  /// Netted against their on-account orders (хасалт).
+  OFFSET
+  /// Manager correction, either sign.
+  ADJUSTMENT
 }
 
 enum BillType {
@@ -145,6 +162,8 @@ model User {
   pickingStarted       Order[]                    @relation("PickingStartedBy")
   stockReceipts        StockReceipt[]             @relation("StockReceiptBy")
   settingChanges       AppSetting[]               @relation("AppSettingUpdatedBy")
+  accountEntries       AccountEntry[]             @relation("AccountEntryBy")
+  editAudits           EditAudit[]                @relation("EditAuditBy")
 
   @@map("sys_users")
 }
@@ -570,7 +589,18 @@ model Customer {
   priceListId String?    @map("price_list_id")
   priceList   PriceList? @relation(fields: [priceListId], references: [id])
 
-  orders Order[]
+  /// What the partner is to us (managers set these). A partner can be several at once.
+  buysFromUs     Boolean @default(true) @map("buys_from_us")
+  /// May take goods on account (зарлагаар) — set by a manager.
+  creditAllowed  Boolean @default(false) @map("credit_allowed")
+  /// We buy goods from them (нийлүүлэгч).
+  sellsToUs      Boolean @default(false) @map("sells_to_us")
+  /// Barter contract number / note; set = barter partner.
+  barterContract String? @map("barter_contract")
+
+  orders         Order[]
+  accountEntries AccountEntry[]
+  receipts       StockReceipt[]
 
   @@index([phone])
   @@index([name])
@@ -638,18 +668,21 @@ model FeatureFlag {
 
 /// Goods received from a supplier into one warehouse (бараа орлого). Each line adds stock with a RECEIPT movement.
 model StockReceipt {
-  id                String    @id @default(uuid())
-  receiptNumber     String    @unique @map("receipt_number")
-  warehouseId       String    @map("warehouse_id")
-  warehouse         Warehouse @relation(fields: [warehouseId], references: [id])
-  supplierName      String    @map("supplier_name")
+  id                 String    @id @default(uuid())
+  receiptNumber      String    @unique @map("receipt_number")
+  warehouseId        String    @map("warehouse_id")
+  warehouse          Warehouse @relation(fields: [warehouseId], references: [id])
+  supplierName       String    @map("supplier_name")
   /// The supplier's own invoice / waybill number, when there is one.
-  supplierInvoiceNo String?   @map("supplier_invoice_no")
-  notes             String?
-  receivedById      String    @map("received_by_id")
-  receivedBy        User      @relation("StockReceiptBy", fields: [receivedById], references: [id])
-  receivedAt        DateTime  @default(now()) @map("received_at")
-  createdAt         DateTime  @default(now())
+  supplierInvoiceNo  String?   @map("supplier_invoice_no")
+  /// The registered partner the goods came from; with unit costs this becomes a PURCHASE in their account.
+  supplierCustomerId String?   @map("supplier_customer_id")
+  supplierCustomer   Customer? @relation(fields: [supplierCustomerId], references: [id])
+  notes              String?
+  receivedById       String    @map("received_by_id")
+  receivedBy         User      @relation("StockReceiptBy", fields: [receivedById], references: [id])
+  receivedAt         DateTime  @default(now()) @map("received_at")
+  createdAt          DateTime  @default(now())
 
   items StockReceiptItem[]
 
@@ -709,4 +742,44 @@ model PriceListItem {
 
   @@unique([priceListId, productId])
   @@map("crm_price_list_items")
+}
+
+/// One line of the partner account (see AccountEntryKind). Amounts are what WE owe THEM: + increases it.
+model AccountEntry {
+  id          String           @id @default(uuid())
+  customerId  String           @map("customer_id")
+  customer    Customer         @relation(fields: [customerId], references: [id])
+  kind        AccountEntryKind
+  amountMnt   Int              @map("amount_mnt")
+  occurredAt  DateTime         @default(now()) @map("occurred_at")
+  description String
+  /// What caused it, e.g. RECEIPT + receipt id, OFFSET + order id.
+  refType     String?          @map("ref_type")
+  refId       String?          @map("ref_id")
+  createdById String           @map("created_by_id")
+  createdBy   User             @relation("AccountEntryBy", fields: [createdById], references: [id])
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@index([customerId, occurredAt])
+  @@index([refType, refId])
+  @@map("crm_account_entries")
+}
+
+/// Every later change to money figures (purchase prices, account lines): who, when, before → after, why.
+model EditAudit {
+  id         String   @id @default(uuid())
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  summary    String
+  before     Json
+  after      Json
+  reason     String
+  actorId    String   @map("actor_id")
+  actor      User     @relation("EditAuditBy", fields: [actorId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("aud_edits")
 }

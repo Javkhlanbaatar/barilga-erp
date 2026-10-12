@@ -2,10 +2,11 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { CustomerPicker } from '@/components/customer-picker';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { hasRole, homeForRole, OVERSIGHT_ROLES } from '@/lib/rbac';
-import { AuthUser, Product, Role, StockReceipt, Warehouse } from '@/lib/types';
+import { AuthUser, Customer, Product, Role, StockReceipt, Warehouse } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
 type Line = { productId: string; sku: string; nameMn: string; unit: string; quantity: string; unitCost: string };
@@ -23,6 +24,8 @@ export default function ReceiptsPage() {
   const [open, setOpen] = useState(false);
   const [warehouseId, setWarehouseId] = useState('');
   const [supplierName, setSupplierName] = useState('');
+  /** Registered partner the goods came from: priced lines then go into their account. */
+  const [partner, setPartner] = useState<Customer | null>(null);
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState('');
   const [notes, setNotes] = useState('');
   const [search, setSearch] = useState('');
@@ -89,6 +92,7 @@ export default function ReceiptsPage() {
   function openCreate() {
     setWarehouseId(lockedTo ?? warehouses.find((w) => w.isDefault)?.id ?? warehouses[0]?.id ?? '');
     setSupplierName('');
+    setPartner(null);
     setSupplierInvoiceNo('');
     setNotes('');
     setSearch('');
@@ -106,6 +110,24 @@ export default function ReceiptsPage() {
 
   const total = lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitCost) || 0), 0);
 
+  /** A manager corrects a purchase price later; the reason goes to the admin's edit report. */
+  async function editCost(r: StockReceipt, i: StockReceipt['items'][number]) {
+    const raw = window.prompt(`${i.product.nameMn}: шинэ нэгж үнэ (₮, хоосон бол үнэгүй):`, i.unitCostMnt == null ? '' : String(i.unitCostMnt));
+    if (raw === null) return;
+    const reason = window.prompt('Засах шалтгаан (админ харна):');
+    if (!reason || reason.trim().length < 3) return;
+    try {
+      await api(`/inventory/receipts/${r.id}/items/${i.id}/cost`, {
+        method: 'PATCH',
+        body: JSON.stringify({ unitCostMnt: raw.trim() === '' ? null : Math.round(Number(raw)), reason: reason.trim() }),
+      });
+      flash('ok', 'Үнэ засагдлаа');
+      await load();
+    } catch (err) {
+      flash('error', err instanceof Error ? err.message : 'Засаж чадсангүй');
+    }
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     setFormError('');
@@ -119,6 +141,7 @@ export default function ReceiptsPage() {
         body: JSON.stringify({
           warehouseId,
           supplierName: supplierName.trim(),
+          supplierCustomerId: partner?.id,
           supplierInvoiceNo: supplierInvoiceNo.trim() || undefined,
           notes: notes.trim() || undefined,
           items: lines.map((l) => ({
@@ -189,6 +212,7 @@ export default function ReceiptsPage() {
                   <td className="py-3">{r.warehouse.name}</td>
                   <td className="py-3">
                     {r.supplierName}
+                    {r.supplierCustomer && <span className="block text-[11px] text-sky-300">харилцагчийн тооцоонд орсон</span>}
                     {r.supplierInvoiceNo && <span className="block text-xs text-slate-400">№ {r.supplierInvoiceNo}</span>}
                     {r.notes && <span className="block text-xs text-slate-500">{r.notes}</span>}
                   </td>
@@ -199,6 +223,11 @@ export default function ReceiptsPage() {
                           <span className="font-mono text-[11px] text-slate-400">{i.product.sku}</span> {i.product.nameMn} ·{' '}
                           <b>{qty(i.quantity)}</b> {i.product.unit}
                           {i.unitCostMnt != null && <span className="text-slate-400"> × {tugrik(i.unitCostMnt)}</span>}
+                          {isOversight && (
+                            <button className="ml-2 text-[11px] text-amber-300 hover:underline" onClick={() => void editCost(r, i)}>
+                              үнэ засах
+                            </button>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -234,10 +263,26 @@ export default function ReceiptsPage() {
                   ))}
                 </select>
               </label>
-              <label className="block text-xs text-slate-400">
+              <div className="block text-xs text-slate-400 space-y-1">
                 Нийлүүлэгч
-                <input className="mt-1 w-full" required minLength={2} value={supplierName} onChange={(e) => setSupplierName(e.target.value)} />
-              </label>
+                <CustomerPicker
+                  value={partner}
+                  onChange={(c) => {
+                    setPartner(c);
+                    if (c) setSupplierName(c.name);
+                  }}
+                />
+                {!partner && (
+                  <input
+                    className="w-full"
+                    required
+                    minLength={2}
+                    placeholder="эсвэл нэрээр бичих (тооцоонд орохгүй)"
+                    value={supplierName}
+                    onChange={(e) => setSupplierName(e.target.value)}
+                  />
+                )}
+              </div>
               <label className="block text-xs text-slate-400">
                 Падаан / нэхэмжлэхийн № (заавал биш)
                 <input className="mt-1 w-full" value={supplierInvoiceNo} onChange={(e) => setSupplierInvoiceNo(e.target.value)} />

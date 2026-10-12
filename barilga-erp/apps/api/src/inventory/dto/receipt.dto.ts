@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
@@ -50,6 +51,12 @@ export class CreateReceiptDto {
   @MaxLength(60)
   supplierInvoiceNo?: string;
 
+  /** Registered partner the goods came from (their account gets the purchase value). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  supplierCustomerId?: string;
+
   @IsOptional()
   @Transform(trim)
   @IsString()
@@ -62,4 +69,19 @@ export class CreateReceiptDto {
   @ValidateNested({ each: true })
   @Type(() => ReceiptItemDto)
   items!: ReceiptItemDto[];
+}
+
+/** A manager correcting a purchase price later (null removes the price). */
+export class EditReceiptCostDto {
+  @ValidateIf((o: EditReceiptCostDto) => o.unitCostMnt !== null)
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000_000)
+  unitCostMnt!: number | null;
+
+  @Transform(trim)
+  @IsString()
+  @MinLength(3)
+  @MaxLength(300)
+  reason!: string;
 }
