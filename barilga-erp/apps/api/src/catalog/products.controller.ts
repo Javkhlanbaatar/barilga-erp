@@ -15,7 +15,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Prisma } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { mkdirSync } from 'fs';
 import { diskStorage } from 'multer';
@@ -52,12 +52,15 @@ export class ProductsController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...CATALOG_READ_ROLES)
-  async list(@Query('q') q?: string, @Query('search') search?: string) {
+  async list(@CurrentUser() user: AuthUser, @Query('q') q?: string, @Query('search') search?: string) {
     const searchWhere = await productSearchFilter(this.prisma, productSearchTerm(q, search));
-    return this.prisma.product.findMany({
+    const rows = await this.prisma.product.findMany({
       where: { active: true, ...searchWhere },
       orderBy: { nameEn: 'asc' },
     });
+    // What we paid suppliers is for managers; the till and the warehouse see selling prices only.
+    if (user.role === Role.ADMIN || user.role === Role.MANAGER) return rows;
+    return rows.map(({ lastCostMnt: _cost, ...rest }) => rest);
   }
 
   @Get('all')

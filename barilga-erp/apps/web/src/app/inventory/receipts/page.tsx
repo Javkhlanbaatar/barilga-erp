@@ -265,6 +265,7 @@ export default function ReceiptsPage() {
               </label>
               <div className="block text-xs text-slate-400 space-y-1">
                 Нийлүүлэгч
+                {isOversight && (
                 <CustomerPicker
                   value={partner}
                   onChange={(c) => {
@@ -273,12 +274,13 @@ export default function ReceiptsPage() {
                   }}
                   filter={(c) => !!c.sellsToUs || !!c.barterContract}
                 />
+                )}
                 {!partner && (
                   <input
                     className="w-full"
                     required
                     minLength={2}
-                    placeholder="эсвэл нэрээр бичих (тооцоонд орохгүй)"
+                    placeholder={isOversight ? 'эсвэл нэрээр бичих (тооцоонд орохгүй)' : 'Нийлүүлэгчийн нэр'}
                     value={supplierName}
                     onChange={(e) => setSupplierName(e.target.value)}
                   />
@@ -360,6 +362,8 @@ export default function ReceiptsPage() {
                           type="number"
                           min="0"
                           step="1"
+                          disabled={!isOversight}
+                          placeholder={isOversight ? '' : 'менежер оруулна'}
                           value={l.unitCost}
                           onChange={(e) => setLines(lines.map((x, i) => (i === idx ? { ...x, unitCost: e.target.value } : x)))}
                         />

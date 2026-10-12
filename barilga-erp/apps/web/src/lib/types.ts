@@ -1,3 +1,4 @@
+import { matchesSearch } from './translit';
 export type Role = 'ADMIN' | 'MANAGER' | 'BORLUULAGCH' | 'ACHIGCH_BELTGEGCH';
 
 export type AuthUser = {
@@ -81,11 +82,8 @@ export function productMatchesQuery(
   p: { sku?: string; nameMn?: string; nameEn?: string; description?: string | null },
   q: string,
 ) {
-  const term = q.trim().toLowerCase();
-  if (!term) return true;
-  return [p.sku, p.nameMn, p.nameEn, p.description].some((value) =>
-    (value ?? '').toLowerCase().includes(term),
-  );
+  // Same rule as the server's product search: either alphabet, any case.
+  return matchesSearch([p.sku, p.nameMn, p.nameEn, p.description ?? ''].join(' '), q);
 }
 
 export type StockStatus = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'NEGATIVE_STOCK';
@@ -394,24 +392,47 @@ export type AttendanceBoard = {
   recent: Attendance[];
 };
 
+export type PayrollSettings = {
+  defaultBaseMnt: Record<Role, number>;
+  ticketBonusMnt: number;
+  salesCommissionPct: number;
+  prorateByAttendance: boolean;
+  workDaysPerWeek: number;
+  socialInsurancePct: number;
+  incomeTaxPct: number;
+};
+
+export type PayrollRow = {
+  id: string;
+  userId: string;
+  periodMonth: string;
+  baseSalary: number;
+  customBase: boolean;
+  earnedBase: number;
+  workedDays: number;
+  workingDays: number;
+  ticketCount: number;
+  ticketBonus: number;
+  salesAmountMnt: number;
+  salesBonus: number;
+  adjustmentsMnt: number;
+  grossSalary: number;
+  socialInsuranceMnt: number;
+  incomeTaxMnt: number;
+  netSalary: number;
+  status: 'DRAFT' | 'PAID';
+  paidAt: string | null;
+  adjustments: Array<{ id: string; amountMnt: number; reason: string; createdAt: string; by: string }>;
+  user: { id: string; fullName: string; username: string; role: Role };
+};
+
 export type PayrollReport = {
   periodMonth: string;
   timeZone: string;
-  rates: { ticketBonusMnt: number; salesCommissionBps: number; baseSalary: Record<Role, number> };
-  rows: Array<{
-    id: string;
-    userId: string;
-    periodMonth: string;
-    baseSalary: number;
-    fulfillmentBonus: number;
-    netSalary: number;
-    status: 'DRAFT' | 'PAID';
-    ticketCount: number;
-    salesAmountMnt: number;
-    ticketBonus: number;
-    salesBonus: number;
-    user: { id: string; fullName: string; username: string; role: Role };
-  }>;
+  settings: PayrollSettings;
+  workingDays: number;
+  totals: { gross: number; net: number; insurance: number; tax: number };
+  rows: PayrollRow[];
 };
 
 export const ROLE_LABEL: Record<Role, string> = {

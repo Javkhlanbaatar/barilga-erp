@@ -16,7 +16,8 @@ async function main() {
   for (const u of users) {
     await prisma.user.upsert({
       where: { username: u.username },
-      update: { email: u.email, fullName: u.fullName, role: u.role, passwordHash, isActive: true },
+      // Re-seeding never resets a password or re-activates someone an admin switched off.
+      update: { email: u.email, fullName: u.fullName, role: u.role },
       create: { ...u, passwordHash },
     });
   }

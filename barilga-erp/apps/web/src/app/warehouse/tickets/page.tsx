@@ -1,5 +1,6 @@
 'use client';
 
+import { matchesSearch } from '@/lib/translit';
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { PickList, unpickedCount } from '@/components/pick-list';
@@ -70,7 +71,7 @@ export default function WarehouseTicketsPage() {
   // Without the picking module there is no "being prepared" step: everything waits in the queue.
   const term = find.trim().toLowerCase();
   const matches = (o: Order) =>
-    !term || o.orderNumber.toLowerCase().includes(term) || o.customerName.toLowerCase().includes(term) || (o.customerPhone ?? '').includes(term);
+    !term || matchesSearch(`${o.orderNumber} ${o.customerName} ${o.customerPhone ?? ''}`, term);
   const queue = orders.filter((o) => (!picking || !o.pickingStartedAt) && matches(o));
   const preparing = picking ? orders.filter((o) => o.pickingStartedAt && matches(o)) : [];
 

@@ -158,6 +158,10 @@ model User {
   customersCreated     Customer[]                 @relation("CustomerCreatedBy")
   transfersSent        StockTransfer[]            @relation("TransferSentBy")
   transfersRequested   StockTransfer[]            @relation("TransferRequestedBy")
+  /// Monthly base salary set by admin; empty = the default for the role (payroll settings).
+  baseSalaryMnt        Int?                       @map("base_salary_mnt")
+  payrollAdjustments   PayrollAdjustment[]        @relation("PayrollAdjustmentFor")
+  payrollAdjustmentsBy PayrollAdjustment[]        @relation("PayrollAdjustmentBy")
   transfersReceived    StockTransfer[]            @relation("TransferReceivedBy")
   transfersCancelled   StockTransfer[]            @relation("TransferCancelledBy")
   featureFlagChanges   FeatureFlag[]              @relation("FeatureFlagUpdatedBy")
@@ -562,6 +566,21 @@ model Payroll {
   baseSalary       Int           @map("base_salary")
   fulfillmentBonus Int           @map("fulfillment_bonus")
   netSalary        Int           @map("net_salary")
+  /// Breakdown kept with the row, so a paid month never changes when rates or attendance change later.
+  ticketCount      Int           @default(0) @map("ticket_count")
+  salesAmountMnt   Int           @default(0) @map("sales_amount_mnt")
+  ticketBonus      Int           @default(0) @map("ticket_bonus")
+  salesBonus       Int           @default(0) @map("sales_bonus")
+  workedDays       Int           @default(0) @map("worked_days")
+  workingDays      Int           @default(0) @map("working_days")
+  /// Base actually earned (pro-rated by attendance when that rule is on).
+  earnedBase       Int           @default(0) @map("earned_base")
+  adjustmentsMnt   Int           @default(0) @map("adjustments_mnt")
+  grossSalary      Int           @default(0) @map("gross_salary")
+  socialInsuranceMnt Int         @default(0) @map("social_insurance_mnt")
+  incomeTaxMnt     Int           @default(0) @map("income_tax_mnt")
+  paidAt           DateTime?     @map("paid_at")
+  paidById         String?       @map("paid_by_id")
   status           PayrollStatus @default(DRAFT)
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
@@ -569,6 +588,22 @@ model Payroll {
   @@unique([userId, periodMonth])
   @@index([periodMonth])
   @@map("hr_payrolls")
+}
+
+/// A one-off bonus (+) or deduction (−) for one employee in one month: advance, fine, overtime pay, etc.
+model PayrollAdjustment {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  user        User     @relation("PayrollAdjustmentFor", fields: [userId], references: [id])
+  periodMonth String   @map("period_month")
+  amountMnt   Int      @map("amount_mnt")
+  reason      String
+  createdById String   @map("created_by_id")
+  createdBy   User     @relation("PayrollAdjustmentBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([userId, periodMonth])
+  @@map("hr_payroll_adjustments")
 }
 
 /// A registered customer (person or company). Credit, invoices and contracts will hang off this in later phases.

@@ -109,6 +109,7 @@ describe('goods received from a partner', () => {
     const inventory = new InventoryService(w.db as any);
     const receipts = new ReceiptsService(w.db as any, inventory);
     const p = await w.db.product.create({ data: { sku: 'BRK', nameMn: 'Тоосго', stockQty: D(0) } });
+    await w.db.customer.update({ where: { id: w.partner.id }, data: { sellsToUs: true } });
     const r = await receipts.create(
       { warehouseId: 'wh-main', supplierName: 'Бартер ХХК', supplierCustomerId: w.partner.id, items: [{ productId: p.id, quantity: 1000, unitCostMnt: 300 }] } as any,
       manager,

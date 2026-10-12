@@ -182,6 +182,22 @@ export class ReturnsService {
       debtClosed = left === 0;
     } else if (dto.refundMethod === PayMethod.CREDIT) {
       throw new BadRequestException('Nothing is owed on this order; choose how the money is refunded');
+    } else {
+      // Money handed back can never exceed money actually received on the order (cash, card, QPay, transfer)
+      // less earlier money refunds: a contract-offset order or a discounted order cannot be turned into cash.
+      const received = order.payments
+        .filter((p) => p.status === PaymentStatus.PAID && p.method !== PayMethod.OFFSET && p.method !== PayMethod.CREDIT)
+        .reduce((s, p) => s + p.amountMnt, 0);
+      const earlier = await tx.salesReturn.aggregate({
+        where: { orderId, refundMethod: { notIn: [PayMethod.CREDIT, PayMethod.OFFSET] } },
+        _sum: { refundAmount: true },
+      });
+      const left = received - (earlier._sum.refundAmount ?? 0);
+      if (refundAmount > left) {
+        throw new BadRequestException(
+          `Буцааж өгөх мөнгө (${refundAmount}₮) энэ захиалгад орсон мөнгөнөөс (${Math.max(0, left)}₮) их байна. Гэрээгээр олгосон бол тооцоонд залруулга хийнэ.`,
+        );
+      }
     }
 
     const salesReturn = await tx.salesReturn.create({

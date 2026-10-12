@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { AccountEntryKind, BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
+import { searchKey } from '../common/translit';
+import { partnerPayable } from '../customers/partner-payable';
 import { isFallbackPicker, isHiredTransport, isPosActor, isTransportActor, isWarehouseActor } from '../auth/rbac';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
 import { FeaturesService } from '../features/features.service';
@@ -373,9 +375,8 @@ export class OrdersService {
   }
 
   /** What we owe the partner: purchases minus our payments and offsets (positive = we owe them). */
-  private async partnerPayable(customerId: string) {
-    const agg = await this.prisma.accountEntry.aggregate({ where: { customerId }, _sum: { amountMnt: true } });
-    return agg._sum.amountMnt ?? 0;
+  private partnerPayable(customerId: string) {
+    return partnerPayable(this.prisma, customerId);
   }
 
   /**
@@ -389,8 +390,7 @@ export class OrdersService {
       // so two contract sales at once cannot both spend the same payable.
       await this.payments.settleCredit(orderId, 'OFFSET', amountMnt, actorId, {
         before: async (tx) => {
-          const agg = await tx.accountEntry.aggregate({ where: { customerId }, _sum: { amountMnt: true } });
-          if (amountMnt > (agg._sum.amountMnt ?? 0)) throw new BadRequestException('payable_shrank');
+          if (amountMnt > (await partnerPayable(tx, customerId))) throw new BadRequestException('payable_shrank');
         },
         after: async (tx) => {
           await tx.accountEntry.create({
@@ -443,9 +443,11 @@ export class OrdersService {
       throw new BadRequestException('Fees are unchanged');
     }
 
+    if (this.features) await this.features.assertEnabled('DELIVERY');
     const newTotal = order.subtotalMnt + dto.deliveryFeeMnt + dto.unloadingFeeMnt + dto.timeAdjustmentMnt;
-    if (newTotal <= 0) {
-      throw new BadRequestException('Order total must stay above 0₮');
+    // Fees can be waived, but never turned into a discount on the goods themselves.
+    if (newTotal < order.subtotalMnt || dto.deliveryFeeMnt < 0 || dto.unloadingFeeMnt < 0) {
+      throw new BadRequestException('Хураамжийг барааны үнээс доош хасаж болохгүй / Fees cannot discount the goods');
     }
 
     await this.payments.replaceSoleQpayInvoice(orderId, newTotal, async (tx) => {
@@ -812,6 +814,8 @@ export class OrdersService {
           { customerPhone: { contains: q } },
           { customerName: { contains: q, mode: 'insensitive' } },
           { customerName: { contains: cap } },
+          // Registered customers also match in the other alphabet ("ondor" finds "Өндөр Барилга").
+          ...(searchKey(q) ? [{ customer: { searchText: { contains: searchKey(q) } } }] : []),
         ],
       });
     }

@@ -4,6 +4,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { seesAllWarehouses } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCustomerDto, UpdateCustomerDto } from './dto/customer.dto';
+import { searchKey } from '../common/translit';
 
 /** Company РД, the same rule the order/E-Barimt flow already uses. */
 const COMPANY_REG = /^[0-9A-Z]{7,12}$/;
@@ -29,8 +30,25 @@ export class CustomersService {
     return value;
   }
 
-  private static searchText(c: { name: string; phone: string; regNumber: string | null }) {
-    return [c.name, c.phone, c.regNumber ?? ''].join(' ').toLowerCase();
+  /** Lower-cased text plus its Cyrillic/Latin search key after " | ", so either alphabet finds the customer. */
+  static searchText(c: { name: string; phone: string; regNumber: string | null }) {
+    const plain = [c.name, c.phone, c.regNumber ?? ''].join(' ').toLowerCase();
+    return `${plain} | ${searchKey(c.name)}`;
+  }
+
+  /** Customers saved before the search key existed get it once, at start-up. */
+  async onModuleInit() {
+    try {
+      const old = await this.prisma.customer.findMany({
+        where: { NOT: { searchText: { contains: ' | ' } } },
+        select: { id: true, name: true, phone: true, regNumber: true },
+      });
+      for (const c of old) {
+        await this.prisma.customer.update({ where: { id: c.id }, data: { searchText: CustomersService.searchText(c) } });
+      }
+    } catch {
+      // the table may not exist yet (migrations pending); the next start fills it in
+    }
   }
 
   private rethrowDuplicate(err: unknown): never {
@@ -89,7 +107,9 @@ export class CustomersService {
     return this.prisma.customer.findMany({
       where: {
         ...(includeInactive ? {} : { isActive: true }),
-        ...(term ? { searchText: { contains: term } } : {}),
+        ...(term
+          ? { OR: [{ searchText: { contains: term } }, ...(searchKey(term) ? [{ searchText: { contains: searchKey(term) } }] : [])] }
+          : {}),
       },
       orderBy: { name: 'asc' },
       take: 50,

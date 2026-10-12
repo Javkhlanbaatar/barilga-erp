@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -6,7 +6,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { OVERSIGHT_ROLES } from '../auth/rbac';
-import { PayrollQueryDto, StaffPunchDto } from './dto/hr.dto';
+import { BaseSalaryDto, PayrollAdjustmentDto, PayrollQueryDto, PayrollSettingsDto, StaffPunchDto } from './dto/hr.dto';
 import { HrService } from './hr.service';
 
 @Controller('hr')
@@ -37,6 +37,36 @@ export class HrController {
   @Roles(...OVERSIGHT_ROLES)
   payroll(@CurrentUser() user: AuthUser, @Query() query: PayrollQueryDto) {
     return this.hr.payroll(user, query.periodMonth);
+  }
+
+  @Get('payroll/settings')
+  @Roles(...OVERSIGHT_ROLES)
+  payrollSettings() {
+    return this.hr.payrollSettings();
+  }
+
+  @Put('payroll/settings')
+  @Roles(Role.ADMIN)
+  savePayrollSettings(@Body() dto: PayrollSettingsDto, @CurrentUser() user: AuthUser) {
+    return this.hr.savePayrollSettings(dto, user);
+  }
+
+  @Put('payroll/salary/:userId')
+  @Roles(Role.ADMIN)
+  setBaseSalary(@Param('userId') userId: string, @Body() dto: BaseSalaryDto, @CurrentUser() user: AuthUser) {
+    return this.hr.setBaseSalary(userId, dto.baseSalaryMnt ?? null, user);
+  }
+
+  @Post('payroll/adjustments')
+  @Roles(...OVERSIGHT_ROLES)
+  addAdjustment(@Body() dto: PayrollAdjustmentDto, @CurrentUser() user: AuthUser) {
+    return this.hr.addAdjustment(dto, user);
+  }
+
+  @Delete('payroll/adjustments/:id')
+  @Roles(...OVERSIGHT_ROLES)
+  removeAdjustment(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.hr.removeAdjustment(id, user);
   }
 
   @Patch('payroll/:id/pay')

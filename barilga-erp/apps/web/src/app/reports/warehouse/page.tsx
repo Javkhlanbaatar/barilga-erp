@@ -1,5 +1,6 @@
 'use client';
 
+import { matchesSearch } from '@/lib/translit';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ReportsNav } from '@/components/reports-nav';
@@ -63,7 +64,7 @@ export default function WarehouseReportPage() {
   const lines = useMemo(() => {
     const term = q.trim().toLowerCase();
     return (report?.lines ?? []).filter(
-      (l) => (!onlyLow || l.lowStock) && (!term || l.sku.toLowerCase().includes(term) || l.nameMn.toLowerCase().includes(term)),
+      (l) => (!onlyLow || l.lowStock) && (!term || matchesSearch(`${l.sku} ${l.nameMn}`, term)),
     );
   }, [report, onlyLow, q]);
 

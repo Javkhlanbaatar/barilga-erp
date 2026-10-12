@@ -35,6 +35,11 @@ export class ReceiptsService {
       if (!locked) throw new ForbiddenException('You must be assigned to a warehouse to receive goods');
       if (locked !== dto.warehouseId) throw new ForbiddenException('You can only receive goods into your own warehouse');
     }
+    // A cost or a supplier partner creates money we owe (a PURCHASE line on the partner account): managers
+    // decide that. Warehouse staff record what arrived; a manager adds the cost later (`үнэ засах`).
+    if (!seesAllWarehouses(user.role) && (dto.supplierCustomerId || dto.items.some((i) => i.unitCostMnt != null))) {
+      throw new ForbiddenException('Өртөг, нийлүүлэгч харилцагчийг зөвхөн менежер оруулна / Only managers enter costs and supplier partners');
+    }
     const lines = new Map<string, { quantity: Prisma.Decimal; unitCostMnt: number | null }>();
     for (const item of dto.items) {
       const qty = new Prisma.Decimal(item.quantity.toString());
@@ -57,6 +62,9 @@ export class ReceiptsService {
               ? await tx.customer.findUnique({ where: { id: dto.supplierCustomerId } })
               : null;
             if (dto.supplierCustomerId && !partner) throw new BadRequestException('Supplier partner not found');
+            if (partner && !partner.sellsToUs && !partner.barterContract) {
+              throw new BadRequestException('Энэ харилцагч нийлүүлэгч биш / Partner is not marked as a supplier');
+            }
             const productIds = [...lines.keys()];
             const products = await tx.product.findMany({ where: { id: { in: productIds } } });
             if (products.length !== productIds.length) throw new BadRequestException('Product not found');

@@ -1,5 +1,6 @@
 'use client';
 
+import { matchesSearch } from '@/lib/translit';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
@@ -71,7 +72,7 @@ export default function PriceListsPage() {
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase();
     return (detail?.products ?? []).filter(
-      (p) => !term || p.sku.toLowerCase().includes(term) || p.nameMn.toLowerCase().includes(term) || p.category.toLowerCase().includes(term),
+      (p) => !term || matchesSearch(`${p.sku} ${p.nameMn} ${p.category}`, term),
     );
   }, [detail, q]);
 

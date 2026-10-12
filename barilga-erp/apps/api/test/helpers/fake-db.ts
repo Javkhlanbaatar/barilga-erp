@@ -27,6 +27,9 @@ function matchValue(value: any, cond: any): boolean {
       case 'in':
         if (!(arg as any[]).includes(value)) return false;
         break;
+      case 'notIn':
+        if ((arg as any[]).includes(value)) return false;
+        break;
       case 'not':
         if (matchValue(value, arg)) return false;
         break;
@@ -67,7 +70,7 @@ const NESTED_ITEMS: Record<string, { table: string; fk: string }> = {
 };
 
 /** Relation names that differ from the table name. */
-const RELATION_TABLE: Record<string, string> = { receipt: 'stockReceipt', transfer: 'stockTransfer' };
+const RELATION_TABLE: Record<string, string> = { receipt: 'stockReceipt', transfer: 'stockTransfer', createdBy: 'user' };
 
 class Table {
   rows: Row[] = [];
@@ -91,9 +94,9 @@ class Table {
         if (this.matches(row, cond)) return false;
         continue;
       }
-      if (key === 'warehouseId_productId') {
-        const k = cond as Row;
-        if (row.warehouseId !== k.warehouseId || row.productId !== k.productId) return false;
+      if (key === 'warehouseId_productId' || key === 'userId_periodMonth') {
+        // Compound unique keys: every named field must match.
+        for (const [field, v] of Object.entries(cond as Row)) if (row[field] !== v) return false;
         continue;
       }
       const rel = this.db.relation(this.name, row, key, cond);
@@ -184,6 +187,34 @@ class Table {
     }
     return { _sum, _count: { _all: rows.length } };
   }
+  async groupBy(args: Row) {
+    const rows = this.rows.filter((r) => this.matches(r, args.where));
+    const groups = new Map<string, Row[]>();
+    for (const r of rows) {
+      const k = JSON.stringify((args.by as string[]).map((b) => r[b]));
+      groups.set(k, [...(groups.get(k) ?? []), r]);
+    }
+    return [...groups.values()].map((g) => ({
+      ...Object.fromEntries((args.by as string[]).map((b) => [b, g[0][b]])),
+      _count: { _all: g.length },
+      _sum: Object.fromEntries(Object.keys(args._sum ?? {}).map((k) => [k, g.reduce((t, r) => t + Number(r[k] ?? 0), 0)])),
+    }));
+  }
+  /** skipDuplicates: a row whose (userId, periodMonth) already exists is skipped, like ON CONFLICT DO NOTHING. */
+  async createMany(args: Row) {
+    let count = 0;
+    for (const data of args.data as Row[]) {
+      if (args.skipDuplicates && this.rows.some((r) => r.userId === data.userId && r.periodMonth === data.periodMonth)) continue;
+      await this.create({ data });
+      count++;
+    }
+    return { count };
+  }
+  async delete(args: Row) {
+    const i = this.rows.findIndex((r) => this.matches(r, args.where));
+    if (i < 0) throw new Error(`fake-db: ${this.name} not found for delete`);
+    return this.rows.splice(i, 1)[0];
+  }
   async count(args: Row = {}) {
     return this.rows.filter((r) => this.matches(r, args.where)).length;
   }
@@ -268,6 +299,9 @@ export class FakeDb {
   stockReceipt = new Table(this, 'stockReceipt', () => ({ supplierInvoiceNo: null, supplierCustomerId: null, notes: null, receivedAt: new Date() }));
   stockReceiptItem = new Table(this, 'stockReceiptItem', () => ({ unitCostMnt: null }));
   appSetting = new Table(this, 'appSetting', () => ({ updatedById: null }));
+  attendance = new Table(this, 'attendance', () => ({ checkOut: null, status: 'ON_TIME', notes: null }));
+  payroll = new Table(this, 'payroll', () => ({ status: 'DRAFT', paidAt: null, paidById: null }));
+  payrollAdjustment = new Table(this, 'payrollAdjustment', () => ({}));
   priceList = new Table(this, 'priceList', () => ({ isActive: true, notes: null }));
   priceListItem = new Table(this, 'priceListItem', () => ({}));
   accountEntry = new Table(this, 'accountEntry', () => ({ refType: null, refId: null, occurredAt: new Date() }));
@@ -319,7 +353,7 @@ export class FakeDb {
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
-      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.priceList, this.priceListItem,
+      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.attendance, this.payroll, this.payrollAdjustment, this.priceList, this.priceListItem,
       this.accountEntry, this.editAudit, this.invoice,
     ];
   }

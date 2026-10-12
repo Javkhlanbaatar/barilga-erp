@@ -2,6 +2,8 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { AccountEntryKind, OrderStatus, PaymentStatus, PayMethod, Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PaymentService } from '../payment/payment.service';
+import { lockedWarehouseId } from '../inventory/warehouse-scope';
+import { partnerPayable } from './partner-payable';
 import { PrismaService } from '../prisma/prisma.service';
 import { AddAccountEntryDto, EditAccountEntryDto } from './dto/account.dto';
 
@@ -42,23 +44,30 @@ export class AccountsService {
   }
 
   /** Open on-account rows of this customer, oldest first. */
-  private openCredit(customerId: string) {
+  private openCredit(customerId: string, scope: Prisma.OrderWhereInput = {}) {
     return this.prisma.payment.findMany({
       where: {
         method: PayMethod.CREDIT,
         status: PaymentStatus.UNPAID,
         amountMnt: { gt: 0 },
         // Only goods actually released are owed; a pending order is still waiting for its other payments.
-        order: { customerId, status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] } },
+        order: { customerId, status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] }, ...scope },
       },
       include: { order: { select: { id: true, orderNumber: true, createdAt: true } } },
       orderBy: { createdAt: 'asc' },
     });
   }
 
-  private async payable(customerId: string) {
-    const agg = await this.prisma.accountEntry.aggregate({ where: { customerId }, _sum: { amountMnt: true } });
-    return agg._sum.amountMnt ?? 0;
+  private payable(customerId: string) {
+    return partnerPayable(this.prisma, customerId);
+  }
+
+  /** A cashier locked to one warehouse only takes payments for that warehouse's orders. */
+  private async scopeFor(user: AuthUser): Promise<Prisma.OrderWhereInput> {
+    const locked = lockedWarehouseId(user);
+    if (!locked) return {};
+    const def = await this.prisma.warehouse.findFirst({ where: { isDefault: true }, select: { id: true } });
+    return def?.id === locked ? { OR: [{ warehouseId: locked }, { warehouseId: null }] } : { warehouseId: locked };
   }
 
   async balance(customerId: string) {
@@ -249,8 +258,8 @@ export class AccountsService {
       // Settlement and OFFSET line in one transaction, re-checking our payable inside it.
       await this.payments.settleCredit(row.order.id, 'OFFSET', take, user.id, {
         before: async (tx) => {
-          const agg = await tx.accountEntry.aggregate({ where: { customerId }, _sum: { amountMnt: true } });
-          if (take > (agg._sum.amountMnt ?? 0)) throw new ConflictException('Өглөг өөрчлөгдсөн байна, дахин оролдоно уу / Payable changed; try again');
+          const payableNow = await partnerPayable(tx, customerId);
+          if (take > payableNow) throw new ConflictException('Өглөг өөрчлөгдсөн байна, дахин оролдоно уу / Payable changed; try again');
         },
         after: async (tx) => {
           await tx.accountEntry.create({
@@ -280,9 +289,9 @@ export class AccountsService {
   async payDebt(customerId: string, method: 'CASH' | 'CARD' | 'TRANSFER', amountMnt: number, user: AuthUser) {
     await this.requireCustomer(customerId);
     if (!Number.isInteger(amountMnt) || amountMnt <= 0) throw new BadRequestException('Amount must be a positive whole number');
-    const open = await this.openCredit(customerId);
+    const open = await this.openCredit(customerId, await this.scopeFor(user));
     const owed = open.reduce((s, p) => s + p.amountMnt, 0);
-    if (owed === 0) throw new BadRequestException('Энэ харилцагч өргүй / Nothing is owed');
+    if (owed === 0) throw new BadRequestException('Энэ харилцагч (таны агуулахад) өргүй / Nothing is owed here');
     if (amountMnt > owed) throw new BadRequestException(`Нийт өр ${owed}₮ / Only ${owed}₮ is owed`);
     let left = amountMnt;
     const applied: Array<{ orderNumber: string; amountMnt: number }> = [];
