@@ -27,9 +27,10 @@ export class PublicService {
 
   /** What the public shop may offer right now (module switches). */
   async shopConfig() {
-    const on = (key: 'ONLINE_SHOP' | 'UNLOADING') => (this.features ? this.features.isEnabled(key) : Promise.resolve(key === 'ONLINE_SHOP'));
-    const [shopOpen, unloading] = await Promise.all([on('ONLINE_SHOP'), on('UNLOADING')]);
-    return { shopOpen, unloading };
+    const on = (key: 'ONLINE_SHOP' | 'UNLOADING' | 'DELIVERY') =>
+      this.features ? this.features.isEnabled(key) : Promise.resolve(key === 'ONLINE_SHOP');
+    const [shopOpen, delivery, unloading] = await Promise.all([on('ONLINE_SHOP'), on('DELIVERY'), on('UNLOADING')]);
+    return { shopOpen, delivery, unloading: delivery && unloading };
   }
 
   async catalog() {
@@ -72,7 +73,8 @@ export class PublicService {
   }
 
   quote(dto: QuoteOrderDto) {
-    return this.orders.quote({ ...dto, items: this.publicItems(dto.items) });
+    // customerId is staff-only: a visitor must not see another customer's price list.
+    return this.orders.quote({ ...dto, customerId: undefined, items: this.publicItems(dto.items) });
   }
 
   async create(dto: CreateOrderDto) {

@@ -43,7 +43,7 @@ export class EbarimtService {
   async issueForOrder(orderId: string, opts: { quiet?: boolean } = {}) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { items: { include: { product: true } }, payments: true },
+      include: { items: { include: { product: true, returnItems: true } }, payments: true },
     });
     if (!order) throw new NotFoundException('Order not found');
     if (order.ebarimtStatus === EbarimtStatus.ISSUED && order.receiptId) {
@@ -85,26 +85,38 @@ export class EbarimtService {
       return { ok: true as const, skipped: true, order };
     }
 
-    const totalVAT = vatOf(order.totalMnt);
-    const items = this.buildItems(order.items, order.totalMnt, totalVAT);
+    // Goods returned before the receipt is issued (e.g. on an order released on account and paid later) were
+    // never sold: the receipt covers what was actually kept and paid for. Later returns go through refunds.
+    const keptLines = order.items
+      .map((line) => {
+        const returnedQty = line.returnItems.reduce((s, r) => s.plus(r.quantity), new Prisma.Decimal(0));
+        const refunded = line.returnItems.reduce((s, r) => s + r.lineRefund, 0);
+        return { ...line, quantity: new Prisma.Decimal(line.quantity.toString()).minus(returnedQty), lineTotal: line.lineTotal - refunded };
+      })
+      .filter((line) => line.quantity.gt(0));
+    const refundedBefore = order.items.reduce((s, line) => s + line.returnItems.reduce((t, r) => t + r.lineRefund, 0), 0);
+    const receiptTotal = order.totalMnt - refundedBefore;
+    const totalVAT = vatOf(receiptTotal);
+    const items = this.buildItems(keptLines, receiptTotal, totalVAT);
     const payload = this.client.buildPosapiBody({
       orderNumber: order.orderNumber,
-      totalAmount: order.totalMnt,
+      totalAmount: receiptTotal,
       totalVAT,
       totalCityTax: 0,
       billType: order.billType,
       customerRegNumber: order.customerRegNumber,
       customerName: order.customerName,
       items,
+      // A closed on-account row is PAID at 0₮; only real money appears on the receipt.
       payments: order.payments
-        .filter((p) => p.status === PaymentStatus.PAID)
+        .filter((p) => p.status === PaymentStatus.PAID && p.amountMnt > 0)
         .map((p) => ({ code: payCode(p.method), paidAmount: p.amountMnt })),
     });
 
     try {
       const result = await this.client.sendReceipt({
         orderNumber: order.orderNumber,
-        totalAmount: order.totalMnt,
+        totalAmount: receiptTotal,
         totalVAT,
         totalCityTax: 0,
         billType: order.billType,
@@ -112,7 +124,7 @@ export class EbarimtService {
         customerName: order.customerName,
         items,
         payments: order.payments
-          .filter((p) => p.status === PaymentStatus.PAID)
+          .filter((p) => p.status === PaymentStatus.PAID && p.amountMnt > 0)
           .map((p) => ({ code: payCode(p.method), paidAmount: p.amountMnt })),
       });
       const updated = await this.prisma.order.update({

@@ -6,7 +6,8 @@ import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { hasRole, homeForRole, OVERSIGHT_ROLES, POS_ROLES } from '@/lib/rbac';
-import { AuthUser, Customer, CustomerDetail, CustomerType } from '@/lib/types';
+import { useFeatures } from '@/lib/features';
+import { AuthUser, Customer, CustomerDetail, CustomerType, PriceList } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
 
@@ -18,7 +19,7 @@ const STATUS_LABEL: Record<string, string> = {
   CANCELLED: 'Цуцалсан',
 };
 
-const emptyForm = { type: 'INDIVIDUAL' as CustomerType, name: '', phone: '', regNumber: '', email: '', address: '', notes: '' };
+const emptyForm = { type: 'INDIVIDUAL' as CustomerType, name: '', phone: '', regNumber: '', email: '', address: '', notes: '', priceListId: '' };
 
 export default function CustomersPage() {
   const router = useRouter();
@@ -35,6 +36,13 @@ export default function CustomersPage() {
   const [toast, setToast] = useState<Toast | null>(null);
 
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
+  const features = useFeatures();
+  const pricing = features.enabled('PRICE_LISTS');
+  const [priceLists, setPriceLists] = useState<PriceList[]>([]);
+
+  useEffect(() => {
+    if (me && pricing) void api<PriceList[]>('/price-lists').then(setPriceLists).catch(() => setPriceLists([]));
+  }, [me, pricing]);
 
   const flash = useCallback((kind: Toast['kind'], text: string) => {
     setToast({ kind, text });
@@ -98,6 +106,7 @@ export default function CustomersPage() {
       email: c.email ?? '',
       address: c.address ?? '',
       notes: c.notes ?? '',
+      priceListId: c.priceListId ?? '',
     });
     setFormError('');
     setModal('edit');
@@ -116,6 +125,8 @@ export default function CustomersPage() {
       email: form.email.trim() || empty,
       address: form.address.trim() || empty,
       notes: form.notes.trim() || empty,
+      // Only managers/admin decide who buys at cost or barter prices.
+      ...(isOversight && pricing ? { priceListId: form.priceListId || empty } : {}),
     };
     try {
       if (modal === 'create') {
@@ -212,7 +223,30 @@ export default function CustomersPage() {
                 {detail.email && <p className="text-sm text-slate-400">{detail.email}</p>}
                 {detail.address && <p className="text-sm text-slate-400">{detail.address}</p>}
                 {detail.notes && <p className="text-xs text-slate-500 mt-1">{detail.notes}</p>}
+                {pricing && (
+                  <p className="text-xs mt-1">
+                    Үнэ: <span className="text-emerald-300">{detail.priceList?.name ?? 'Жижиглэн үнэ'}</span>
+                  </p>
+                )}
               </div>
+              {detail.credit && detail.credit.owedMnt > 0 && (
+                <div className="rounded-lg border border-amber-700/60 p-3">
+                  <p className="text-[10px] uppercase text-slate-400">Өр (зарлагаар олгосон)</p>
+                  <p className="text-lg font-bold text-amber-300">{tugrik(detail.credit.owedMnt)}</p>
+                  <ul className="mt-1 text-sm divide-y divide-slate-800">
+                    {detail.credit.orders.map((o) => (
+                      <li key={o.orderId} className="py-1 flex justify-between gap-2">
+                        <Link href={`/orders/${o.orderId}`} className="font-mono text-xs text-amber-300 hover:underline">
+                          {o.orderNumber}
+                        </Link>
+                        <span className="text-xs text-slate-400">{new Date(o.createdAt).toLocaleDateString('mn-MN')}</span>
+                        <span className="font-medium">{tugrik(o.owedMnt)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-[11px] text-slate-500 mt-1">Төлбөрийг захиалгын хуудаснаас бүртгэнэ.</p>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <article className="rounded-lg border border-slate-700 p-3">
                   <p className="text-[10px] uppercase text-slate-400">Дууссан захиалга</p>
@@ -303,6 +337,19 @@ export default function CustomersPage() {
               Хаяг
               <input className="mt-1 w-full" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
             </label>
+            {isOversight && pricing && (
+              <label className="block text-xs text-slate-400">
+                Үнийн жагсаалт
+                <select className="mt-1 w-full" value={form.priceListId} onChange={(e) => setForm({ ...form, priceListId: e.target.value })}>
+                  <option value="">Жижиглэн үнэ (энгийн)</option>
+                  {priceLists.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="block text-xs text-slate-400">
               Тэмдэглэл
               <textarea className="mt-1 w-full" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />

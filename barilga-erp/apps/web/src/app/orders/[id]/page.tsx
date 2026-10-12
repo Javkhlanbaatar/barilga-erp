@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
+import { CreditPanel, owedOnOrder } from '@/components/credit-panel';
 import { GatherPanel } from '@/components/gather-panel';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
@@ -25,7 +26,7 @@ export default function OrderDetailPage() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnReason, setReturnReason] = useState('');
-  const [refundMethod, setRefundMethod] = useState<'CASH' | 'QPAY' | 'CARD'>('CASH');
+  const [refundMethod, setRefundMethod] = useState<'CASH' | 'QPAY' | 'CARD' | 'CREDIT'>('CASH');
   const [returnQty, setReturnQty] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [vehicleNumber, setVehicleNumber] = useState('');
@@ -93,7 +94,8 @@ export default function OrderDetailPage() {
     for (const item of order.items) next[item.id] = 0;
     setReturnQty(next);
     setReturnReason('');
-    setRefundMethod('CASH');
+    // While goods are still owed for, a return lowers the debt (no money is handed back).
+    setRefundMethod(order && owedOnOrder(order) > 0 ? 'CREDIT' : 'CASH');
     setReturnOpen(true);
   }
 
@@ -244,6 +246,7 @@ export default function OrderDetailPage() {
               </span>
             </p>
           )}
+          {features.enabled('DELIVERY') && (
           <p className="text-sm text-slate-400">
             Size class:{' '}
             <span className="font-medium text-slate-200">
@@ -251,7 +254,8 @@ export default function OrderDetailPage() {
             </span>
             <span className="text-slate-500"> (capacity match, not the hired plate)</span>
           </p>
-          {isHiredTransport(order.deliveryMethod) && (
+          )}
+          {features.enabled('DELIVERY') && isHiredTransport(order.deliveryMethod) && (
             <p className="text-sm">
               Hired truck plate:{' '}
               <span className="font-semibold">{order.vehicleNumber ?? '—'}</span>
@@ -308,6 +312,9 @@ export default function OrderDetailPage() {
       </div>
       {canDispatch && order.status === 'READY_FOR_LOADING' && features.enabled('STOCK_TRANSFERS') && (
         <GatherPanel orderId={order.id} />
+      )}
+      {features.enabled('CREDIT_SALES') && order.status !== 'CANCELLED' && (
+        <CreditPanel order={order} onPaid={setOrder} />
       )}
       <div className="grid grid-cols-2 gap-6">
         <div className="card space-y-4">
@@ -389,10 +396,12 @@ export default function OrderDetailPage() {
             </div>
           )}
           <h3 className="font-semibold pt-2">Төлбөрийн задаргаа</h3>
-          <p>
-            Size class:{' '}
-            {order.assignedVehicle ? VEHICLE_LABEL[order.assignedVehicle] ?? order.assignedVehicle : '—'}
-          </p>
+          {features.enabled('DELIVERY') && (
+            <p>
+              Size class:{' '}
+              {order.assignedVehicle ? VEHICLE_LABEL[order.assignedVehicle] ?? order.assignedVehicle : '—'}
+            </p>
+          )}
           <p>
             Жин {Number(order.totalWeightKg)}кг · урт {Number(order.maxLengthM)}м · эзлэхүүн {Number(order.totalVolumeM3)}м³
           </p>
@@ -416,7 +425,7 @@ export default function OrderDetailPage() {
           )}
           {error && <p className="text-red-400 text-sm">{error}</p>}
 
-          {canTransport && isHiredTransport(order.deliveryMethod) && (
+          {features.enabled('DELIVERY') && canTransport && isHiredTransport(order.deliveryMethod) && (
             <div className="border-t border-slate-700 pt-3 space-y-2">
               <h4 className="text-sm font-semibold">Hired truck plate &amp; phone</h4>
               <p className="text-xs text-slate-500">
@@ -577,11 +586,17 @@ export default function OrderDetailPage() {
             </label>
             <label className="block text-xs text-slate-400">
               Refund method
-              <select className="mt-1 w-full" value={refundMethod} onChange={(e) => setRefundMethod(e.target.value as 'CASH' | 'QPAY' | 'CARD')}>
-                <option value="CASH">Cash</option>
-                <option value="CARD">Card</option>
-                <option value="QPAY">QPay</option>
-              </select>
+              {owedOnOrder(order) > 0 ? (
+                <p className="mt-1 text-amber-300">
+                  Энэ захиалгад {tugrik(owedOnOrder(order))} өр байгаа тул буцаалт өрөөс хасагдана (мөнгө олгохгүй).
+                </p>
+              ) : (
+                <select className="mt-1 w-full" value={refundMethod} onChange={(e) => setRefundMethod(e.target.value as 'CASH' | 'QPAY' | 'CARD')}>
+                  <option value="CASH">Cash</option>
+                  <option value="CARD">Card</option>
+                  <option value="QPAY">QPay</option>
+                </select>
+              )}
             </label>
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setReturnOpen(false)}>

@@ -52,6 +52,7 @@ export class PublicController {
 
   @Patch('orders/:token/transport')
   @RateLimit({ name: 'public-order-transport', limit: 10, windowMs: 10 * MINUTE })
+  @RequireFeature('DELIVERY')
   updateTransport(@Param('token') token: string, @Body() dto: AssignDriverDto) {
     return this.publicOrders.updateTransport(token, dto);
   }

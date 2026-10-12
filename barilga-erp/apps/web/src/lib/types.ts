@@ -428,12 +428,18 @@ export type Customer = {
   notes: string | null;
   isActive: boolean;
   createdAt: string;
+  priceListId?: string | null;
 };
 
 export type CustomerDetail = Customer & {
+  priceList?: { id: string; name: string } | null;
   stats: { completedOrders: number; completedTotalMnt: number };
   recentOrders: Array<{ id: string; orderNumber: string; status: Order['status']; totalMnt: number; createdAt: string }>;
+  /** Goods released on account and not yet paid for. */
+  credit?: { owedMnt: number; orders: Array<{ orderId: string; orderNumber: string; totalMnt: number; owedMnt: number; createdAt: string }> };
 };
+
+export type PriceList = { id: string; name: string; notes: string | null; isActive: boolean; productCount?: number; customerCount?: number };
 
 export type TransferStatus = 'IN_TRANSIT' | 'RECEIVED' | 'CANCELLED';
 
@@ -481,7 +487,10 @@ export type FeatureKey =
   | 'STOCK_RECEIPTS'
   | 'PICKING'
   | 'WAREHOUSE_REPORT'
+  | 'DELIVERY'
   | 'UNLOADING'
+  | 'CREDIT_SALES'
+  | 'PRICE_LISTS'
   | 'HR'
   | 'ONLINE_SHOP';
 

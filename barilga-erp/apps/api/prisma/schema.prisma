@@ -57,6 +57,8 @@ enum PayMethod {
   QPAY
   CASH
   CARD
+  /// Goods released on account (зарлагын баримтаар): an UNPAID row holding what the customer still owes.
+  CREDIT
 }
 
 enum BillType {
@@ -204,6 +206,7 @@ model Product {
   stockMovements StockMovement[]
   transferItems  StockTransferItem[]
   receiptItems   StockReceiptItem[]
+  priceListItems PriceListItem[]
 
   @@map("inv_products")
 }
@@ -217,6 +220,9 @@ model Order {
   /// Registered customer, when staff picked one. Name/phone above stay as the snapshot printed on the order.
   customerId      String?     @map("customer_id")
   customer        Customer?   @relation(fields: [customerId], references: [id])
+  /// Price list the line prices came from (the customer's list at the time of sale); null = retail prices.
+  priceListId     String?     @map("price_list_id")
+  priceList       PriceList?  @relation(fields: [priceListId], references: [id])
   deliveryAddress String?
   notes           String?
 
@@ -547,7 +553,8 @@ model Customer {
   phone       String
   /// Company registration number (РД) or a citizen's register number. Unique when present.
   regNumber   String?      @unique @map("reg_number")
-  email       String?
+  /// Unique so it can later be the online-shop login.
+  email       String?      @unique
   address     String?
   notes       String?
   /// Lower-cased name + phone + register number, maintained by the app. Search matches against this so it
@@ -558,6 +565,10 @@ model Customer {
   createdBy   User?        @relation("CustomerCreatedBy", fields: [createdById], references: [id])
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
+
+  /// Prices this customer buys at (cost, barter, wholesale...). Null = retail.
+  priceListId String?    @map("price_list_id")
+  priceList   PriceList? @relation(fields: [priceListId], references: [id])
 
   orders Order[]
 
@@ -669,4 +680,33 @@ model AppSetting {
   updatedAt   DateTime @updatedAt
 
   @@map("sys_settings")
+}
+
+/// A named set of per-product prices (e.g. өртгийн үнэ, бартерын үнэ). A product missing from the list sells at retail.
+model PriceList {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  notes     String?
+  isActive  Boolean  @default(true) @map("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items     PriceListItem[]
+  customers Customer[]
+  orders    Order[]
+
+  @@map("crm_price_lists")
+}
+
+model PriceListItem {
+  id          String    @id @default(uuid())
+  priceListId String    @map("price_list_id")
+  priceList   PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  productId   String    @map("product_id")
+  product     Product   @relation(fields: [productId], references: [id])
+  priceMnt    Int       @map("price_mnt")
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([priceListId, productId])
+  @@map("crm_price_list_items")
 }

@@ -106,6 +106,12 @@ class Table {
   private decorate(row: Row, args: Row = {}): Row {
     const out: Row = { ...row };
     const include = args.include as Row | undefined;
+    if (include?.priceList && this.name === 'customer') {
+      const list = this.db.priceList.rows.find((l) => l.id === row.priceListId);
+      out.priceList = list
+        ? { ...list, items: this.db.priceListItem.rows.filter((i) => i.priceListId === list.id).map((i) => ({ ...i })) }
+        : null;
+    }
     if (include && this.name === 'order') {
       if (include.payments) out.payments = this.db.payment.rows.filter((p) => p.orderId === row.id).map((p) => ({ ...p }));
       if (include.items) {
@@ -213,7 +219,7 @@ export class FakeDb {
   warehouse = new Table(this, 'warehouse', () => ({ isActive: true, isDefault: false }));
   stockBalance = new Table(this, 'stockBalance', () => ({ quantity: new Prisma.Decimal(0) }));
   stockMovement = new Table(this, 'stockMovement', () => ({ refType: null, refId: null, reason: null, actorId: null }));
-  customer = new Table(this, 'customer', () => ({ isActive: true, regNumber: null, email: null, address: null, notes: null }));
+  customer = new Table(this, 'customer', () => ({ isActive: true, regNumber: null, email: null, address: null, notes: null, priceListId: null }));
   stockTransfer = new Table(this, 'stockTransfer', () => ({
     status: 'IN_TRANSIT', notes: null, sentAt: new Date(), receivedById: null, receivedAt: null,
     cancelledById: null, cancelledAt: null, cancelReason: null,
@@ -225,6 +231,8 @@ export class FakeDb {
   stockReceipt = new Table(this, 'stockReceipt', () => ({ supplierInvoiceNo: null, notes: null, receivedAt: new Date() }));
   stockReceiptItem = new Table(this, 'stockReceiptItem', () => ({ unitCostMnt: null }));
   appSetting = new Table(this, 'appSetting', () => ({ updatedById: null }));
+  priceList = new Table(this, 'priceList', () => ({ isActive: true, notes: null }));
+  priceListItem = new Table(this, 'priceListItem', () => ({}));
 
   constructor() {
     // Mirrors the migration: there is always exactly one default warehouse.
@@ -260,7 +268,7 @@ export class FakeDb {
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
-      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting,
+      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.priceList, this.priceListItem,
     ];
   }
 

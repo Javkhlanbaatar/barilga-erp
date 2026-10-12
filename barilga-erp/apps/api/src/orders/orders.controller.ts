@@ -15,6 +15,7 @@ import {
   CreateOrderDto,
   OverrideFeesDto,
   PickItemDto,
+  SettleCreditDto,
   QuoteOrderDto,
 } from './dto/order.dto';
 import { GatherService } from './gather.service';
@@ -103,6 +104,13 @@ export class OrdersController {
   @Roles(Role.BORLUULAGCH, Role.ADMIN, Role.MANAGER)
   issueEbarimt(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.orders.issueEbarimt(id, user);
+  }
+
+  /** Record a payment against what is owed on an order released on account. */
+  @Post(':id/settle-credit')
+  @Roles(...POS_ROLES)
+  settleCredit(@Param('id') id: string, @Body() dto: SettleCreditDto, @CurrentUser() user: AuthUser) {
+    return this.orders.settleCredit(id, dto.method, dto.amountMnt, user);
   }
 
   /** "Би бэлдье": move the order to "being prepared" and start the preparation clock. */

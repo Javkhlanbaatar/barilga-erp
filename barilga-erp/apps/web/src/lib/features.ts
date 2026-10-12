@@ -31,7 +31,7 @@ export function loadFeatures(force = false): Promise<FeatureMap> {
 }
 
 /** Modules that start switched off on the server; everything else is assumed on until the server says otherwise. */
-const OFF_BY_DEFAULT: Partial<Record<FeatureKey, true>> = { UNLOADING: true };
+const OFF_BY_DEFAULT: Partial<Record<FeatureKey, true>> = { DELIVERY: true, UNLOADING: true };
 
 /** `enabled(key)` follows the server; before it answers, the module's default applies. */
 export function useFeatures() {

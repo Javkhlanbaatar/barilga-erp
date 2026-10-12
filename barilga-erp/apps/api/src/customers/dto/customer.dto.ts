@@ -4,6 +4,8 @@ import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, Matches, MaxLength, M
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const upper = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
+/** Emails are stored lower-case: they will be the online-shop login. */
+const lower = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toLowerCase() : value);
 const PHONE = /^[0-9+\-\s]{8,15}$/;
 
 export class CreateCustomerDto {
@@ -28,7 +30,7 @@ export class CreateCustomerDto {
   regNumber?: string;
 
   @IsOptional()
-  @Transform(trim)
+  @Transform(lower)
   @IsEmail()
   @MaxLength(160)
   email?: string;
@@ -44,6 +46,12 @@ export class CreateCustomerDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  /** Price list the customer buys at (managers/admin only; checked in the service). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  priceListId?: string | null;
 }
 
 export class UpdateCustomerDto {
@@ -66,7 +74,7 @@ export class UpdateCustomerDto {
   regNumber?: string;
 
   @IsOptional()
-  @Transform(trim)
+  @Transform(lower)
   @IsEmail()
   @MaxLength(160)
   email?: string;
@@ -82,6 +90,12 @@ export class UpdateCustomerDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  /** Price list (managers/admin only); null takes the customer back to retail prices. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  priceListId?: string | null;
 
   /** Deactivating hides the customer from POS search; managers/admin only (checked in the service). */
   @IsOptional()

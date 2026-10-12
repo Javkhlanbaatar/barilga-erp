@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { OrderStatus, PayableStatus, Prisma, Role, SourceType } from '@prisma/client';
+import { OrderStatus, PayableStatus, PaymentStatus, PayMethod, Prisma, RefundStatus, Role, SourceType } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
 import { InventoryService } from '../inventory/inventory.service';
@@ -153,12 +153,38 @@ export class ReturnsService {
       throw new BadRequestException('Refund amount must be greater than 0');
     }
 
+    // Goods released on account and not yet paid for: returning them lowers the debt; no money is handed
+    // back for goods that were never paid. While anything is owed, the debt is reduced first.
+    const credit = order.payments.find((p) => p.method === PayMethod.CREDIT && p.status === PaymentStatus.UNPAID);
+    if (credit && credit.amountMnt > 0) {
+      if (dto.refundMethod !== PayMethod.CREDIT) {
+        throw new BadRequestException(
+          `Энэ захиалгад ${credit.amountMnt}₮ өр байна: буцаалт өрөөс хасагдана (refund method CREDIT)`,
+        );
+      }
+      if (refundAmount > credit.amountMnt) {
+        throw new BadRequestException(
+          `Буцаалт (${refundAmount}₮) өрөөс (${credit.amountMnt}₮) их байна: эхлээд өрийн хэмжээгээр буцаана уу`,
+        );
+      }
+      const left = credit.amountMnt - refundAmount;
+      const lowered = await tx.payment.updateMany({
+        where: { id: credit.id, status: PaymentStatus.UNPAID, amountMnt: credit.amountMnt },
+        data: { amountMnt: left, ...(left === 0 ? { status: PaymentStatus.PAID, paidAt: new Date() } : {}) },
+      });
+      if (lowered.count !== 1) throw new BadRequestException('The debt on this order just changed; reload and try again');
+    } else if (dto.refundMethod === PayMethod.CREDIT) {
+      throw new BadRequestException('Nothing is owed on this order; choose how the money is refunded');
+    }
+
     const salesReturn = await tx.salesReturn.create({
       data: {
         orderId,
         reason: dto.reason.trim(),
         refundAmount,
         refundMethod: dto.refundMethod,
+        // Lowering a debt hands nothing back, so there is no payout left to do.
+        ...(dto.refundMethod === PayMethod.CREDIT ? { refundStatus: RefundStatus.PAID_OUT } : {}),
         createdById: user.id,
         ebarimtStatus: 'PENDING',
         items: {

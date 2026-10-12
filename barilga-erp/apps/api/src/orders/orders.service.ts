@@ -73,6 +73,8 @@ export class OrdersService {
 
   async buildSpecs(
     items: { productId: string; quantity: number; sourceType?: SourceType; supplierName?: string }[],
+    /** Customer price list prices by product; products missing from it sell at retail. */
+    listPrices?: Map<string, number>,
   ) {
     const ids = items.map((i) => i.productId);
     const products = await this.prisma.product.findMany({ where: { id: { in: ids }, active: true } });
@@ -87,7 +89,7 @@ export class OrdersService {
     const lines = items.map((line) => {
       const product = byId.get(line.productId)!;
       const qty = line.quantity;
-      const unitPrice = product.priceMnt;
+      const unitPrice = listPrices?.get(product.id) ?? product.priceMnt;
       const lineTotal = Math.round(unitPrice * qty);
       const w = Number(product.weightKg) * qty;
       const v = Number(product.volumeM3) * qty;
@@ -156,15 +158,22 @@ export class OrdersService {
   }
 
   async quote(dto: QuoteOrderDto) {
-    const { specs } = await this.buildSpecs(dto.items);
+    const customer = await this.resolveCustomer(dto.customerId);
+    const { lines, specs } = await this.buildSpecs(dto.items, customer?.prices);
     const zoneId = await this.resolveZoneId(dto.zoneId, dto.deliveryMethod);
-    return this.logistics.quote({
+    const quote = await this.logistics.quote({
       zoneId,
       method: dto.deliveryMethod,
       time: dto.timeCondition ?? 'STANDARD',
       unloadingRequested: isZeroFeeMethod(dto.deliveryMethod) ? false : dto.unloadingRequested,
       specs,
     });
+    // The price each line will be sold at (the customer's list or retail), so the till shows the real amounts.
+    return {
+      ...quote,
+      priceList: customer?.priceListName ?? null,
+      lines: lines.map((l) => ({ productId: l.productId, unitPrice: l.unitPrice, lineTotal: l.lineTotal })),
+    };
   }
 
   /**
@@ -187,22 +196,45 @@ export class OrdersService {
 
   /** A linked customer must exist and be active, and the customer module must be switched on. */
   private async resolveCustomerId(customerId?: string): Promise<string | null> {
+    return (await this.resolveCustomer(customerId))?.id ?? null;
+  }
+
+  /**
+   * The linked customer and, when the price-list module is on and their list is active, the prices they buy at.
+   */
+  private async resolveCustomer(customerId?: string) {
     if (!customerId) return null;
     if (!this.features) throw new BadRequestException('Customer linking is not available');
     await this.features.assertEnabled('CUSTOMERS');
-    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { priceList: { include: { items: true } } },
+    });
     if (!customer) throw new BadRequestException('Customer not found');
     if (!customer.isActive) throw new BadRequestException('Customer is deactivated');
-    return customer.id;
+    const list = customer.priceList?.isActive && (await this.features.isEnabled('PRICE_LISTS')) ? customer.priceList : null;
+    return {
+      id: customer.id,
+      priceListId: list?.id ?? null,
+      priceListName: list?.name ?? null,
+      prices: list ? new Map(list.items.map((i) => [i.productId, i.priceMnt])) : undefined,
+    };
   }
 
   async create(dto: CreateOrderDto, user: AuthUser) {
     if (!isPosActor(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can create orders');
     }
+    const customer = await this.resolveCustomer(dto.customerId);
+    const splitMethods = dto.payments?.length ? dto.payments.map((p) => p.method) : [dto.paymentMethod ?? CheckoutPaymentMethod.QPAY];
+    if (splitMethods.includes(CheckoutPaymentMethod.CREDIT)) {
+      // Releasing goods on account needs someone to owe the money: a registered customer.
+      if (this.features) await this.features.assertEnabled('CREDIT_SALES');
+      if (!customer) throw new BadRequestException('Зарлагаар олгоход бүртгэлтэй харилцагч сонгоно уу / On-account sale needs a registered customer');
+    }
     const zoneId = await this.resolveZoneId(dto.zoneId, dto.deliveryMethod);
     const unloadingRequested = isZeroFeeMethod(dto.deliveryMethod) ? false : dto.unloadingRequested;
-    const { lines, specs } = await this.buildSpecs(dto.items);
+    const { lines, specs } = await this.buildSpecs(dto.items, customer?.prices);
     const { breakdown } = await this.logistics.quote({
       zoneId,
       method: dto.deliveryMethod,
@@ -219,7 +251,7 @@ export class OrdersService {
       }
     }
 
-    const customerId = await this.resolveCustomerId(dto.customerId);
+    const customerId = customer?.id ?? null;
     const hiredOnCreate = this.optionalHiredOnCreate(dto);
     const warehouseId = await this.resolveOrderWarehouse(dto.warehouseId, user);
     const trackingToken = randomBytes(24).toString('base64url');
@@ -231,6 +263,7 @@ export class OrdersService {
         customerName: dto.customerName,
         customerPhone: dto.customerPhone,
         customerId,
+        priceListId: customer?.priceListId ?? null,
         deliveryAddress: dto.deliveryAddress,
         notes: dto.notes,
         billType,
@@ -585,6 +618,19 @@ export class OrdersService {
     throw lastError;
   }
 
+  /** The customer pays (part of) what they owe on an order released on account. */
+  async settleCredit(orderId: string, method: 'CASH' | 'CARD', amountMnt: number, user: AuthUser) {
+    if (!isPosActor(user.role)) {
+      throw new ForbiddenException('Only cashiers, managers, or admin can take payments');
+    }
+    if (this.features) await this.features.assertEnabled('CREDIT_SALES');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    await this.payments.settleCredit(orderId, method, amountMnt, user.id);
+    return this.findOne(orderId, user);
+  }
+
   /** Sets the start of preparation once (the first caller wins; later calls change nothing). */
   private markPickingStarted(orderId: string, userId: string) {
     return this.prisma.order.updateMany({
@@ -700,6 +746,7 @@ export class OrdersService {
     if (!isTransportActor(user.role)) {
       throw new ForbiddenException('Only warehouse staff, managers, or admin can record hired transport notes');
     }
+    if (this.features) await this.features.assertEnabled('DELIVERY');
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('Order not found');
     await this.assertOrderAccess(user, order.warehouseId);

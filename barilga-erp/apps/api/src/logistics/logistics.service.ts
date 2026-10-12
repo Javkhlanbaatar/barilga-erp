@@ -42,7 +42,14 @@ export class LogisticsService {
     unloadingRequested: boolean;
     specs: CartSpecs;
   }) {
-    // Every price (POS, web shop, quotes) goes through here, so the unloading switch is enforced once.
+    // Every price (POS, web shop, quotes) goes through here, so the module switches are enforced once.
+    if (
+      params.method !== DeliveryMethod.SELF_PICKUP &&
+      this.features &&
+      !(await this.features.isEnabled('DELIVERY'))
+    ) {
+      throw new BadRequestException('Хүргэлтийн модуль унтраалттай: зөвхөн «өөрөө авах» / Delivery is switched off');
+    }
     if (params.unloadingRequested && this.features && !(await this.features.isEnabled('UNLOADING'))) {
       throw new BadRequestException('Буулгалтын үйлчилгээ идэвхгүй байна / Unloading service is switched off');
     }

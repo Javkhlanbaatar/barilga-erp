@@ -144,9 +144,22 @@ describe('company settings', () => {
 });
 
 describe('module switches', () => {
-  it('unloading is off by default and a quote asking for it is refused before any pricing', async () => {
+  it('delivery is off by default: only pickup can be quoted', async () => {
     const db = new FakeDb();
     const logistics = new LogisticsService(db as any, new FeaturesService(db as any));
+    for (const method of ['OUR_DELIVERY', 'CUSTOMER_DRIVER'] as const) {
+      await assert.rejects(
+        () => logistics.quote({ zoneId: 'z', method, time: 'STANDARD', unloadingRequested: false, specs: {} as any }),
+        /Delivery is switched off/,
+      );
+    }
+  });
+
+  it('unloading is off by default and a quote asking for it is refused before any pricing', async () => {
+    const db = new FakeDb();
+    const features = new FeaturesService(db as any);
+    await features.set('DELIVERY', true, 'u-admin');
+    const logistics = new LogisticsService(db as any, features);
     await assert.rejects(
       () => logistics.quote({ zoneId: 'z', method: 'OUR_DELIVERY', time: 'STANDARD', unloadingRequested: true, specs: {} as any }),
       /Unloading service is switched off/,
@@ -165,7 +178,8 @@ describe('module switches', () => {
     for (const route of ['catalog', 'quote', 'create']) {
       assert.equal(Reflect.getMetadata(FEATURE_KEY, (PublicController.prototype as any)[route]), 'ONLINE_SHOP', route);
     }
-    for (const route of ['config', 'find', 'updateTransport']) {
+    assert.equal(Reflect.getMetadata(FEATURE_KEY, (PublicController.prototype as any).updateTransport), 'DELIVERY');
+    for (const route of ['config', 'find']) {
       assert.equal(Reflect.getMetadata(FEATURE_KEY, (PublicController.prototype as any)[route]), undefined, `${route} stays open for tracking`);
     }
   });

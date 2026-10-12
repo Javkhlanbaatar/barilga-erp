@@ -22,7 +22,7 @@ const DELIVERY_MN: Record<string, string> = {
   SELF_PICKUP: 'Өөрөө авах',
   CUSTOMER_DRIVER: 'Харилцагчийн жолооч',
 };
-const PAY_MN: Record<string, string> = { CASH: 'Бэлэн', CARD: 'Карт', QPAY: 'QPay' };
+const PAY_MN: Record<string, string> = { CASH: 'Бэлэн', CARD: 'Карт', QPAY: 'QPay', CREDIT: 'Зарлагаар' };
 
 /** Printable width (mm) inside the page margins, and the CSS @page size, per paper layout. */
 function pageGeometry(l: Layout) {
@@ -325,7 +325,7 @@ function Receipt({ order, company }: { order: Order; company: CompanySettings })
         <span>{tugrik(order.totalMnt)}</span>
       </p>
       {live
-        .filter((p) => p.status === 'PAID')
+        .filter((p) => p.status === 'PAID' && p.amountMnt > 0)
         .map((p) => (
           <p key={p.id} className="flex justify-between">
             <span>{PAY_MN[p.method ?? p.provider ?? ''] ?? p.method}</span>

@@ -78,12 +78,33 @@ export class QuoteOrderDto {
   @ValidateNested({ each: true })
   @Type(() => OrderLineDto)
   items!: OrderLineDto[];
+
+  /**
+   * Registered customer (staff only; the public shop strips it). Picks the customer's price list for the
+   * quote and the order. Name/phone on an order are still required as the printed snapshot.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  customerId?: string;
 }
 
 export enum CheckoutPaymentMethod {
   QPAY = 'QPAY',
   CASH = 'CASH',
   CARD = 'CARD',
+  /** Released on account (зарлагын баримтаар): paid later; needs a registered customer. */
+  CREDIT = 'CREDIT',
+}
+
+/** A customer paying (part of) what they owe on an order released on account. */
+export class SettleCreditDto {
+  @IsEnum(['CASH', 'CARD'])
+  method!: 'CASH' | 'CARD';
+
+  @IsInt()
+  @Min(1)
+  amountMnt!: number;
 }
 
 export class PaymentSplitDto {
@@ -106,12 +127,6 @@ export class CreateOrderDto extends QuoteOrderDto {
   @IsString()
   @MaxLength(64)
   warehouseId?: string;
-
-  /** Registered customer (staff only; the public shop never sets it). Name/phone are still required as the snapshot. */
-  @IsOptional()
-  @IsString()
-  @MaxLength(64)
-  customerId?: string;
 
   @IsString()
   @MaxLength(120)

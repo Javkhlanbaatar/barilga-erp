@@ -18,6 +18,7 @@ const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; featu
   { href: '/inventory/receipts', label: 'Бараа орлого', roles: ['ADMIN', 'MANAGER', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_RECEIPTS' },
   { href: '/inventory/transfers', label: 'Шилжүүлэг', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_TRANSFERS' },
   { href: '/customers', label: 'Харилцагчид', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'CUSTOMERS' },
+  { href: '/admin/price-lists', label: 'Үнийн жагсаалт', roles: ['ADMIN', 'MANAGER'], feature: 'PRICE_LISTS' },
   { href: '/admin/warehouses', label: 'Дэлгүүр / агуулах', roles: ['ADMIN'] },
   { href: '/admin/users', label: 'Хэрэглэгчид', roles: ['ADMIN'] },
   { href: '/admin/features', label: 'Модулиуд', roles: ['ADMIN'] },

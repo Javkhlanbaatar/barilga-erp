@@ -31,11 +31,16 @@ export default function PublicOrderPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [deliveryType, setDeliveryType] = useState<DeliveryType>('OUR_DELIVERY');
+  // Pickup until the shop says it delivers (the delivery module may be switched off).
+  const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
   const [isUnloading, setIsUnloading] = useState(false);
-  const [shop, setShop] = useState<{ shopOpen: boolean; unloading: boolean }>({ shopOpen: true, unloading: false });
+  const [shop, setShop] = useState<{ shopOpen: boolean; delivery: boolean; unloading: boolean }>({
+    shopOpen: true,
+    delivery: false,
+    unloading: false,
+  });
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [address, setAddress] = useState('');
@@ -49,10 +54,11 @@ export default function PublicOrderPage() {
 
   // Which services the shop offers right now (admin module switches).
   useEffect(() => {
-    publicApi<{ shopOpen: boolean; unloading: boolean }>('/public/config')
+    publicApi<{ shopOpen: boolean; delivery: boolean; unloading: boolean }>('/public/config')
       .then((c) => {
         setShop(c);
         if (!c.unloading) setIsUnloading(false);
+        if (!c.delivery) setDeliveryType('SELF_PICKUP');
       })
       .catch(() => undefined);
   }, []);
@@ -179,6 +185,8 @@ export default function PublicOrderPage() {
               </li>
             ))}
           </ul>
+          {!shop.delivery && <p className="text-sm text-slate-400">Бараагаа дэлгүүрээс өөрөө авна.</p>}
+          {shop.delivery && (
           <div className="grid grid-cols-3 gap-1">
             <button type="button" className={chipClass(deliveryType === 'OUR_DELIVERY')} onClick={() => setDeliveryType('OUR_DELIVERY')}>
               Хүргэлт
@@ -190,6 +198,7 @@ export default function PublicOrderPage() {
               Өөрийн жолооч
             </button>
           </div>
+          )}
           {ourDelivery && (
             <>
               <label className="block text-sm">

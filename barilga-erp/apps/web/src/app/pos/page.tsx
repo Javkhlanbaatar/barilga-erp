@@ -10,7 +10,7 @@ import { useFeatures } from '@/lib/features';
 import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
 import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
-type PaymentMethod = 'QPAY' | 'CASH' | 'CARD';
+type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'CREDIT';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
 type CartLine = {
   product: Product;
@@ -20,8 +20,12 @@ type CartLine = {
 };
 
 type Quote = {
+  /** Name of the customer's price list when one applied; null = retail prices. */
+  priceList?: string | null;
+  /** The price each line will be sold at. */
+  lines?: Array<{ productId: string; unitPrice: number; lineTotal: number }>;
   breakdown: {
-    assignedVehicle: string;
+    assignedVehicle: string | null;
     subtotalMnt: number;
     deliveryFeeMnt: number;
     unloadingFeeMnt: number;
@@ -52,6 +56,7 @@ export default function CheckoutPOS() {
   const [splitCash, setSplitCash] = useState(0);
   const [splitCard, setSplitCard] = useState(0);
   const [splitQpay, setSplitQpay] = useState(0);
+  const [splitCredit, setSplitCredit] = useState(0);
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
@@ -154,6 +159,7 @@ export default function CheckoutPOS() {
         timeCondition: time,
         unloadingRequested: ourDelivery && isUnloading,
         items,
+        customerId: customer?.id,
       }),
     })
       .then(setQuote)
@@ -161,7 +167,7 @@ export default function CheckoutPOS() {
         setQuote(null);
         setError(err instanceof Error ? err.message : 'Quote failed');
       });
-  }, [zoneId, deliveryType, time, isUnloading, ourDelivery, items, cart]);
+  }, [zoneId, deliveryType, time, isUnloading, ourDelivery, items, cart, customer]);
 
   function add(p: Product) {
     setCart((prev) => {
@@ -222,7 +228,10 @@ export default function CheckoutPOS() {
 
   const b = quote?.breakdown;
   const totalMnt = b?.totalMnt ?? 0;
-  const splitSum = splitCash + splitCard + splitQpay;
+  const creditOffered = features.enabled('CREDIT_SALES');
+  const deliveryOffered = features.enabled('DELIVERY');
+  const splitSum = splitCash + splitCard + splitQpay + splitCredit;
+  const linePrice = new Map((quote?.lines ?? []).map((l) => [l.productId, l]));
   const splitOk = paymentMode === 'SPLIT' && totalMnt > 0 && splitSum === totalMnt && splitSum > 0;
 
   function paymentsPayload() {
@@ -231,9 +240,10 @@ export default function CheckoutPOS() {
         { method: 'CASH' as const, amount: splitCash, status: 'PAID' },
         { method: 'CARD' as const, amount: splitCard, status: 'PAID' },
         { method: 'QPAY' as const, amount: splitQpay, status: 'PENDING' },
+        { method: 'CREDIT' as const, amount: splitCredit, status: 'PENDING' },
       ].filter((p) => p.amount > 0);
     }
-    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' ? 'PENDING' : 'PAID' }];
+    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' || paymentMethod === 'CREDIT' ? 'PENDING' : 'PAID' }];
   }
 
   /** Picking a registered customer fills the order snapshot (still editable); a company also sets the E-Barimt РД. */
@@ -282,11 +292,15 @@ export default function CheckoutPOS() {
   }
 
   const usesQpay = paymentMode === 'SPLIT' ? splitQpay > 0 : paymentMethod === 'QPAY';
+  // On account (зарлагаар): goods leave now, the customer pays later; only for a registered customer.
+  const usesCredit = paymentMode === 'SPLIT' ? splitCredit > 0 : paymentMethod === 'CREDIT';
   const confirmLabel = usesQpay
     ? paymentMode === 'SPLIT'
       ? `Баталгаажуулах + QPay ${tugrik(splitQpay)}`
       : 'Захиалга баталгаажуулах + QPay'
-    : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : 'Карт'})`;
+    : paymentMethod === 'CREDIT' && paymentMode === 'SINGLE'
+      ? 'Зарлагаар олгох (дараа төлнө)'
+      : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : 'хувааж'})`;
   const canSubmit =
     !busy &&
     cart.length > 0 &&
@@ -294,6 +308,7 @@ export default function CheckoutPOS() {
     !!customerPhone &&
     !!quote &&
     (paymentMode === 'SINGLE' || splitOk) &&
+    (!usesCredit || (creditOffered && !!customer)) &&
     (billType === 'CITIZEN' || /^[0-9A-Za-z]{7,12}$/.test(customerRegNumber.trim()));
 
   return (
@@ -410,7 +425,14 @@ export default function CheckoutPOS() {
           {cart.map((l) => (
             <div key={l.product.id} className="space-y-1 border-b border-slate-800 pb-2">
               <div className="flex items-center gap-2 text-sm">
-                <span className="flex-1">{l.product.nameMn}</span>
+                <span className="flex-1">
+                  {l.product.nameMn}
+                  {linePrice.get(l.product.id) && linePrice.get(l.product.id)!.unitPrice !== l.product.priceMnt && (
+                    <span className="block text-[11px] text-emerald-300">
+                      {tugrik(linePrice.get(l.product.id)!.unitPrice)} <span className="line-through text-slate-500">{tugrik(l.product.priceMnt)}</span>
+                    </span>
+                  )}
+                </span>
                 <input
                   type="number"
                   min={0.001}
@@ -429,7 +451,9 @@ export default function CheckoutPOS() {
                   ×
                 </button>
               </div>
-              <label className="flex items-center gap-2 text-[11px] text-slate-400">
+              {/* Only when this warehouse cannot cover the quantity: then say where the goods come from. */}
+              {(l.quantity > Number(l.product.stockQty) || l.sourceType === 'EXTERNAL_SUPPLIER') && (
+              <label className="flex items-center gap-2 text-[11px] text-amber-300">
                 <input
                   type="checkbox"
                   checked={l.sourceType === 'EXTERNAL_SUPPLIER'}
@@ -447,12 +471,13 @@ export default function CheckoutPOS() {
                     )
                   }
                 />
-                External supplier / other store
+                Үлдэгдэл хүрэхгүй ({Number(l.product.stockQty)}) — өөр газраас авна
               </label>
+              )}
               {l.sourceType === 'EXTERNAL_SUPPLIER' && (
                 <input
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1 text-xs"
-                  placeholder="Supplier / store name"
+                  placeholder="Хаанаас авах (нийлүүлэгч / дэлгүүр)"
                   value={l.supplierName}
                   onChange={(e) =>
                     setCart((prev) =>
@@ -464,7 +489,8 @@ export default function CheckoutPOS() {
             </div>
           ))}
 
-          {/* Delivery is opt-in: unticked = the customer collects the goods themselves. */}
+          {/* Delivery is opt-in: unticked = the customer collects the goods themselves. Hidden while the module is off. */}
+          {deliveryOffered && (
           <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm cursor-pointer">
             <input
               type="checkbox"
@@ -474,6 +500,7 @@ export default function CheckoutPOS() {
             />
             <span className="font-semibold">Хүргэлт хийлгэх</span>
           </label>
+          )}
 
           {ourDelivery && (
             <div className="space-y-3 rounded-lg border border-amber-700/50 p-3">
@@ -585,6 +612,7 @@ export default function CheckoutPOS() {
                   setSplitCash(totalMnt);
                   setSplitCard(0);
                   setSplitQpay(0);
+                  setSplitCredit(0);
                 }}
                 className={chipClass(paymentMode === 'SPLIT', 'bg-slate-100 text-slate-950 border-slate-100 font-bold')}
               >
@@ -602,6 +630,18 @@ export default function CheckoutPOS() {
                 <button type="button" onClick={() => setPaymentMethod('CARD')} className={chipClass(paymentMethod === 'CARD', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}>
                   Карт (POS)
                 </button>
+                {creditOffered && (
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('CREDIT')}
+                    className={`col-span-3 ${chipClass(paymentMethod === 'CREDIT', 'bg-amber-600 text-white border-amber-500 font-semibold')}`}
+                  >
+                    Зарлагаар олгох (дараа төлнө)
+                  </button>
+                )}
+                {paymentMethod === 'CREDIT' && !customer && (
+                  <p className="col-span-3 text-[11px] text-amber-300">Зарлагаар олгоход бүртгэлтэй харилцагч сонгоно уу.</p>
+                )}
               </div>
             ) : (
               <div className="space-y-2 text-xs">
@@ -635,6 +675,18 @@ export default function CheckoutPOS() {
                     onChange={(e) => setSplitQpay(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
+                {creditOffered && (
+                  <label className="block text-slate-400">
+                    Зарлагаар (дараа төлнө){!customer && ' — харилцагч сонгоно уу'}
+                    <input
+                      type="number"
+                      min={0}
+                      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
+                      value={splitCredit}
+                      onChange={(e) => setSplitCredit(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    />
+                  </label>
+                )}
                 <p className={splitOk ? 'text-emerald-400' : 'text-amber-400'}>
                   Нийлбэр {tugrik(splitSum)} / {tugrik(totalMnt)}
                   {splitOk ? ' — зөв' : ` — зөрүү ${tugrik(totalMnt - splitSum)}`}
@@ -646,10 +698,18 @@ export default function CheckoutPOS() {
           <div className="bg-slate-950 p-3 rounded-xl space-y-1 text-xs border border-slate-800/60">
             {b ? (
               <>
-                <div className="flex justify-between text-slate-400">
-                  <span>Хэмжээ / ангилал:</span>
-                  <span>{VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</span>
-                </div>
+                {deliveryOffered && ourDelivery && b.assignedVehicle && (
+                  <div className="flex justify-between text-slate-400">
+                    <span>Хэмжээ / ангилал:</span>
+                    <span>{VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</span>
+                  </div>
+                )}
+                {quote?.priceList && (
+                  <div className="flex justify-between text-emerald-300">
+                    <span>Үнийн жагсаалт:</span>
+                    <span>{quote.priceList}</span>
+                  </div>
+                )}
                 <div className="flex justify-between text-slate-400">
                   <span>Барааны үнэ:</span>
                   <span>{tugrik(b.subtotalMnt)}</span>
@@ -661,8 +721,8 @@ export default function CheckoutPOS() {
                   </div>
                 ) : (
                   <div className="flex justify-between text-emerald-400 font-medium">
-                    <span>{deliveryType === 'SELF_PICKUP' ? 'Өөрөө авах' : 'Жолооч явуулах'}:</span>
-                    <span>0₮ (Хүргэлт тэглэгдсэн)</span>
+                    <span>Өөрөө авах:</span>
+                    <span>0₮</span>
                   </div>
                 )}
                 {ourDelivery && isUnloading && (

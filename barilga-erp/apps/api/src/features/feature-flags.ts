@@ -8,7 +8,10 @@ export const FEATURES = {
   STOCK_RECEIPTS: { default: true, nameMn: 'Бараа орлого (нийлүүлэгчээс)' },
   PICKING: { default: true, nameMn: 'Агуулахын бэлтгэлийн чеклист' },
   WAREHOUSE_REPORT: { default: true, nameMn: 'Агуулахын тайлан' },
+  DELIVERY: { default: false, nameMn: 'Хүргэлт (бүс, хүргэлтийн төлбөр, машин, жолооч)' },
   UNLOADING: { default: false, nameMn: 'Буулгалтын үйлчилгээ (хураамжтай)' },
+  CREDIT_SALES: { default: true, nameMn: 'Зарлагаар олгох (дараа төлөх)' },
+  PRICE_LISTS: { default: true, nameMn: 'Харилцагчийн үнийн жагсаалт (өртөг, бартер г.м.)' },
   HR: { default: true, nameMn: 'Ирц ба цалин' },
   ONLINE_SHOP: { default: true, nameMn: 'Онлайн захиалга (нийтийн сайт)' },
 } as const;

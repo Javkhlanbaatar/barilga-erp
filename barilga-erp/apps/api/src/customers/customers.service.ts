@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { CustomerType, OrderStatus, Prisma } from '@prisma/client';
+import { CustomerType, OrderStatus, PaymentStatus, PayMethod, Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { seesAllWarehouses } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
@@ -35,9 +35,29 @@ export class CustomersService {
 
   private rethrowDuplicate(err: unknown): never {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new ConflictException('A customer with this registration number already exists');
+      const target = String(err.meta?.target ?? '');
+      throw new ConflictException(
+        target.includes('email')
+          ? 'A customer with this email already exists'
+          : 'A customer with this registration number already exists',
+      );
     }
     throw err;
+  }
+
+  /**
+   * Only managers/admin decide who buys at cost or barter prices. Returns the id to store (null = retail),
+   * or undefined when the request does not touch the price list.
+   */
+  private async checkPriceList(priceListId: string | null | undefined, user: AuthUser, current: string | null = null) {
+    if (priceListId === undefined || (priceListId || null) === current) return undefined;
+    if (!seesAllWarehouses(user.role)) {
+      throw new ForbiddenException('Only a manager or admin can set a customer price list');
+    }
+    if (!priceListId) return null;
+    const list = await this.prisma.priceList.findUnique({ where: { id: priceListId } });
+    if (!list || !list.isActive) throw new BadRequestException('Price list not found or inactive');
+    return list.id;
   }
 
   search(q?: string, includeInactive = false) {
@@ -54,9 +74,12 @@ export class CustomersService {
 
   /** One customer with their purchase summary and latest orders. */
   async get(id: string) {
-    const customer = await this.prisma.customer.findUnique({ where: { id } });
+    const customer = await this.prisma.customer.findUnique({
+      where: { id },
+      include: { priceList: { select: { id: true, name: true } } },
+    });
     if (!customer) throw new NotFoundException('Customer not found');
-    const [completed, recentOrders] = await Promise.all([
+    const [completed, recentOrders, owed] = await Promise.all([
       this.prisma.order.findMany({
         where: { customerId: id, status: OrderStatus.COMPLETED },
         select: { totalMnt: true },
@@ -67,6 +90,17 @@ export class CustomersService {
         take: 20,
         select: { id: true, orderNumber: true, status: true, totalMnt: true, createdAt: true },
       }),
+      // Goods released on account and not yet paid for.
+      this.prisma.payment.findMany({
+        where: {
+          method: PayMethod.CREDIT,
+          status: PaymentStatus.UNPAID,
+          amountMnt: { gt: 0 },
+          order: { customerId: id, status: { not: OrderStatus.CANCELLED } },
+        },
+        include: { order: { select: { id: true, orderNumber: true, totalMnt: true, createdAt: true } } },
+        orderBy: { createdAt: 'asc' },
+      }),
     ]);
     return {
       ...customer,
@@ -75,11 +109,22 @@ export class CustomersService {
         completedTotalMnt: completed.reduce((s, o) => s + o.totalMnt, 0),
       },
       recentOrders,
+      credit: {
+        owedMnt: owed.reduce((s, p) => s + p.amountMnt, 0),
+        orders: owed.map((p) => ({
+          orderId: p.order.id,
+          orderNumber: p.order.orderNumber,
+          totalMnt: p.order.totalMnt,
+          owedMnt: p.amountMnt,
+          createdAt: p.order.createdAt,
+        })),
+      },
     };
   }
 
   async create(dto: CreateCustomerDto, user: AuthUser) {
     const regNumber = this.checkRegNumber(dto.type, dto.regNumber);
+    const priceListId = await this.checkPriceList(dto.priceListId, user);
     try {
       const created = await this.prisma.customer.create({
         data: {
@@ -90,6 +135,7 @@ export class CustomersService {
           email: dto.email || null,
           address: dto.address || null,
           notes: dto.notes || null,
+          priceListId: priceListId ?? null,
           searchText: CustomersService.searchText({ name: dto.name, phone: dto.phone, regNumber }),
           createdById: user.id,
         },
@@ -109,6 +155,7 @@ export class CustomersService {
     }
     const regNumber =
       dto.regNumber !== undefined ? this.checkRegNumber(existing.type, dto.regNumber) : existing.regNumber;
+    const priceListId = await this.checkPriceList(dto.priceListId, user, existing.priceListId);
     try {
       return await this.prisma.customer.update({
         where: { id },
@@ -120,6 +167,7 @@ export class CustomersService {
           ...(dto.address !== undefined ? { address: dto.address || null } : {}),
           ...(dto.notes !== undefined ? { notes: dto.notes || null } : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+          ...(priceListId !== undefined ? { priceListId } : {}),
           searchText: CustomersService.searchText({
             name: dto.name ?? existing.name,
             phone: dto.phone ?? existing.phone,
