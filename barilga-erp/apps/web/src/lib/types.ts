@@ -212,6 +212,9 @@ export type Order = {
     lineTotal: number;
     sourceType?: 'INTERNAL' | 'EXTERNAL_SUPPLIER';
     supplierName?: string | null;
+    /** Picking checklist: when and by whom this line was ticked as prepared. */
+    pickedAt?: string | null;
+    pickedBy?: { id: string; fullName: string } | null;
     product: Product;
   }>;
   returns?: Array<{
@@ -254,6 +257,7 @@ export type Order = {
     createdAt: string;
     actor: { name?: string; fullName?: string; role: string };
   }>;
+  createdAt?: string;
   createdBy: { name?: string; fullName?: string; role: string };
   completedBy?: { name?: string; fullName?: string; role: string } | null;
   completedAt?: string | null;
@@ -468,7 +472,15 @@ export type GatherPlan = {
   transfers: Array<{ from?: WarehouseRef; items: Array<{ product: { id: string; sku?: string; nameMn?: string }; quantity: number }> }>;
 };
 
-export type FeatureKey = 'CUSTOMERS' | 'STOCK_TRANSFERS';
+export type FeatureKey =
+  | 'CUSTOMERS'
+  | 'STOCK_TRANSFERS'
+  | 'STOCK_RECEIPTS'
+  | 'PICKING'
+  | 'WAREHOUSE_REPORT'
+  | 'UNLOADING'
+  | 'HR'
+  | 'ONLINE_SHOP';
 
 export type FeatureSwitch = {
   key: FeatureKey;
@@ -476,4 +488,77 @@ export type FeatureSwitch = {
   enabled: boolean;
   isDefault: boolean;
   updatedAt: string | null;
+};
+
+/** Seller details printed on invoices and receipts (admin settings). */
+export type CompanySettings = {
+  name: string;
+  regNumber: string;
+  address: string;
+  phone: string;
+  email: string;
+  bankAccounts: Array<{ bankName: string; accountNumber: string; accountName: string }>;
+  invoiceNote: string;
+  receiptFooter: string;
+  configured: boolean;
+};
+
+export type StockReceipt = {
+  id: string;
+  receiptNumber: string;
+  warehouse: { id: string; code: string; name: string };
+  supplierName: string;
+  supplierInvoiceNo: string | null;
+  notes: string | null;
+  receivedBy: { id: string; fullName: string } | null;
+  receivedAt: string;
+  items: Array<{
+    id: string;
+    quantity: string | number;
+    unitCostMnt: number | null;
+    product: { id: string; sku: string; nameMn: string; unit: string };
+  }>;
+};
+
+export type WarehouseReport = {
+  range: { startDate: string; endDate: string; timeZone: string };
+  warehouse: { id: string; code: string; name: string } | null;
+  lines: Array<{
+    productId: string;
+    sku: string;
+    nameMn: string;
+    unit: string;
+    category: string;
+    opening: number;
+    receipts: number;
+    transfersIn: number;
+    transfersOut: number;
+    sales: number;
+    returns: number;
+    adjustments: number;
+    closing: number;
+    minStockLevel: number;
+    lowStock: boolean;
+    valueAtPriceMnt: number;
+    valueAtCostMnt: number | null;
+  }>;
+  totals: {
+    products: number;
+    receipts: number;
+    transfersIn: number;
+    transfersOut: number;
+    sales: number;
+    returns: number;
+    adjustments: number;
+    valueAtPriceMnt: number;
+    lowStock: number;
+  };
+  inTransit: Array<{
+    id: string;
+    transferNumber: string;
+    from: string;
+    to: string;
+    sentAt: string;
+    items: Array<{ sku: string; nameMn: string; unit: string; quantity: number }>;
+  }>;
 };

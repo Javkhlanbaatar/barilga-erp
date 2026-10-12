@@ -35,7 +35,7 @@ const DRIVER_PHONE_RE = /^[0-9+\-]{8,15}$/;
 const MAX_ORDER_SUBTOTAL_MNT = 2_000_000_000;
 
 const ORDER_INCLUDE = {
-  items: { include: { product: true } },
+  items: { include: { product: true, pickedBy: { select: { id: true, fullName: true } } } },
   zone: true,
   warehouse: { select: { id: true, code: true, name: true } },
   payments: { orderBy: { createdAt: 'asc' as const } },
@@ -582,6 +582,38 @@ export class OrdersService {
       }
     }
     throw lastError;
+  }
+
+  /**
+   * Picking checklist: a worker ticks one line as prepared (or unticks a mistake). Several people can pick
+   * one order at once; each line records who picked it. Only for paid orders waiting to be loaded.
+   * Completing an order does not require every line to be ticked (the UI warns instead).
+   */
+  async pickItem(orderId: string, itemId: string, picked: boolean, user: AuthUser) {
+    if (!isWarehouseActor(user.role)) {
+      throw new ForbiddenException('Warehouse staff, cashiers, managers, or admin can pick orders');
+    }
+    if (this.features) await this.features.assertEnabled('PICKING');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (order.status !== OrderStatus.READY_FOR_LOADING) {
+      throw new BadRequestException('Only a paid order waiting for loading can be picked');
+    }
+    // Conditional update: two people ticking the same line at once leave one consistent picker.
+    const changed = await this.prisma.orderItem.updateMany({
+      where: { id: itemId, orderId, pickedAt: picked ? null : { not: null } },
+      data: picked ? { pickedAt: new Date(), pickedById: user.id } : { pickedAt: null, pickedById: null },
+    });
+    const item = await this.prisma.orderItem.findFirst({
+      where: { id: itemId, orderId },
+      include: { pickedBy: { select: { id: true, fullName: true } } },
+    });
+    if (!item) throw new NotFoundException('Order item not found');
+    if (changed.count === 1) {
+      this.log.log(`Pick ${order.orderNumber} item ${itemId} ${picked ? 'ticked' : 'unticked'} by ${user.id}`);
+    }
+    return { id: item.id, pickedAt: item.pickedAt, pickedBy: item.pickedBy };
   }
 
   async list(user: AuthUser, status?: OrderStatus) {

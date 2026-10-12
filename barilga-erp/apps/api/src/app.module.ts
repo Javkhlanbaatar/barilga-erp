@@ -16,6 +16,7 @@ import { PaymentModule } from './payment/payment.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReportsModule } from './reports/reports.module';
 import { ReturnsModule } from './returns/returns.module';
+import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -37,6 +38,7 @@ import { UsersModule } from './users/users.module';
     ReturnsModule,
     ReportsModule,
     HrModule,
+    SettingsModule,
   ],
   controllers: [HealthController],
 })

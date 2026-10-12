@@ -226,3 +226,9 @@ export class OverrideFeesDto {
   @IsString()
   reason!: string;
 }
+
+/** Picking checklist: tick (true) or untick (false) one order line as prepared. */
+export class PickItemDto {
+  @IsBoolean()
+  picked!: boolean;
+}

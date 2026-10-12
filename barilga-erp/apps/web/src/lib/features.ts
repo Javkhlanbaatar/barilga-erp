@@ -30,7 +30,10 @@ export function loadFeatures(force = false): Promise<FeatureMap> {
   return inflight;
 }
 
-/** `enabled(key)` is true until the server says the module is off. */
+/** Modules that start switched off on the server; everything else is assumed on until the server says otherwise. */
+const OFF_BY_DEFAULT: Partial<Record<FeatureKey, true>> = { UNLOADING: true };
+
+/** `enabled(key)` follows the server; before it answers, the module's default applies. */
 export function useFeatures() {
   const [map, setMap] = useState<FeatureMap>(cache ?? {});
   useEffect(() => {
@@ -40,5 +43,5 @@ export function useFeatures() {
       alive = false;
     };
   }, []);
-  return { enabled: (key: FeatureKey) => map[key] !== false };
+  return { enabled: (key: FeatureKey) => map[key] ?? !OFF_BY_DEFAULT[key] };
 }

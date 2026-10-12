@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { PickList, unpickedCount } from '@/components/pick-list';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
 import { AuthUser, DELIVERY_LABEL, isHiredTransport, Order, VEHICLE_LABEL } from '@/lib/types';
+import { useFeatures } from '@/lib/features';
 import { TRANSPORT_ROLES, hasRole } from '@/lib/rbac';
 
 type TicketTab = 'pending' | 'done';
@@ -53,6 +55,8 @@ export default function WarehouseTicketsPage() {
   const [loading, setLoading] = useState(true);
   const staffName = user?.fullName ?? user?.name ?? '';
   const canManageTransport = hasRole(user?.role, TRANSPORT_ROLES);
+  const features = useFeatures();
+  const picking = features.enabled('PICKING');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,6 +96,15 @@ export default function WarehouseTicketsPage() {
     if (user) void load();
   }, [user, load]);
 
+  // Several people may pick the same orders: refresh the queue so everyone sees each other's ticks.
+  useEffect(() => {
+    if (!user || tab !== 'pending') return;
+    const timer = window.setInterval(() => {
+      if (!busyId) void load();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [user, tab, busyId, load]);
+
   async function complete(id: string) {
     setError('');
     const order = orders.find((o) => o.id === id);
@@ -100,6 +113,12 @@ export default function WarehouseTicketsPage() {
       const driverPhone = (order.driverPhone ?? '').replace(/\s+/g, '');
       if (vehicleNumber.length < 2 || driverPhone.length < 8) {
         setError('Hired delivery needs plate and driver phone from the web form or tracking link');
+        return;
+      }
+    }
+    if (order && picking) {
+      const left = unpickedCount(order);
+      if (left > 0 && !window.confirm(`${left} бараа «бэлдсэн» гэж чагтлагдаагүй байна. Бүгдийг ачихад бэлэн гэж үзээд дуусгах уу?`)) {
         return;
       }
     }
@@ -198,13 +217,20 @@ export default function WarehouseTicketsPage() {
                   <span className="text-slate-500">Address: </span>
                   <span className="text-white">{o.deliveryAddress?.trim() || 'No address on file'}</span>
                 </p>
-                <ul className="text-sm text-slate-300 mt-1">
-                  {o.items.map((i) => (
-                    <li key={i.id}>
-                      {i.product.nameMn} × {Number(i.quantity)}
-                    </li>
-                  ))}
-                </ul>
+                {picking ? (
+                  <PickList
+                    order={o}
+                    onChange={(items) => setOrders((prev) => prev.map((x) => (x.id === o.id ? { ...x, items } : x)))}
+                  />
+                ) : (
+                  <ul className="text-sm text-slate-300 mt-1">
+                    {o.items.map((i) => (
+                      <li key={i.id}>
+                        {i.product.nameMn} × {Number(i.quantity)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {isHiredTransport(o.deliveryMethod) ? (
                   <div className="rounded-lg border border-slate-700 p-3 space-y-1">
                     <p className="text-xs uppercase tracking-wide text-slate-400">Web / tracking transport</p>
@@ -235,6 +261,15 @@ export default function WarehouseTicketsPage() {
                 )}
                 <p className="text-xs text-slate-500">{tugrik(o.totalMnt)} paid in full</p>
               </div>
+              <div className="flex flex-col gap-2">
+              <a
+                className="btn-ghost whitespace-nowrap text-center text-sm"
+                href={`/print/orders/${o.id}?doc=picklist`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Бэлтгэх хуудас хэвлэх
+              </a>
               <button
                 className="btn-primary whitespace-nowrap"
                 disabled={
@@ -245,6 +280,7 @@ export default function WarehouseTicketsPage() {
               >
                 {busyId === o.id ? 'Saving…' : 'Би бэлдлээ'}
               </button>
+              </div>
             </article>
           ))}
           {!loading && orders.length === 0 && (

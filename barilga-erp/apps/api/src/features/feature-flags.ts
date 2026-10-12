@@ -4,7 +4,13 @@
  */
 export const FEATURES = {
   CUSTOMERS: { default: true, nameMn: 'Харилцагчийн бүртгэл' },
-  STOCK_TRANSFERS: { default: true, nameMn: 'Агуулах хоорондын шилжүүлэг' },
+  STOCK_TRANSFERS: { default: true, nameMn: 'Агуулах хоорондын шилжүүлэг ба захиалга цуглуулах' },
+  STOCK_RECEIPTS: { default: true, nameMn: 'Бараа орлого (нийлүүлэгчээс)' },
+  PICKING: { default: true, nameMn: 'Агуулахын бэлтгэлийн чеклист' },
+  WAREHOUSE_REPORT: { default: true, nameMn: 'Агуулахын тайлан' },
+  UNLOADING: { default: false, nameMn: 'Буулгалтын үйлчилгээ (хураамжтай)' },
+  HR: { default: true, nameMn: 'Ирц ба цалин' },
+  ONLINE_SHOP: { default: true, nameMn: 'Онлайн захиалга (нийтийн сайт)' },
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;

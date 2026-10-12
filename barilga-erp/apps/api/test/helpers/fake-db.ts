@@ -63,6 +63,7 @@ function matchValue(value: any, cond: any): boolean {
 const NESTED_ITEMS: Record<string, { table: string; fk: string }> = {
   stockTransfer: { table: 'stockTransferItem', fk: 'transferId' },
   salesReturn: { table: 'returnItem', fk: 'returnId' },
+  stockReceipt: { table: 'stockReceiptItem', fk: 'receiptId' },
 };
 
 class Table {
@@ -204,7 +205,7 @@ export class FakeDb {
     status: 'UNPAID', provider: 'QPAY', method: 'QPAY', qpayInvoiceId: null, qpayPayload: null,
     paidAt: null, pollAttempts: 0, nextPollAt: null, lastPollError: null,
   }));
-  orderItem = new Table(this, 'orderItem', () => ({ sourceType: 'INTERNAL', supplierName: null }));
+  orderItem = new Table(this, 'orderItem', () => ({ sourceType: 'INTERNAL', supplierName: null, pickedAt: null, pickedById: null }));
   product = new Table(this, 'product', () => ({ stockQty: new Prisma.Decimal(0), active: true }));
   returnItem = new Table(this, 'returnItem', () => ({}));
   supplierPayable = new Table(this, 'supplierPayable', () => ({ status: 'OPEN' }));
@@ -221,6 +222,9 @@ export class FakeDb {
   featureFlag = new Table(this, 'featureFlag', () => ({ updatedById: null }));
   user = new Table(this, 'user', () => ({ isActive: true, warehouseId: null }));
   salesReturn = new Table(this, 'salesReturn', () => ({ refundStatus: 'PENDING_PAYOUT' }));
+  stockReceipt = new Table(this, 'stockReceipt', () => ({ supplierInvoiceNo: null, notes: null, receivedAt: new Date() }));
+  stockReceiptItem = new Table(this, 'stockReceiptItem', () => ({ unitCostMnt: null }));
+  appSetting = new Table(this, 'appSetting', () => ({ updatedById: null }));
 
   constructor() {
     // Mirrors the migration: there is always exactly one default warehouse.
@@ -256,7 +260,7 @@ export class FakeDb {
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
-      this.salesReturn,
+      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting,
     ];
   }
 

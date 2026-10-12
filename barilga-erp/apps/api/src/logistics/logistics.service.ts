@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { DeliveryMethod, TimeCondition } from '@prisma/client';
+import { FeaturesService } from '../features/features.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CartSpecs,
@@ -12,7 +13,10 @@ import {
 export class LogisticsService {
   private readonly log = new Logger(LogisticsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly features?: FeaturesService,
+  ) {}
 
   async loadActiveVehicles() {
     const rows = await this.prisma.vehicleType.findMany({
@@ -38,6 +42,10 @@ export class LogisticsService {
     unloadingRequested: boolean;
     specs: CartSpecs;
   }) {
+    // Every price (POS, web shop, quotes) goes through here, so the unloading switch is enforced once.
+    if (params.unloadingRequested && this.features && !(await this.features.isEnabled('UNLOADING'))) {
+      throw new BadRequestException('Буулгалтын үйлчилгээ идэвхгүй байна / Unloading service is switched off');
+    }
     const zone = await this.prisma.zone.findUnique({ where: { id: params.zoneId } });
     if (!zone || !zone.active) {
       throw new BadRequestException('Invalid or inactive delivery zone');

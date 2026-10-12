@@ -4,12 +4,14 @@ import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { OVERSIGHT_ROLES } from '../auth/rbac';
 import { PayrollQueryDto, StaffPunchDto } from './dto/hr.dto';
 import { HrService } from './hr.service';
 
 @Controller('hr')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
+@RequireFeature('HR')
 export class HrController {
   constructor(private readonly hr: HrService) {}
 

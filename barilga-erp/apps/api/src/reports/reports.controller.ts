@@ -5,13 +5,19 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { REPORT_ROLES } from '../auth/rbac';
+import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { DailyQueryDto } from './dto/daily-query.dto';
+import { WarehouseReportQueryDto } from './dto/warehouse-query.dto';
 import { ReportsService } from './reports.service';
+import { WarehouseReportService } from './warehouse-report.service';
 
 @Controller('reports')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
 export class ReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(
+    private readonly reports: ReportsService,
+    private readonly warehouseReport: WarehouseReportService,
+  ) {}
 
   @Get('daily')
   @Roles(...REPORT_ROLES)
@@ -23,5 +29,13 @@ export class ReportsController {
   @Roles(Role.ADMIN, Role.MANAGER)
   cashiers(@CurrentUser() user: AuthUser) {
     return this.reports.listCashiers(user);
+  }
+
+  /** Stock in/out per product for a warehouse and date range (warehouse staff: their own warehouse). */
+  @Get('warehouse')
+  @Roles(Role.ADMIN, Role.MANAGER, Role.ACHIGCH_BELTGEGCH)
+  @RequireFeature('WAREHOUSE_REPORT')
+  warehouse(@Query() query: WarehouseReportQueryDto, @CurrentUser() user: AuthUser) {
+    return this.warehouseReport.report(query, user);
   }
 }

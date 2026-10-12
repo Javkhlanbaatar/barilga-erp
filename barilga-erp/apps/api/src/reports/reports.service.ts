@@ -4,8 +4,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
 import { PrismaService } from '../prisma/prisma.service';
 import { DailyQueryDto } from './dto/daily-query.dto';
-
-const UB_TZ = 'Asia/Ulaanbaatar';
+import { parseDayBound, UB_TZ, ymdInUlaanbaatar } from './report-dates';
 
 export type PaymentMethodTotals = {
   method: PayMethod;
@@ -67,20 +66,6 @@ export type DailyReport = {
     }>;
   };
 };
-
-function ymdInUlaanbaatar(date = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: UB_TZ }).format(date);
-}
-
-function parseDayBound(ymd: string, endOfDay: boolean): Date {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
-    throw new BadRequestException('Dates must be YYYY-MM-DD');
-  }
-  const iso = endOfDay ? `${ymd}T23:59:59.999+08:00` : `${ymd}T00:00:00.000+08:00`;
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) throw new BadRequestException('Invalid date');
-  return parsed;
-}
 
 @Injectable()
 export class ReportsService {

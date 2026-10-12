@@ -52,7 +52,7 @@ export default function CheckoutPOS() {
   const [splitCash, setSplitCash] = useState(0);
   const [splitCard, setSplitCard] = useState(0);
   const [splitQpay, setSplitQpay] = useState(0);
-  const [deliveryType, setDeliveryType] = useState<DeliveryType>('OUR_DELIVERY');
+  const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
   const [isUnloading, setIsUnloading] = useState(false);
@@ -133,9 +133,12 @@ export default function CheckoutPOS() {
     [cart],
   );
 
+  const unloadingOffered = features.enabled('UNLOADING');
   useEffect(() => {
-    if (!ourDelivery) setIsUnloading(false);
-  }, [ourDelivery]);
+    // Without delivery (or with the unloading service switched off) these options do not apply.
+    if (!ourDelivery || !unloadingOffered) setIsUnloading(false);
+    if (!ourDelivery) setTime('STANDARD');
+  }, [ourDelivery, unloadingOffered]);
 
   useEffect(() => {
     if (!cart.length || !zoneId) {
@@ -461,12 +464,19 @@ export default function CheckoutPOS() {
             </div>
           ))}
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400">Хүргэлтийн арга</label>
-            <div className="grid grid-cols-3 gap-1.5">
-              <button type="button" onClick={() => setDeliveryType('OUR_DELIVERY')} className={chipClass(deliveryType === 'OUR_DELIVERY', 'bg-amber-500 text-slate-950 border-amber-500 font-bold')}>
-                Манай хүргэлт
-              </button>
+          {/* Delivery is opt-in: unticked = the customer collects (themselves or with their own driver). */}
+          <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={ourDelivery}
+              onChange={(e) => setDeliveryType(e.target.checked ? 'OUR_DELIVERY' : 'SELF_PICKUP')}
+              className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
+            />
+            <span className="font-semibold">Хүргэлт хийлгэх</span>
+          </label>
+
+          {!ourDelivery && (
+            <div className="grid grid-cols-2 gap-1.5">
               <button type="button" onClick={() => setDeliveryType('SELF_PICKUP')} className={chipClass(deliveryType === 'SELF_PICKUP', 'bg-amber-500 text-slate-950 border-amber-500 font-bold')}>
                 Өөрөө авах
               </button>
@@ -474,52 +484,54 @@ export default function CheckoutPOS() {
                 Жолооч явуулах
               </button>
             </div>
-          </div>
-
-          {ourDelivery && (
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-slate-400">Хүргэлтийн бүс</label>
-              <select
-                value={zoneId}
-                onChange={(e) => setZoneId(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-slate-200"
-              >
-                {zones.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.nameMn} ({tugrik(z.baseDeliveryFeeMnt)})
-                  </option>
-                ))}
-              </select>
-            </div>
           )}
 
           {ourDelivery && (
-            <div className="flex items-center space-x-2 pt-1">
-              <input
-                type="checkbox"
-                id="unloading"
-                checked={isUnloading}
-                onChange={(e) => setIsUnloading(e.target.checked)}
-                className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
-              />
-              <label htmlFor="unloading" className="text-xs text-slate-300">
-                Буулгалт хийх (15,000₮/тн, мин 15,000₮)
-              </label>
+            <div className="space-y-3 rounded-lg border border-amber-700/50 p-3">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-400">Хүргэлтийн бүс</label>
+                <select
+                  value={zoneId}
+                  onChange={(e) => setZoneId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-slate-200"
+                >
+                  {zones.map((z) => (
+                    <option key={z.id} value={z.id}>
+                      {z.nameMn} ({tugrik(z.baseDeliveryFeeMnt)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {features.enabled('UNLOADING') && (
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="unloading"
+                    checked={isUnloading}
+                    onChange={(e) => setIsUnloading(e.target.checked)}
+                    className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
+                  />
+                  <label htmlFor="unloading" className="text-xs text-slate-300">
+                    Буулгалт хийх (15,000₮/тн, мин 15,000₮)
+                  </label>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-slate-400">Цагийн нөхцөл</label>
+                <select
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-slate-200"
+                >
+                  <option value="STANDARD">Энгийн</option>
+                  <option value="NIGHT">Шөнө (−10%, хөдөө биш)</option>
+                  <option value="EXPRESS">Яаралтай (+30–50%)</option>
+                </select>
+              </div>
             </div>
           )}
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400">Цагийн нөхцөл</label>
-            <select
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-slate-200"
-            >
-              <option value="STANDARD">Энгийн</option>
-              <option value="NIGHT">Шөнө (−10%, хөдөө биш)</option>
-              <option value="EXPRESS">Яаралтай (+30–50%)</option>
-            </select>
-          </div>
 
           {features.enabled('CUSTOMERS') && <CustomerPicker value={customer} onChange={pickCustomer} />}
           <input

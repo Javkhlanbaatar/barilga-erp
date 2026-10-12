@@ -14,6 +14,7 @@ import {
   CompleteFulfillmentDto,
   CreateOrderDto,
   OverrideFeesDto,
+  PickItemDto,
   QuoteOrderDto,
 } from './dto/order.dto';
 import { GatherService } from './gather.service';
@@ -102,6 +103,18 @@ export class OrdersController {
   @Roles(Role.BORLUULAGCH, Role.ADMIN, Role.MANAGER)
   issueEbarimt(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.orders.issueEbarimt(id, user);
+  }
+
+  /** Picking checklist: tick/untick one line as prepared. */
+  @Patch(':id/items/:itemId/pick')
+  @Roles(...FULFILLMENT_ROLES)
+  pick(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: PickItemDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.orders.pickItem(id, itemId, dto.picked, user);
   }
 
   @Patch(':id/complete')

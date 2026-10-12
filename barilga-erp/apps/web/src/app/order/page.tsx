@@ -35,6 +35,7 @@ export default function PublicOrderPage() {
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
   const [isUnloading, setIsUnloading] = useState(false);
+  const [shop, setShop] = useState<{ shopOpen: boolean; unloading: boolean }>({ shopOpen: true, unloading: false });
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [address, setAddress] = useState('');
@@ -45,6 +46,16 @@ export default function PublicOrderPage() {
   const [busy, setBusy] = useState(false);
 
   const ourDelivery = deliveryType === 'OUR_DELIVERY';
+
+  // Which services the shop offers right now (admin module switches).
+  useEffect(() => {
+    publicApi<{ shopOpen: boolean; unloading: boolean }>('/public/config')
+      .then((c) => {
+        setShop(c);
+        if (!c.unloading) setIsUnloading(false);
+      })
+      .catch(() => undefined);
+  }, []);
   const items = useMemo(
     () => cart.map((line) => ({ productId: line.product.id, quantity: line.quantity })),
     [cart],
@@ -127,6 +138,11 @@ export default function PublicOrderPage() {
 
   return (
     <main className="min-h-screen max-w-6xl mx-auto px-4 py-8">
+      {!shop.shopOpen && (
+        <p className="mb-4 rounded-lg border border-amber-700 bg-amber-950/50 px-4 py-3 text-sm text-amber-100">
+          Онлайн захиалга түр хаалттай байна. Дэлгүүрт ирж эсвэл утсаар захиална уу.
+        </p>
+      )}
       <header className="flex items-end justify-between gap-4 mb-6">
         <div>
           <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Barilga</p>
@@ -194,10 +210,12 @@ export default function PublicOrderPage() {
                   <option value="EXPRESS">Яаралтай</option>
                 </select>
               </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={isUnloading} onChange={(e) => setIsUnloading(e.target.checked)} />
-                Буулгалт
-              </label>
+              {shop.unloading && (
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={isUnloading} onChange={(e) => setIsUnloading(e.target.checked)} />
+                  Буулгалт
+                </label>
+              )}
               <label className="block text-sm">
                 Хаяг
                 <input className="mt-1 w-full" value={address} onChange={(e) => setAddress(e.target.value)} />

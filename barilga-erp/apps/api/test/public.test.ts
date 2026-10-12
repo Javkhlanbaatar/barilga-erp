@@ -57,7 +57,7 @@ describe('rate limit guard', () => {
 });
 
 describe('public controller is fully rate limited', () => {
-  const routes = ['catalog', 'quote', 'create', 'find', 'updateTransport'] as const;
+  const routes = ['config', 'catalog', 'quote', 'create', 'find', 'updateTransport'] as const;
 
   it('every public route carries a limit, and order creation is the tightest', () => {
     const meta = (name: (typeof routes)[number]) =>

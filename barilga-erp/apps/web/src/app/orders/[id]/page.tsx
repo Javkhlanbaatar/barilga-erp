@@ -276,6 +276,23 @@ export default function OrderDetailPage() {
         </div>
         <div className="flex flex-col items-end gap-2">
           <p className="text-2xl font-bold text-amber-brand">{tugrik(order.totalMnt)}</p>
+          <div className="flex gap-1">
+            {[
+              ['invoice', 'Нэхэмжлэх'],
+              ['receipt', 'Баримт'],
+              ['picklist', 'Бэлтгэх хуудас'],
+            ].map(([doc, label]) => (
+              <a
+                key={doc}
+                className="btn-ghost text-xs px-2 py-1"
+                href={`/print/orders/${order.id}?doc=${doc}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                🖨 {label}
+              </a>
+            ))}
+          </div>
           {canReturn && (
             <button className="btn-ghost text-sm" onClick={openReturn}>
               Return Items
