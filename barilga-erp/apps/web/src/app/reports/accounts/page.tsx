@@ -53,7 +53,7 @@ export default function AccountsReportPage() {
         <div>
           <h2 className="text-xl font-bold">Харилцагчийн тооцоо</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Авлага = тэд бидэнд өртэй (зарлагаар авсан) · Өглөг = бид тэдэнд өртэй (тэднээс авсан бараа). Хуулгыг харилцагчийн хуудаснаас харна.
+            Авлага = тэд бидэнд өртэй (дараа төлөхөөр авсан) · Өглөг = бид тэдэнд өртэй (тэднээс авсан бараа). Хуулгыг харилцагчийн хуудаснаас харна.
           </p>
         </div>
         <button className="btn-ghost print:hidden" onClick={() => window.print()}>
@@ -98,7 +98,7 @@ export default function AccountsReportPage() {
                       <span className="block text-xs text-slate-500">{p.phone}</span>
                     </td>
                     <td className="text-xs text-slate-300">
-                      {[p.creditAllowed && 'Зарлагаар', p.sellsToUs && 'Нийлүүлэгч', p.barterContract && `Бартер ${p.barterContract}`]
+                      {[p.creditAllowed && 'Дараа төлөх', p.sellsToUs && 'Нийлүүлэгч', p.barterContract && `Бартер ${p.barterContract}`]
                         .filter(Boolean)
                         .join(' · ') || '—'}
                     </td>

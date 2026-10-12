@@ -7,7 +7,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
+import { AccountEntryKind, BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { isFallbackPicker, isHiredTransport, isPosActor, isTransportActor, isWarehouseActor } from '../auth/rbac';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
@@ -216,6 +216,8 @@ export class OrdersService {
     return {
       id: customer.id,
       creditAllowed: customer.creditAllowed,
+      contractPartner: customer.sellsToUs || !!customer.barterContract,
+      name: customer.name,
       priceListId: list?.id ?? null,
       priceListName: list?.name ?? null,
       prices: list ? new Map(list.items.map((i) => [i.productId, i.priceMnt])) : undefined,
@@ -231,9 +233,28 @@ export class OrdersService {
     if (splitMethods.includes(CheckoutPaymentMethod.CREDIT)) {
       // Releasing goods on account needs someone to owe the money: a registered customer.
       if (this.features) await this.features.assertEnabled('CREDIT_SALES');
-      if (!customer) throw new BadRequestException('Зарлагаар олгоход бүртгэлтэй харилцагч сонгоно уу / On-account sale needs a registered customer');
+      if (!customer) throw new BadRequestException('Дараа төлөхөөр олгоход бүртгэлтэй харилцагч сонгоно уу / On-account sale needs a registered customer');
       if (!customer.creditAllowed) {
-        throw new ForbiddenException('Энэ харилцагчид зарлагаар олгох эрх менежерээс олгогдоогүй / Customer may not take goods on account');
+        throw new ForbiddenException('Энэ харилцагчид дараа төлөх эрх менежерээс олгогдоогүй / Customer may not take goods on account');
+      }
+    }
+    const contractSplits = (dto.payments ?? []).filter((p) => p.method === CheckoutPaymentMethod.CONTRACT);
+    if (splitMethods.includes(CheckoutPaymentMethod.CONTRACT)) {
+      if (this.features) await this.features.assertEnabled('PARTNER_ACCOUNTS');
+      if (!customer) throw new BadRequestException('Гэрээгээр олгоход харилцагч сонгоно уу / Contract sale needs a partner');
+      if (!customer.contractPartner) {
+        throw new ForbiddenException('Энэ харилцагч нийлүүлэгч эсвэл бартерын гэрээтэй биш / Customer has no supply or barter contract');
+      }
+      if (contractSplits.length > 1 || splitMethods.includes(CheckoutPaymentMethod.CREDIT)) {
+        throw new BadRequestException('Гэрээгээр болон дараа төлөхөөр нэг захиалгад зэрэг олгохгүй / Only one contract part, not combined with on-account');
+      }
+      if (!dto.payments?.length) {
+        throw new BadRequestException('Гэрээгээр олгоход дүнг хувааж оруулна / Send the contract part as a payment split');
+      }
+      // Checked before anything is written: the contract part may not exceed what we currently owe the partner.
+      const payable = await this.partnerPayable(customer.id);
+      if (contractSplits[0].amount > payable) {
+        throw new BadRequestException(`Гэрээгээр олгох дүн бидний өглөгөөс (${payable}₮) их байна / Contract part exceeds what we owe (${payable}₮)`);
       }
     }
     const zoneId = await this.resolveZoneId(dto.zoneId, dto.deliveryMethod);
@@ -305,6 +326,9 @@ export class OrdersService {
       dto.payments && dto.payments.length > 0
         ? dto.payments.map((p) => ({ method: p.method, amount: p.amount }))
         : [{ method: dto.paymentMethod ?? CheckoutPaymentMethod.QPAY, amount: order.totalMnt }];
+    const contract = splits.find((s) => s.method === CheckoutPaymentMethod.CONTRACT);
+    // Recorded as an on-account part, then closed at once against our payable below.
+    if (contract) contract.method = CheckoutPaymentMethod.CREDIT;
     try {
       const recorded = await this.payments.settleSplits(order.id, splits);
       this.log.log(
@@ -330,8 +354,40 @@ export class OrdersService {
       });
       throw err;
     }
+    if (contract && customer) await this.closeAgainstPayable(order.id, order.orderNumber, customer.id, Math.round(Number(contract.amount)), user.id);
     const created = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: ORDER_INCLUDE });
     return this.presentOrder(created, user.role);
+  }
+
+  /** What we owe the partner: purchases minus our payments and offsets (positive = we owe them). */
+  private async partnerPayable(customerId: string) {
+    const agg = await this.prisma.accountEntry.aggregate({ where: { customerId }, _sum: { amountMnt: true } });
+    return agg._sum.amountMnt ?? 0;
+  }
+
+  /**
+   * Contract sale: the on-account part is paid at once out of what we owe the partner (one OFFSET payment and one
+   * OFFSET account line, the same records as a manual хасалт). If our payable shrank meanwhile, the part is left
+   * as an ordinary debt on the partner's account for a manager to settle — it is never silently dropped.
+   */
+  private async closeAgainstPayable(orderId: string, orderNumber: string, customerId: string, amountMnt: number, actorId: string) {
+    const payable = await this.partnerPayable(customerId);
+    if (amountMnt > payable) {
+      this.log.warn(`Contract sale ${orderNumber}: payable ${payable}₮ < ${amountMnt}₮; left on the partner account as debt`);
+      return;
+    }
+    await this.payments.settleCredit(orderId, 'OFFSET', amountMnt, actorId);
+    await this.prisma.accountEntry.create({
+      data: {
+        customerId,
+        kind: AccountEntryKind.OFFSET,
+        amountMnt: -amountMnt,
+        description: `Гэрээгээр олгосон — ${orderNumber}`,
+        refType: 'ORDER',
+        refId: orderId,
+        createdById: actorId,
+      },
+    });
   }
 
   /**

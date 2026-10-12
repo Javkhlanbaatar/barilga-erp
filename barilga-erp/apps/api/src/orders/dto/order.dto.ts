@@ -97,6 +97,11 @@ export enum CheckoutPaymentMethod {
   CREDIT = 'CREDIT',
   /** Bank transfer into the company account, recorded by the cashier. */
   TRANSFER = 'TRANSFER',
+  /**
+   * By contract (гэрээгээр): a supplier/barter partner takes goods against what we owe them. Deducted from our
+   * payable at once — no money moves and no debt is created.
+   */
+  CONTRACT = 'CONTRACT',
 }
 
 /** A customer paying (part of) what they owe on an order released on account. */

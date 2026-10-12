@@ -7,12 +7,22 @@ import { GatherPanel } from '@/components/gather-panel';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
-import { AuthUser, ebarimtStatusLabel, isHiredTransport, Order, PaymentSplit, VEHICLE_LABEL } from '@/lib/types';
+import { AuthUser, DELIVERY_LABEL, ORDER_STATUS_LABEL, ebarimtStatusLabel, isHiredTransport, Order, PaymentSplit, VEHICLE_LABEL } from '@/lib/types';
 import { POS_ROLES, TRANSPORT_ROLES, hasRole } from '@/lib/rbac';
 
 function channel(p: PaymentSplit) {
   return p.method ?? p.provider ?? 'QPAY';
 }
+
+const PAY_LABEL: Record<string, string> = {
+  QPAY: 'QPay',
+  CASH: 'Бэлэн',
+  CARD: 'Карт',
+  TRANSFER: 'Шилжүүлэг',
+  CREDIT: 'Дараа төлөх',
+  OFFSET: 'Тооцоонд хасагдсан',
+};
+const PAY_STATUS: Record<string, string> = { PAID: 'төлөгдсөн', UNPAID: 'хүлээгдэж буй', EXPIRED: 'хүчингүй', FAILED: 'амжилтгүй' };
 
 export default function OrderDetailPage() {
   const params = useParams<{ id: string }>();
@@ -232,10 +242,11 @@ export default function OrderDetailPage() {
     <Shell>
       <div className="flex justify-between items-start mb-4">
         <div>
-          <p className="text-amber-brand text-xs">{order.status}</p>
+          <p className="text-amber-brand text-xs">{ORDER_STATUS_LABEL[order.status] ?? order.status}</p>
           <h2 className="text-2xl font-bold">{order.orderNumber}</h2>
           <p className="text-slate-400">
-            {order.customerName} · {order.customerPhone} · {order.zone.nameMn} · {order.deliveryMethod}
+            {order.customerName} · {order.customerPhone}
+            {features.enabled('DELIVERY') ? ` · ${order.zone?.nameMn ?? ''} · ${DELIVERY_LABEL[order.deliveryMethod] ?? order.deliveryMethod}` : ''}
             {order.warehouse ? ` · ${order.warehouse.name}` : ''}
           </p>
           {(order.preparedBy || order.completedBy) && (
@@ -262,7 +273,7 @@ export default function OrderDetailPage() {
               {order.driverPhone ? ` · ${order.driverPhone}` : ''}
             </p>
           )}
-          {order.trackingToken && (
+          {features.enabled('DELIVERY') && order.trackingToken && (
             <p className="text-sm text-slate-400 mt-1">
               Tracking:{' '}
               <button
@@ -300,7 +311,7 @@ export default function OrderDetailPage() {
           </div>
           {canReturn && (
             <button className="btn-ghost text-sm" onClick={openReturn}>
-              Return Items
+              Буцаалт
             </button>
           )}
           {canCancel && (
@@ -322,13 +333,13 @@ export default function OrderDetailPage() {
           {splits.map((p) => (
             <div key={p.id ?? `${channel(p)}-${p.amountMnt}`} className="border border-slate-800 rounded-lg p-3 text-sm">
               <p className="font-medium">
-                {channel(p)} — {tugrik(p.amountMnt)} — {p.status}
+                {PAY_LABEL[channel(p)] ?? channel(p)} — {channel(p) === 'CREDIT' && p.status === 'PAID' ? 'бүрэн хаагдсан' : `${tugrik(p.amountMnt)} — ${PAY_STATUS[p.status] ?? p.status}`}
               </p>
               {channel(p) === 'QPAY' && p.qpayQrImage && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={p.qpayQrImage} alt="QPay QR" className="w-48 h-48 bg-white rounded mt-2" />
               )}
-              {channel(p) !== 'QPAY' && p.status === 'PAID' && (
+              {!['QPAY', 'CREDIT', 'OFFSET'].includes(channel(p)) && p.status === 'PAID' && (
                 <p className="text-emerald-400 text-xs mt-1">Касс дээр бүртгэгдсэн</p>
               )}
             </div>
@@ -355,7 +366,7 @@ export default function OrderDetailPage() {
                     <p>{item.product.nameMn}</p>
                     <p className="text-xs text-slate-500">
                       {Number(item.quantity)} × {tugrik(item.unitPrice)}
-                      {item.sourceType === 'EXTERNAL_SUPPLIER' ? ` · External (${item.supplierName ?? 'Other store'})` : ' · Internal'}
+                      {item.sourceType === 'EXTERNAL_SUPPLIER' ? ` · Гаднаас (${item.supplierName ?? 'өөр дэлгүүр'})` : ''}
                       {taken > 0 ? ` · returned ${taken}` : ''}
                       {oversold ? ` · warehouse stock ${Number(item.product.stockQty)}` : ''}
                     </p>
@@ -402,13 +413,15 @@ export default function OrderDetailPage() {
               {order.assignedVehicle ? VEHICLE_LABEL[order.assignedVehicle] ?? order.assignedVehicle : '—'}
             </p>
           )}
-          <p>
-            Жин {Number(order.totalWeightKg)}кг · урт {Number(order.maxLengthM)}м · эзлэхүүн {Number(order.totalVolumeM3)}м³
-          </p>
+          {features.enabled('DELIVERY') && (
+            <p>
+              Жин {Number(order.totalWeightKg)}кг · урт {Number(order.maxLengthM)}м · эзлэхүүн {Number(order.totalVolumeM3)}м³
+            </p>
+          )}
           <p>Бараа {tugrik(order.subtotalMnt)}</p>
-          <p>Хүргэлт {tugrik(order.deliveryFeeMnt)}</p>
-          <p>Буулгалт {tugrik(order.unloadingFeeMnt)}</p>
-          <p>Цагийн нэмэгдэл {tugrik(order.timeAdjustmentMnt)}</p>
+          {(features.enabled('DELIVERY') || order.deliveryFeeMnt > 0) && <p>Хүргэлт {tugrik(order.deliveryFeeMnt)}</p>}
+          {(features.enabled('UNLOADING') || order.unloadingFeeMnt > 0) && <p>Буулгалт {tugrik(order.unloadingFeeMnt)}</p>}
+          {(features.enabled('DELIVERY') || order.timeAdjustmentMnt !== 0) && <p>Цагийн нэмэгдэл {tugrik(order.timeAdjustmentMnt)}</p>}
           {order.feesOverridden && <p className="text-amber-brand">Гараар засагдсан</p>}
 
           {canEditFees && (
@@ -556,7 +569,7 @@ export default function OrderDetailPage() {
       {returnOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
           <form onSubmit={submitReturn} className="card w-full max-w-lg space-y-3 max-h-[90vh] overflow-auto">
-            <h3 className="font-semibold text-lg">Return Items</h3>
+            <h3 className="font-semibold text-lg">Буцаалт</h3>
             {error && <p className="text-red-400 text-sm">{error}</p>}
             {order.items.map((item) => {
               const remaining = Number(item.quantity) - (returnedByItem[item.id] ?? 0);

@@ -6,7 +6,7 @@ import { api, tugrik } from '@/lib/api';
 import type { AccountStatement } from '@/lib/types';
 
 const KIND_MN: Record<AccountStatement['lines'][number]['kind'], string> = {
-  ON_ACCOUNT: 'Зарлагаар олгосон',
+  ON_ACCOUNT: 'Дараа төлөхөөр авсан',
   PAID_BY_THEM: 'Тэд төлсөн',
   RETURNED: 'Буцаалт',
   PURCHASE: 'Бид бараа авсан',
@@ -86,7 +86,7 @@ export function AccountPanel({ customerId, canManage }: { customerId: string; ca
   async function offset() {
     if (!st) return;
     const max = Math.min(st.receivableMnt, st.payableMnt);
-    if (!window.confirm(`${tugrik(max)} хасалт хийх үү? Тэдний зарлагаар авсан захиалгууд бидний өглөгөөр төлөгдөнө.`)) return;
+    if (!window.confirm(`${tugrik(max)} хасалт хийх үү? Тэдний дараа төлөхөөр авсан захиалгууд бидний өглөгөөр төлөгдөнө.`)) return;
     setBusy(true);
     try {
       await api(`/accounts/${customerId}/offset`, { method: 'POST', body: JSON.stringify({}) });

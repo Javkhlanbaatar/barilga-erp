@@ -1,15 +1,14 @@
 'use client';
 
 import { FormEvent, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { AuthUser, ROLE_LABEL } from '@/lib/types';
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState('cashier');
-  const [password, setPassword] = useState('Barilga123!');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -37,7 +36,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md card">
         <p className="text-amber-brand text-xs tracking-[0.2em] uppercase mb-2">Barilga ERP</p>
         <h1 className="text-2xl font-bold mb-1">Барилгын хангамж</h1>
-        <p className="text-slate-400 text-sm mb-6">Ulaanbaatar logistics · QPay · inventory</p>
+        <p className="text-slate-400 text-sm mb-6">Борлуулалт · агуулах · тооцоо</p>
         <form onSubmit={onSubmit} className="space-y-3">
           <label className="block text-sm">
             Хэрэглэгчийн нэр / имэйл
@@ -57,11 +56,7 @@ export default function LoginPage() {
             {busy ? 'Нэвтэрч байна…' : 'Нэвтрэх'}
           </button>
         </form>
-        <p className="mt-5 text-sm">
-          <Link href="/order" className="text-amber-brand hover:underline">
-            Захиалах (цахим захиалга)
-          </Link>
-        </p>
+        {process.env.NODE_ENV === 'development' && (
         <ul className="mt-6 text-xs text-slate-400 space-y-1">
           {(['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] as const).map((role) => (
             <li key={role}>
@@ -69,6 +64,7 @@ export default function LoginPage() {
             </li>
           ))}
         </ul>
+        )}
       </div>
     </main>
   );

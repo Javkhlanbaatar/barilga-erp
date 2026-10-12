@@ -259,7 +259,7 @@ export default function CustomersPage() {
                 {detail.notes && <p className="text-xs text-slate-500 mt-1">{detail.notes}</p>}
                 <div className="flex flex-wrap gap-1 mt-1">
                   {detail.buysFromUs !== false && <span className="rounded-full border border-slate-600 px-2 py-0.5 text-[11px]">Бараа авдаг</span>}
-                  {detail.creditAllowed && <span className="rounded-full border border-amber-600 px-2 py-0.5 text-[11px] text-amber-200">Зарлагаар авах эрхтэй</span>}
+                  {detail.creditAllowed && <span className="rounded-full border border-amber-600 px-2 py-0.5 text-[11px] text-amber-200">Дараа төлөх эрхтэй</span>}
                   {detail.sellsToUs && <span className="rounded-full border border-sky-600 px-2 py-0.5 text-[11px] text-sky-200">Нийлүүлэгч</span>}
                   {detail.barterContract && <span className="rounded-full border border-emerald-600 px-2 py-0.5 text-[11px] text-emerald-200">Бартер: {detail.barterContract}</span>}
                 </div>
@@ -271,7 +271,7 @@ export default function CustomersPage() {
               </div>
               {detail.credit && detail.credit.owedMnt > 0 && (
                 <div className="rounded-lg border border-amber-700/60 p-3">
-                  <p className="text-[10px] uppercase text-slate-400">Өр (зарлагаар олгосон)</p>
+                  <p className="text-[10px] uppercase text-slate-400">Өр (дараа төлөхөөр авсан)</p>
                   <p className="text-lg font-bold text-amber-300">{tugrik(detail.credit.owedMnt)}</p>
                   <ul className="mt-1 text-sm divide-y divide-slate-800">
                     {detail.credit.orders.map((o) => (
@@ -392,7 +392,7 @@ export default function CustomersPage() {
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={form.creditAllowed} onChange={(e) => setForm({ ...form, creditAllowed: e.target.checked })} />
-                  Зарлагаар (дараа төлөхөөр) авах эрхтэй
+                  Дараа төлөхөөр (зээлээр) бараа авах эрхтэй
                 </label>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={form.sellsToUs} onChange={(e) => setForm({ ...form, sellsToUs: e.target.checked })} />

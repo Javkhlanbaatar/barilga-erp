@@ -22,7 +22,7 @@ const DELIVERY_MN: Record<string, string> = {
   SELF_PICKUP: 'Өөрөө авах',
   CUSTOMER_DRIVER: 'Харилцагчийн жолооч',
 };
-const PAY_MN: Record<string, string> = { CASH: 'Бэлэн', CARD: 'Карт', QPAY: 'QPay', CREDIT: 'Зарлагаар' };
+const PAY_MN: Record<string, string> = { CASH: 'Бэлэн', CARD: 'Карт', QPAY: 'QPay', CREDIT: 'Дараа төлөх', TRANSFER: 'Шилжүүлэг', OFFSET: 'Тооцоонд хасагдсан' };
 
 /** Printable width (mm) inside the page margins, and the CSS @page size, per paper layout. */
 function pageGeometry(l: Layout) {

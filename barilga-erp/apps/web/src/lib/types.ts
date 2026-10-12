@@ -284,6 +284,13 @@ export function ebarimtStatusLabel(status?: string | null) {
   return 'Олгоогүй';
 }
 
+export const ORDER_STATUS_LABEL: Record<string, string> = {
+  PENDING_PAYMENT: 'Төлбөр хүлээж буй',
+  READY_FOR_LOADING: 'Бэлтгэх / ачихад бэлэн',
+  COMPLETED: 'Олгосон',
+  CANCELLED: 'Цуцалсан',
+};
+
 export const VEHICLE_LABEL: Record<string, string> = {
   PORTER: 'Porter (≤1.5t)',
   DUMP: 'Dump (≤5t)',
@@ -291,10 +298,10 @@ export const VEHICLE_LABEL: Record<string, string> = {
 };
 
 export const DELIVERY_LABEL: Record<string, string> = {
-  OUR_DELIVERY: 'Hired transport',
-  DELIVERY: 'Hired transport',
-  SELF_PICKUP: 'Self pickup',
-  CUSTOMER_DRIVER: 'Customer driver',
+  OUR_DELIVERY: 'Манай хүргэлт',
+  DELIVERY: 'Манай хүргэлт',
+  SELF_PICKUP: 'Өөрөө авна',
+  CUSTOMER_DRIVER: 'Харилцагчийн жолооч',
 };
 
 export function isHiredTransport(method?: string | null) {

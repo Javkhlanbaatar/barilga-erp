@@ -10,7 +10,7 @@ import { useFeatures } from '@/lib/features';
 import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
 import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
-type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT';
+type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
 type CartLine = {
   product: Product;
@@ -58,6 +58,9 @@ export default function CheckoutPOS() {
   const [splitQpay, setSplitQpay] = useState(0);
   const [splitCredit, setSplitCredit] = useState(0);
   const [splitTransfer, setSplitTransfer] = useState(0);
+  const [splitContract, setSplitContract] = useState(0);
+  /** What we owe the selected supply/barter partner — the most a contract sale can take. */
+  const [partnerPayable, setPartnerPayable] = useState<number | null>(null);
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
@@ -229,9 +232,12 @@ export default function CheckoutPOS() {
 
   const b = quote?.breakdown;
   const totalMnt = b?.totalMnt ?? 0;
-  const creditOffered = features.enabled('CREDIT_SALES');
+  // Credit only for a customer a manager allowed; contract only for a supply/barter partner we owe money to.
+  const creditOffered = features.enabled('CREDIT_SALES') && !!customer?.creditAllowed;
+  const contractPartner = !!customer && (!!customer.sellsToUs || !!customer.barterContract);
+  const contractOffered = features.enabled('PARTNER_ACCOUNTS') && contractPartner && (partnerPayable ?? 0) > 0;
   const deliveryOffered = features.enabled('DELIVERY');
-  const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit;
+  const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit + splitContract;
   const linePrice = new Map((quote?.lines ?? []).map((l) => [l.productId, l]));
   const splitOk = paymentMode === 'SPLIT' && totalMnt > 0 && splitSum === totalMnt && splitSum > 0;
 
@@ -243,6 +249,7 @@ export default function CheckoutPOS() {
         { method: 'QPAY' as const, amount: splitQpay, status: 'PENDING' },
         { method: 'TRANSFER' as const, amount: splitTransfer, status: 'PAID' },
         { method: 'CREDIT' as const, amount: splitCredit, status: 'PENDING' },
+        { method: 'CONTRACT' as const, amount: splitContract, status: 'PAID' },
       ].filter((p) => p.amount > 0);
     }
     return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' || paymentMethod === 'CREDIT' ? 'PENDING' : 'PAID' }];
@@ -251,7 +258,16 @@ export default function CheckoutPOS() {
   /** Picking a registered customer fills the order snapshot (still editable); a company also sets the E-Barimt РД. */
   function pickCustomer(c: Customer | null) {
     setCustomer(c);
+    setPartnerPayable(null);
+    if (paymentMethod === 'CREDIT' || paymentMethod === 'CONTRACT') setPaymentMethod('CASH');
+    setSplitCredit(0);
+    setSplitContract(0);
     if (!c) return;
+    if ((c.sellsToUs || c.barterContract) && features.enabled('PARTNER_ACCOUNTS')) {
+      api<{ payableMnt: number }>(`/accounts/${c.id}`)
+        .then((st) => setPartnerPayable(st.payableMnt))
+        .catch(() => setPartnerPayable(null));
+    }
     setCustomerName(c.name);
     setCustomerPhone(c.phone);
     if (c.type === 'COMPANY' && c.regNumber) {
@@ -296,12 +312,16 @@ export default function CheckoutPOS() {
   const usesQpay = paymentMode === 'SPLIT' ? splitQpay > 0 : paymentMethod === 'QPAY';
   // On account (зарлагаар): goods leave now, the customer pays later; only for a registered customer.
   const usesCredit = paymentMode === 'SPLIT' ? splitCredit > 0 : paymentMethod === 'CREDIT';
+  const contractAmount = paymentMode === 'SPLIT' ? splitContract : paymentMethod === 'CONTRACT' ? totalMnt : 0;
+  const contractOk = contractAmount === 0 || (contractOffered && contractAmount <= (partnerPayable ?? 0) && !(paymentMode === 'SPLIT' && splitCredit > 0));
   const confirmLabel = usesQpay
     ? paymentMode === 'SPLIT'
       ? `Баталгаажуулах + QPay ${tugrik(splitQpay)}`
       : 'Захиалга баталгаажуулах + QPay'
     : paymentMethod === 'CREDIT' && paymentMode === 'SINGLE'
-      ? 'Зарлагаар олгох (дараа төлнө)'
+      ? 'Дараа төлөхөөр олгох (зээл)'
+      : paymentMethod === 'CONTRACT' && paymentMode === 'SINGLE'
+      ? 'Гэрээгээр олгох (өглөгөөс хасна)'
       : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж'})`;
   const canSubmit =
     !busy &&
@@ -311,6 +331,7 @@ export default function CheckoutPOS() {
     !!quote &&
     (paymentMode === 'SINGLE' || splitOk) &&
     (!usesCredit || (creditOffered && !!customer)) &&
+    contractOk &&
     (billType === 'CITIZEN' || /^[0-9A-Za-z]{7,12}$/.test(customerRegNumber.trim()));
 
   return (
@@ -566,7 +587,7 @@ export default function CheckoutPOS() {
           />
 
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400">И-Баримт</label>
+            <label className="text-xs font-semibold text-slate-400">{features.enabled('EBARIMT') ? 'И-Баримт' : 'Худалдан авагч (нэхэмжлэхэд)'}</label>
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
@@ -616,6 +637,7 @@ export default function CheckoutPOS() {
                   setSplitQpay(0);
                   setSplitCredit(0);
                   setSplitTransfer(0);
+                  setSplitContract(0);
                 }}
                 className={chipClass(paymentMode === 'SPLIT', 'bg-slate-100 text-slate-950 border-slate-100 font-bold')}
               >
@@ -646,11 +668,24 @@ export default function CheckoutPOS() {
                     onClick={() => setPaymentMethod('CREDIT')}
                     className={`col-span-3 ${chipClass(paymentMethod === 'CREDIT', 'bg-amber-600 text-white border-amber-500 font-semibold')}`}
                   >
-                    Зарлагаар олгох (дараа төлнө)
+                    Дараа төлөх (зээлээр олгох)
                   </button>
                 )}
-                {paymentMethod === 'CREDIT' && !customer && (
-                  <p className="col-span-3 text-[11px] text-amber-300">Зарлагаар олгоход бүртгэлтэй харилцагч сонгоно уу.</p>
+                {contractOffered && (
+                  <button
+                    type="button"
+                    disabled={totalMnt > (partnerPayable ?? 0)}
+                    onClick={() => setPaymentMethod('CONTRACT')}
+                    className={`col-span-3 disabled:opacity-40 ${chipClass(paymentMethod === 'CONTRACT', 'bg-emerald-700 text-white border-emerald-500 font-semibold')}`}
+                  >
+                    Гэрээгээр олгох — бидний өглөгөөс хасна ({tugrik(partnerPayable ?? 0)})
+                  </button>
+                )}
+                {contractOffered && totalMnt > (partnerPayable ?? 0) && (
+                  <p className="col-span-3 text-[11px] text-slate-400">Дүн өглөгөөс их байна — «Хувааж төлөх»-өөр үлдэгдлийг өөр хэлбэрээр авна.</p>
+                )}
+                {customer && !customer.creditAllowed && features.enabled('CREDIT_SALES') && (
+                  <p className="col-span-3 text-[11px] text-slate-500">Энэ харилцагчид дараа төлөх эрх олгогдоогүй (Харилцагчид → менежер).</p>
                 )}
               </div>
             ) : (
@@ -697,13 +732,26 @@ export default function CheckoutPOS() {
                 </label>
                 {creditOffered && (
                   <label className="block text-slate-400">
-                    Зарлагаар (дараа төлнө){!customer && ' — харилцагч сонгоно уу'}
+                    Дараа төлөх (зээл)
                     <input
                       type="number"
                       min={0}
                       className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                       value={splitCredit}
                       onChange={(e) => setSplitCredit(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    />
+                  </label>
+                )}
+                {contractOffered && (
+                  <label className="block text-slate-400">
+                    Гэрээгээр — өглөгөөс хасна (≤ {tugrik(partnerPayable ?? 0)})
+                    <input
+                      type="number"
+                      min={0}
+                      max={partnerPayable ?? 0}
+                      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
+                      value={splitContract}
+                      onChange={(e) => setSplitContract(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                     />
                   </label>
                 )}
@@ -739,12 +787,12 @@ export default function CheckoutPOS() {
                     <span>Хүргэлт ({selectedZone?.nameMn}):</span>
                     <span>{tugrik(b.deliveryFeeMnt)}</span>
                   </div>
-                ) : (
+                ) : deliveryOffered ? (
                   <div className="flex justify-between text-emerald-400 font-medium">
                     <span>Өөрөө авах:</span>
                     <span>0₮</span>
                   </div>
-                )}
+                ) : null}
                 {ourDelivery && isUnloading && (
                   <div className="flex justify-between text-slate-400">
                     <span>Буулгалт:</span>

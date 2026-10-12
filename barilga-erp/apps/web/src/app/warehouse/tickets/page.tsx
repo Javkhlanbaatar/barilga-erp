@@ -191,16 +191,20 @@ export default function WarehouseTicketsPage() {
       <p className="text-sm text-slate-300">
         {o.customerName} · {o.customerPhone}
       </p>
+      {features.enabled('DELIVERY') && (
       <p className="text-sm">
         <span className="text-slate-500">Хүргэлт: </span>
         {DELIVERY_MN[o.deliveryMethod] ?? o.deliveryMethod}
         {o.deliveryMethod === 'OUR_DELIVERY' && o.zone?.nameMn ? ` · ${o.zone.nameMn}` : ''}
         {o.deliveryAddress?.trim() ? ` · ${o.deliveryAddress}` : ''}
       </p>
+      )}
+      {features.enabled('DELIVERY') && (
       <p className="text-xs text-slate-500">
         {Number(o.totalWeightKg).toLocaleString('mn-MN')} кг · {Number(o.totalVolumeM3)} м³ · урт {Number(o.maxLengthM)} м · машин:{' '}
         {vehicleLabel(o.assignedVehicle)}
       </p>
+      )}
     </>
   );
 

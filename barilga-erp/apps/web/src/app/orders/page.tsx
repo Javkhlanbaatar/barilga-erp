@@ -4,10 +4,12 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
-import { Order, VEHICLE_LABEL } from '@/lib/types';
+import { useFeatures } from '@/lib/features';
+import { ORDER_STATUS_LABEL, Order, VEHICLE_LABEL } from '@/lib/types';
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const delivery = useFeatures().enabled('DELIVERY');
   useEffect(() => {
     api<Order[]>('/orders').then(setOrders);
   }, []);
@@ -21,10 +23,11 @@ export default function OrdersPage() {
             <tr>
               <th className="p-3">Дугаар</th>
               <th>Харилцагч</th>
-              <th>Бүс</th>
+              <th>Огноо</th>
+              {delivery && <th>Бүс</th>}
               <th>Төлөв</th>
-              <th>Хэмжээ / ангилал</th>
-              <th>Гадна тээвэр (дугаар)</th>
+              {delivery && <th>Хэмжээ / ангилал</th>}
+              {delivery && <th>Гадна тээвэр (дугаар)</th>}
               <th>Ачигч</th>
               <th>Дүн</th>
             </tr>
@@ -38,26 +41,29 @@ export default function OrdersPage() {
                   </Link>
                 </td>
                 <td>{o.customerName}</td>
-                <td>{o.zone?.nameMn}</td>
+                <td className="whitespace-nowrap text-xs text-slate-400">{o.createdAt ? new Date(o.createdAt).toLocaleString('mn-MN', { timeZone: 'Asia/Ulaanbaatar' }) : ''}</td>
+                {delivery && <td>{o.zone?.nameMn}</td>}
                 <td>
-                  {o.status}
+                  {ORDER_STATUS_LABEL[o.status] ?? o.status}
                   {o.items?.some(
                     (item) =>
                       item.sourceType !== 'EXTERNAL_SUPPLIER' && Number(item.product?.stockQty) < 0,
                   ) ? (
                     <span className="ml-2 inline-flex rounded-full border border-rose-600 bg-rose-950/70 px-2 py-0.5 text-[10px] font-semibold text-rose-100">
-                      Oversold
+                      Илүү зарагдсан
                     </span>
                   ) : null}
                 </td>
-                <td>{o.assignedVehicle ? VEHICLE_LABEL[o.assignedVehicle] ?? o.assignedVehicle : '—'}</td>
-                <td>
-                  {o.deliveryMethod === 'SELF_PICKUP' || o.deliveryMethod === 'CUSTOMER_DRIVER'
-                    ? '—'
-                    : o.vehicleNumber
-                      ? `${o.vehicleNumber}${o.driverPhone ? ` · ${o.driverPhone}` : ''}`
-                      : '—'}
-                </td>
+                {delivery && <td>{o.assignedVehicle ? VEHICLE_LABEL[o.assignedVehicle] ?? o.assignedVehicle : '—'}</td>}
+                {delivery && (
+                  <td>
+                    {o.deliveryMethod === 'SELF_PICKUP' || o.deliveryMethod === 'CUSTOMER_DRIVER'
+                      ? '—'
+                      : o.vehicleNumber
+                        ? `${o.vehicleNumber}${o.driverPhone ? ` · ${o.driverPhone}` : ''}`
+                        : '—'}
+                  </td>
+                )}
                 <td>{o.preparedBy?.fullName ?? o.completedBy?.fullName ?? '—'}</td>
                 <td>{tugrik(o.totalMnt)}</td>
               </tr>

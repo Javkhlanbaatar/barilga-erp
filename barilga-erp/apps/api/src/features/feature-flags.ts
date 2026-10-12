@@ -10,7 +10,7 @@ export const FEATURES = {
   WAREHOUSE_REPORT: { default: true, nameMn: 'Агуулахын тайлан' },
   DELIVERY: { default: false, nameMn: 'Хүргэлт (бүс, хүргэлтийн төлбөр, машин, жолооч)' },
   UNLOADING: { default: false, nameMn: 'Буулгалтын үйлчилгээ (хураамжтай)' },
-  CREDIT_SALES: { default: true, nameMn: 'Зарлагаар олгох (дараа төлөх)' },
+  CREDIT_SALES: { default: true, nameMn: 'Дараа төлөхөөр олгох (зээл)' },
   PRICE_LISTS: { default: true, nameMn: 'Харилцагчийн үнийн жагсаалт (өртөг, бартер г.м.)' },
   PARTNER_ACCOUNTS: { default: true, nameMn: 'Харилцагчийн тооцоо (авлага, өглөг, хасалт)' },
   HR: { default: true, nameMn: 'Ирц ба цалин' },

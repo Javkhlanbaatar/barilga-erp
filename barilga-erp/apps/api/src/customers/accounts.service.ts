@@ -88,7 +88,7 @@ export class AccountsService {
       lines.push({
         at: row.order.createdAt,
         kind: 'ON_ACCOUNT',
-        description: `Зарлагаар олгосон — ${row.order.orderNumber}`,
+        description: `Дараа төлөхөөр авсан — ${row.order.orderNumber}`,
         effectMnt: original,
         orderId: row.order.id,
       });

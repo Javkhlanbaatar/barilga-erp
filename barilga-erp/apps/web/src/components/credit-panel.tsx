@@ -49,7 +49,7 @@ export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order
     <form onSubmit={submit} className="card mb-6 border-amber-700/60 space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="font-semibold">Зарлагаар олгосон — өр</h3>
+          <h3 className="font-semibold">Дараа төлөх — өр</h3>
           <p className="text-sm text-slate-400">
             Үлдэгдэл өр: <span className="text-lg font-bold text-amber-300">{tugrik(owed)}</span>.
             {features.enabled('EBARIMT') && ' И-баримт өр бүрэн төлөгдөхөд гарна.'}
