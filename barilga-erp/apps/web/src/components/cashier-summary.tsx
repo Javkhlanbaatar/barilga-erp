@@ -76,6 +76,7 @@ export function CashierSummary() {
                   <Row label="Бэлэн" value={report.totals.cashMnt} tone="text-emerald-300" />
                   <Row label="Карт" value={report.totals.cardMnt} tone="text-violet-300" />
                   <Row label="QPay" value={report.totals.qpayMnt} tone="text-sky-300" />
+                  <Row label="Шилжүүлэг" value={report.totals.transferMnt ?? 0} tone="text-indigo-300" />
                   <Row label="Буцаалт" value={refunds} tone="text-rose-300" />
                 </div>
                 {(report.refunds?.count ?? 0) > 0 && (

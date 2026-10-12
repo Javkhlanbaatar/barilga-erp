@@ -28,6 +28,28 @@ export class GatherService {
     private readonly features: FeaturesService,
   ) {}
 
+  /** Net quantities still to be handed over by other paid orders, per warehouse and product. */
+  private async committedElsewhere(orderId: string, productIds: string[]) {
+    const out = new Map<string, Prisma.Decimal>();
+    if (!productIds.length) return out;
+    const others = await this.prisma.order.findMany({
+      where: { id: { not: orderId }, status: OrderStatus.READY_FOR_LOADING, items: { some: { productId: { in: productIds } } } },
+      include: { items: true },
+    });
+    if (!others.length) return out;
+    const fallback = await this.inventory.defaultWarehouseId();
+    const returned = await this.prisma.returnItem.findMany({ where: { orderItem: { orderId: { in: others.map((o) => o.id) } } } });
+    for (const o of others) {
+      const wh = o.warehouseId ?? fallback;
+      const mine = returned.filter((r) => o.items.some((i) => i.id === r.orderItemId));
+      for (const d of planFulfillment(o.items, mine).deductions) {
+        const key = `${wh}|${d.productId}`;
+        out.set(key, (out.get(key) ?? new Prisma.Decimal(0)).plus(d.quantity));
+      }
+    }
+    return out;
+  }
+
   /** Read-only: what the order needs and where it would be collected from. */
   async plan(orderId: string) {
     const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
@@ -54,10 +76,16 @@ export class GatherService {
         : Promise.resolve([]),
     ]);
 
+    // Stock other paid orders will take out of a warehouse is not free to count for this one (stock only
+    // leaves the ledger when an order is handed over).
+    const committed = await this.committedElsewhere(orderId, productIds);
     const plan = planGather({
       dispatchWarehouseId,
       needs,
-      balances: balances.map((b) => ({ ...b, quantity: new Prisma.Decimal(b.quantity.toString()) })),
+      balances: balances.map((b) => ({
+        ...b,
+        quantity: new Prisma.Decimal(b.quantity.toString()).minus(committed.get(`${b.warehouseId}|${b.productId}`) ?? 0),
+      })),
       inTransitToDispatch: inTransit.map((i) => ({ productId: i.productId, quantity: new Prisma.Decimal(i.quantity.toString()) })),
       sourceWarehouseIds: warehouses.map((w) => w.id),
     });

@@ -5,15 +5,27 @@ import { POS_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
+import { AccountsService } from './accounts.service';
 import { CustomersService } from './customers.service';
-import { CreateCustomerDto, UpdateCustomerDto } from './dto/customer.dto';
+import { CreateCustomerDto, PayDebtDto, UpdateCustomerDto } from './dto/customer.dto';
 
 @Controller('customers')
 @UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
 @RequireFeature('CUSTOMERS')
 @Roles(...POS_ROLES)
 export class CustomersController {
-  constructor(private readonly customers: CustomersService) {}
+  constructor(
+    private readonly customers: CustomersService,
+    private readonly accounts: AccountsService,
+  ) {}
+
+  /** The customer pays off their debt; the money goes to the oldest open orders first. */
+  @Post(':id/pay-debt')
+  @Roles(...POS_ROLES)
+  @RequireFeature('CREDIT_SALES')
+  payDebt(@Param('id') id: string, @Body() dto: PayDebtDto, @CurrentUser() user: AuthUser) {
+    return this.accounts.payDebt(id, dto.method, dto.amountMnt, user);
+  }
 
   @Get()
   search(@Query('q') q?: string, @Query('all') all?: string) {

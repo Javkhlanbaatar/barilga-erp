@@ -58,7 +58,8 @@ export class InvoicesService {
   static money(row: MoneyInput, now = new Date()) {
     const live = row.order.payments.filter((p) => p.status !== PaymentStatus.EXPIRED && p.status !== PaymentStatus.FAILED);
     const owedMnt = live.filter((p) => p.status === PaymentStatus.UNPAID).reduce((s, p) => s + p.amountMnt, 0);
-    const paidMnt = Math.max(0, row.order.totalMnt - owedMnt);
+    // What was actually settled (money or offset); goods returned against the debt are not "paid".
+    const paidMnt = live.filter((p) => p.status === PaymentStatus.PAID).reduce((s, p) => s + p.amountMnt, 0);
     let state: InvoiceState;
     if (row.cancelledAt || row.order.status === OrderStatus.CANCELLED) state = 'CANCELLED';
     else if (owedMnt === 0 && live.length > 0) state = 'PAID';

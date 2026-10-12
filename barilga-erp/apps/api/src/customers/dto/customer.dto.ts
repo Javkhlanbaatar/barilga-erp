@@ -1,6 +1,6 @@
 import { CustomerType } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsEnum, IsIn, IsInt, IsOptional, IsString, Matches, Min, MaxLength, MinLength } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 const upper = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
@@ -139,4 +139,13 @@ export class UpdateCustomerDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+}
+
+export class PayDebtDto {
+  @IsIn(['CASH', 'CARD', 'TRANSFER'])
+  method!: 'CASH' | 'CARD' | 'TRANSFER';
+
+  @IsInt()
+  @Min(1)
+  amountMnt!: number;
 }

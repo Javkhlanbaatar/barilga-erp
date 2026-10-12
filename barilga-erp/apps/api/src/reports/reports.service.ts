@@ -111,7 +111,9 @@ export class ReportsService {
     const paidWhere: Prisma.PaymentWhereInput = {
       status: PaymentStatus.PAID,
       OR: [{ paidAt: inRange }, { paidAt: null, createdAt: inRange }],
-      ...(cashierId ? { order: { createdById: cashierId } } : {}),
+      // A cashier's money is what they recorded; rows from before that was stored (and QPay paid by the
+      // customer) fall back to whoever made the order.
+      ...(cashierId ? { AND: [{ OR: [{ recordedById: cashierId }, { recordedById: null, order: { createdById: cashierId } }] }] } : {}),
     };
 
     const refundWhere: Prisma.SalesReturnWhereInput = {

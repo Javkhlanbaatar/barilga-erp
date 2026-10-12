@@ -454,7 +454,7 @@ export type CustomerDetail = Customer & {
 
 export type PriceList = { id: string; name: string; notes: string | null; isActive: boolean; productCount?: number; customerCount?: number };
 
-export type TransferStatus = 'IN_TRANSIT' | 'RECEIVED' | 'CANCELLED';
+export type TransferStatus = 'REQUESTED' | 'IN_TRANSIT' | 'RECEIVED' | 'CANCELLED';
 
 type WarehouseRef = { id: string; code: string; name: string };
 type PersonRef = { id: string; fullName: string } | null;
@@ -467,14 +467,24 @@ export type StockTransfer = {
   toWarehouse: WarehouseRef;
   notes: string | null;
   order: { id: string; orderNumber: string } | null;
+  requestedBy?: PersonRef;
+  requestedAt?: string | null;
   sentBy: PersonRef;
-  sentAt: string;
+  sentAt: string | null;
+  hasShortage?: boolean;
   receivedBy: PersonRef;
   receivedAt: string | null;
   cancelledBy: PersonRef;
   cancelledAt: string | null;
   cancelReason: string | null;
-  items: Array<{ id: string; quantity: string | number; product: { id: string; sku: string; nameMn: string; unit: string } }>;
+  items: Array<{
+    id: string;
+    quantity: string | number;
+    requestedQty?: string | number | null;
+    receivedQty?: string | number | null;
+    shortageReason?: string | null;
+    product: { id: string; sku: string; nameMn: string; unit: string };
+  }>;
 };
 
 export type GatherPlan = {

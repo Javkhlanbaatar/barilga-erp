@@ -246,6 +246,10 @@ export class OrdersService {
       if (!customer.contractPartner) {
         throw new ForbiddenException('Энэ харилцагч нийлүүлэгч эсвэл бартерын гэрээтэй биш / Customer has no supply or barter contract');
       }
+      // The other parts must be paid on the spot, so the goods are released (and netted) right away.
+      if (splitMethods.some((m) => m === CheckoutPaymentMethod.QPAY || m === CheckoutPaymentMethod.INVOICE)) {
+        throw new BadRequestException('Гэрээгээр олгохдоо үлдсэн хэсгийг бэлэн, карт эсвэл шилжүүлгээр авна / Contract part goes with cash, card or transfer only');
+      }
       if (contractSplits.length > 1 || splitMethods.includes(CheckoutPaymentMethod.CREDIT)) {
         throw new BadRequestException('Гэрээгээр болон дараа төлөхөөр нэг захиалгад зэрэг олгохгүй / Only one contract part, not combined with on-account');
       }
@@ -294,7 +298,7 @@ export class OrdersService {
       data: {
         orderNumber,
         status: OrderStatus.PENDING_PAYMENT,
-        customerName: dto.customerName,
+        customerName: dto.customerName?.trim() || 'Энгийн харилцагч',
         customerPhone: dto.customerPhone,
         customerId,
         priceListId: customer?.priceListId ?? null,
@@ -339,7 +343,7 @@ export class OrdersService {
     // Recorded as an on-account part, then closed at once against our payable below.
     if (contract) contract.method = CheckoutPaymentMethod.CREDIT;
     try {
-      const recorded = await this.payments.settleSplits(order.id, splits);
+      const recorded = await this.payments.settleSplits(order.id, splits, user.id);
       this.log.log(
         `Order ${order.orderNumber} created; ${recorded.length} payment split(s)`,
       );
@@ -380,23 +384,31 @@ export class OrdersService {
    * as an ordinary debt on the partner's account for a manager to settle — it is never silently dropped.
    */
   private async closeAgainstPayable(orderId: string, orderNumber: string, customerId: string, amountMnt: number, actorId: string) {
-    const payable = await this.partnerPayable(customerId);
-    if (amountMnt > payable) {
-      this.log.warn(`Contract sale ${orderNumber}: payable ${payable}₮ < ${amountMnt}₮; left on the partner account as debt`);
-      return;
+    try {
+      // The payable is re-read inside the same Serializable transaction as the settlement and the OFFSET line,
+      // so two contract sales at once cannot both spend the same payable.
+      await this.payments.settleCredit(orderId, 'OFFSET', amountMnt, actorId, {
+        before: async (tx) => {
+          const agg = await tx.accountEntry.aggregate({ where: { customerId }, _sum: { amountMnt: true } });
+          if (amountMnt > (agg._sum.amountMnt ?? 0)) throw new BadRequestException('payable_shrank');
+        },
+        after: async (tx) => {
+          await tx.accountEntry.create({
+            data: {
+              customerId,
+              kind: AccountEntryKind.OFFSET,
+              amountMnt: -amountMnt,
+              description: `Гэрээгээр олгосон — ${orderNumber}`,
+              refType: 'ORDER',
+              refId: orderId,
+              createdById: actorId,
+            },
+          });
+        },
+      });
+    } catch (err) {
+      this.log.warn(`Contract sale ${orderNumber}: not netted (${err instanceof Error ? err.message : err}); left on the partner account as debt`);
     }
-    await this.payments.settleCredit(orderId, 'OFFSET', amountMnt, actorId);
-    await this.prisma.accountEntry.create({
-      data: {
-        customerId,
-        kind: AccountEntryKind.OFFSET,
-        amountMnt: -amountMnt,
-        description: `Гэрээгээр олгосон — ${orderNumber}`,
-        refType: 'ORDER',
-        refId: orderId,
-        createdById: actorId,
-      },
-    });
   }
 
   /**
@@ -688,6 +700,16 @@ export class OrdersService {
   }
 
   /** The customer pays (part of) what they owe on an order released on account. */
+  /** The waiting part (unpaid QPay or awaited transfer) was paid another way at the till. */
+  async payRemaining(orderId: string, method: 'CASH' | 'CARD' | 'TRANSFER', user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can take payments');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    await this.payments.payRemaining(orderId, method, user.id);
+    return this.findOne(orderId, user);
+  }
+
   async confirmTransfer(orderId: string, user: AuthUser) {
     if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can confirm payments');
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
@@ -771,19 +793,41 @@ export class OrdersService {
     return { id: item.id, pickedAt: item.pickedAt, pickedBy: item.pickedBy };
   }
 
-  async list(user: AuthUser, status?: OrderStatus) {
+  /**
+   * Newest first, one page at a time. `q` matches the order number, phone or customer name (the database
+   * collation folds Latin case only, so Cyrillic names match as typed or with a capital first letter).
+   */
+  async list(user: AuthUser, status?: OrderStatus, filter: { q?: string; from?: string; to?: string; skip?: number; take?: number } = {}) {
     if (user.role === Role.ACHIGCH_BELTGEGCH) {
       throw new ForbiddenException('Warehouse staff must use /orders/tickets');
     }
-    const where: Prisma.OrderWhereInput = {};
-    if (status) where.status = status;
-    const scope = await this.orderScope(user);
-    Object.assign(where, scope);
+    const and: Prisma.OrderWhereInput[] = [await this.orderScope(user)];
+    if (status && status in OrderStatus) and.push({ status });
+    const q = filter.q?.trim();
+    if (q) {
+      const cap = q.charAt(0).toUpperCase() + q.slice(1);
+      and.push({
+        OR: [
+          { orderNumber: { contains: q, mode: 'insensitive' } },
+          { customerPhone: { contains: q } },
+          { customerName: { contains: q, mode: 'insensitive' } },
+          { customerName: { contains: cap } },
+        ],
+      });
+    }
+    const day = (d: string | undefined, end: boolean) =>
+      d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(`${d}T${end ? '23:59:59.999' : '00:00:00.000'}+08:00`) : undefined;
+    const gte = day(filter.from, false);
+    const lte = day(filter.to, true);
+    if (gte || lte) and.push({ createdAt: { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) } });
+    const take = Math.min(Math.max(Number(filter.take) || 50, 1), 200);
+    const skip = Math.max(Number(filter.skip) || 0, 0);
     const rows = await this.prisma.order.findMany({
-      where,
+      where: { AND: and },
       include: ORDER_INCLUDE,
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      skip,
+      take,
     });
     return this.presentOrders(rows, user.role);
   }

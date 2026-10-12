@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { CashierSummary } from '@/components/cashier-summary';
+import { api } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
 import { AuthUser, FeatureKey, ROLE_LABEL } from '@/lib/types';
 
@@ -32,6 +33,27 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [user, setUser] = useState<AuthUser | null>(null);
   const features = useFeatures();
+  const [menuOpen, setMenuOpen] = useState(false);
+  /** Transfers waiting for this user (requests to send + stock to receive), shown as a badge. */
+  const [transfersWaiting, setTransfersWaiting] = useState(0);
+
+  useEffect(() => {
+    if (!user || !features.enabled('STOCK_TRANSFERS')) return;
+    let alive = true;
+    const poll = () =>
+      api<{ total: number }>('/inventory/transfers/pending')
+        .then((p) => alive && setTransfersWaiting(p.total))
+        .catch(() => undefined);
+    void poll();
+    const h = window.setInterval(poll, 60_000);
+    return () => {
+      alive = false;
+      window.clearInterval(h);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, pathname]);
+
+  useEffect(() => setMenuOpen(false), [pathname]);
 
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');
@@ -52,8 +74,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   return (
-    <div className="min-h-screen grid grid-cols-[240px_1fr] print:grid-cols-1">
-      <aside className="bg-steel-900 border-r border-slate-800 p-4 flex flex-col print:hidden">
+    <div className="min-h-screen md:grid md:grid-cols-[240px_1fr] print:block">
+      {/* Phone / tablet: a top bar with a menu button instead of the fixed sidebar. */}
+      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-800 bg-steel-900 px-4 py-2 md:hidden print:hidden">
+        <span className="font-bold">Барилга Хангамж</span>
+        <button className="btn-ghost text-sm" onClick={() => setMenuOpen((o) => !o)} aria-label="Цэс">
+          ☰ Цэс{transfersWaiting > 0 ? ` (${transfersWaiting})` : ''}
+        </button>
+      </div>
+      <aside
+        className={`bg-steel-900 border-r border-slate-800 p-4 flex-col print:hidden ${
+          menuOpen ? 'fixed inset-0 top-[49px] z-30 flex overflow-auto' : 'hidden'
+        } md:static md:flex md:min-h-screen`}
+      >
         <div className="mb-8">
           <p className="text-amber-brand text-[10px] tracking-[0.25em] uppercase">Barilga ERP</p>
           <h1 className="font-bold text-lg">Барилга Хангамж</h1>
@@ -70,6 +103,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
               }`}
             >
               {n.label}
+              {n.href === '/inventory/transfers' && transfersWaiting > 0 && (
+                <span className="ml-2 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">{transfersWaiting}</span>
+              )}
             </Link>
           ))}
         </nav>
@@ -94,7 +130,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
-      <main className="p-6 overflow-auto print:p-0 print:overflow-visible">{children}</main>
+      <main className="p-4 md:p-6 overflow-auto print:p-0 print:overflow-visible">{children}</main>
     </div>
   );
 }

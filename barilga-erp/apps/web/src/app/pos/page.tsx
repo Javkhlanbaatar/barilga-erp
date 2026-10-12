@@ -51,7 +51,24 @@ export default function CheckoutPOS() {
   // Cashiers assigned to a warehouse can only sell from it; admin/manager may pick any.
   const [warehouseLocked, setWarehouseLocked] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('QPAY');
+  // The last single payment method this cashier used (cash until they pick another).
+  const [paymentMethod, setPaymentMethodState] = useState<PaymentMethod>('CASH');
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('pos_pay_method');
+      if (saved === 'QPAY' || saved === 'CARD' || saved === 'TRANSFER') setPaymentMethodState(saved);
+    } catch {
+      // private window: start with cash
+    }
+  }, []);
+  const setPaymentMethod = (m: PaymentMethod) => {
+    setPaymentMethodState(m);
+    try {
+      if (m === 'CASH' || m === 'QPAY' || m === 'CARD' || m === 'TRANSFER') localStorage.setItem('pos_pay_method', m);
+    } catch {
+      // private window: not remembered
+    }
+  };
   const [paymentMode, setPaymentMode] = useState<'SINGLE' | 'SPLIT'>('SINGLE');
   const [splitCash, setSplitCash] = useState(0);
   const [splitCard, setSplitCard] = useState(0);
@@ -151,7 +168,7 @@ export default function CheckoutPOS() {
   }, [ourDelivery, unloadingOffered]);
 
   useEffect(() => {
-    if (!cart.length || !zoneId) {
+    if (!cart.length || (ourDelivery && !zoneId)) {
       setQuote(null);
       return;
     }
@@ -159,7 +176,7 @@ export default function CheckoutPOS() {
     api<Quote>('/orders/quote', {
       method: 'POST',
       body: JSON.stringify({
-        zoneId,
+        zoneId: ourDelivery ? zoneId : undefined,
         deliveryMethod: deliveryType,
         timeCondition: time,
         unloadingRequested: ourDelivery && isUnloading,
@@ -265,7 +282,15 @@ export default function CheckoutPOS() {
     if (paymentMethod === 'CREDIT' || paymentMethod === 'CONTRACT') setPaymentMethod('CASH');
     setSplitCredit(0);
     setSplitContract(0);
-    if (!c) return;
+    if (!c) {
+      // Unlinking clears what the customer filled in, so the next sale cannot go out under their name or РД.
+      setCustomerName('');
+      setCustomerPhone('');
+      setAddress('');
+      setBillType('CITIZEN');
+      setCustomerRegNumber('');
+      return;
+    }
     if ((c.sellsToUs || c.barterContract) && features.enabled('PARTNER_ACCOUNTS')) {
       api<{ payableMnt: number }>(`/accounts/${c.id}`)
         .then((st) => setPartnerPayable(st.payableMnt))
@@ -296,8 +321,9 @@ export default function CheckoutPOS() {
           unloadingRequested: ourDelivery && isUnloading,
           items,
           customerId: customer?.id,
-          customerName,
-          customerPhone,
+          // A walk-in sale needs no name; the order still shows who it was for when one was typed.
+          customerName: customerName.trim() || 'Энгийн харилцагч',
+          customerPhone: customerPhone.trim(),
           deliveryAddress: address,
           billType,
           customerRegNumber: billType === 'COMPANY' ? customerRegNumber : undefined,
@@ -328,16 +354,18 @@ export default function CheckoutPOS() {
       : paymentMethod === 'INVOICE' && paymentMode === 'SINGLE'
       ? 'Нэхэмжлэх үүсгэх (шилжүүлэг хүлээнэ)'
       : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж'})`;
-  const canSubmit =
-    !busy &&
-    cart.length > 0 &&
-    !!customerName &&
-    !!customerPhone &&
-    !!quote &&
-    (paymentMode === 'SINGLE' || splitOk) &&
-    (!usesCredit || (creditOffered && !!customer)) &&
-    contractOk &&
-    (billType === 'CITIZEN' || /^[0-9A-Za-z]{7,12}$/.test(customerRegNumber.trim()));
+  const usesInvoice = paymentMode === 'SPLIT' ? splitInvoice > 0 : paymentMethod === 'INVOICE';
+  // Why the button is disabled, in words, so the cashier is never left guessing.
+  const missing: string[] = [];
+  if (!cart.length) missing.push('бараа нэмнэ үү');
+  else if (!quote) missing.push('үнэ тооцоолж байна…');
+  if (usesInvoice && !customerName.trim()) missing.push('нэхэмжлэхэд харилцагчийн нэр бичнэ үү');
+  if (ourDelivery && (!customerName.trim() || !customerPhone.trim())) missing.push('хүргэлтэд нэр, утас бичнэ үү');
+  if (paymentMode === 'SPLIT' && !splitOk) missing.push('хуваасан дүн нийт дүнтэй тэнцэх ёстой');
+  if (usesCredit && !(creditOffered && customer)) missing.push('дараа төлөх эрхтэй харилцагч сонгоно уу');
+  if (!contractOk) missing.push('гэрээгээр олгох дүн өглөгөөс хэтэрсэн');
+  if (billType === 'COMPANY' && !/^[0-9A-Za-z]{7,12}$/.test(customerRegNumber.trim())) missing.push('байгууллагын РД (7–12 тэмдэгт)');
+  const canSubmit = !busy && missing.length === 0;
 
   return (
     <Shell>
@@ -406,7 +434,10 @@ export default function CheckoutPOS() {
           {scanFlash && <p className="text-emerald-400 text-sm">{scanFlash}</p>}
           {lowStockProducts.length > 0 && (
             <div className="rounded-xl border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
-              Дуусч буй: {lowStockProducts.map((p) => `${p.nameMn} (${Number(p.stockQty)} ${p.unit})`).join(' · ')}
+              Дуусч буй бараа: <b>{lowStockProducts.length}</b>{' '}
+              <a href="/inventory" className="underline">
+                үлдэгдэл харах
+              </a>
             </div>
           )}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -463,17 +494,13 @@ export default function CheckoutPOS() {
                 </span>
                 <input
                   type="number"
-                  min={0.001}
-                  step={1}
+                  min={0}
+                  step="any"
                   className="w-20 bg-slate-950 border border-slate-700 rounded-lg p-1 text-sm"
                   value={l.quantity}
-                  onChange={(e) =>
-                    setCart((prev) =>
-                      prev.map((x) =>
-                        x.product.id === l.product.id ? { ...x, quantity: Number(e.target.value) } : x,
-                      ),
-                    )
-                  }
+                  onChange={(e) => setCart((prev) => prev.map((x) => (x.product.id === l.product.id ? { ...x, quantity: Number(e.target.value) } : x)))}
+                  // Leaving the field at 0 (or empty) removes the line instead of silently dropping it.
+                  onBlur={() => setCart((prev) => prev.filter((x) => !(x.product.id === l.product.id && !(x.quantity > 0))))}
                 />
                 <button type="button" className="text-red-400" onClick={() => setCart((p) => p.filter((x) => x.product.id !== l.product.id))}>
                   ×
@@ -579,18 +606,19 @@ export default function CheckoutPOS() {
 
           {features.enabled('CUSTOMERS') && <CustomerPicker value={customer} onChange={pickCustomer} />}
           <input
-            placeholder="Харилцагчийн нэр"
+            placeholder="Харилцагчийн нэр (заавал биш)"
             className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
             value={customerName}
             onChange={(e) => setCustomerName(e.target.value)}
           />
           <input
-            placeholder="Утас"
+            placeholder="Утас (заавал биш)"
             className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
             value={customerPhone}
             onChange={(e) => setCustomerPhone(e.target.value)}
           />
 
+          {(features.enabled('EBARIMT') || billType === 'COMPANY' || usesInvoice) && (
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-400">{features.enabled('EBARIMT') ? 'И-Баримт' : 'Худалдан авагч (нэхэмжлэхэд)'}</label>
             <div className="grid grid-cols-2 gap-1.5">
@@ -618,6 +646,7 @@ export default function CheckoutPOS() {
               />
             )}
           </div>
+          )}
           {ourDelivery && (
             <input
               placeholder="Хүргэлтийн хаяг"
@@ -852,6 +881,7 @@ export default function CheckoutPOS() {
           >
             {busy ? 'Илгээж байна…' : confirmLabel}
           </button>
+          {!busy && missing.length > 0 && cart.length > 0 && <p className="text-center text-[11px] text-amber-300">{missing.join(' · ')}</p>}
         </div>
       </div>
     </Shell>

@@ -42,7 +42,8 @@ function elapsed(iso: string | null | undefined, now: number) {
   return min < 60 ? `${min} мин` : `${Math.floor(min / 60)} ц ${String(min % 60).padStart(2, '0')} мин`;
 }
 
-function vehicleInfo(o: Order) {
+function vehicleInfo(o: Order, delivery: boolean) {
+  if (!delivery) return o.warehouse?.name ?? '';
   if (isHiredTransport(o.deliveryMethod) && o.vehicleNumber) {
     return `${vehicleLabel(o.assignedVehicle)} · ${o.vehicleNumber}${o.driverPhone ? ` · ${o.driverPhone}` : ''}`;
   }
@@ -59,14 +60,19 @@ export default function WarehouseTicketsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
+  /** Finds "the order for the man at the counter" by number, name or phone. */
+  const [find, setFind] = useState('');
   const staffName = user?.fullName ?? user?.name ?? '';
   const canManageTransport = hasRole(user?.role, TRANSPORT_ROLES);
   const features = useFeatures();
   const picking = features.enabled('PICKING');
 
   // Without the picking module there is no "being prepared" step: everything waits in the queue.
-  const queue = orders.filter((o) => !picking || !o.pickingStartedAt);
-  const preparing = picking ? orders.filter((o) => o.pickingStartedAt) : [];
+  const term = find.trim().toLowerCase();
+  const matches = (o: Order) =>
+    !term || o.orderNumber.toLowerCase().includes(term) || o.customerName.toLowerCase().includes(term) || (o.customerPhone ?? '').includes(term);
+  const queue = orders.filter((o) => (!picking || !o.pickingStartedAt) && matches(o));
+  const preparing = picking ? orders.filter((o) => o.pickingStartedAt && matches(o)) : [];
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -186,7 +192,9 @@ export default function WarehouseTicketsPage() {
     <>
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="font-bold text-lg">{o.orderNumber}</h3>
-        <span className="text-xs text-slate-400">төлсөн {tugrik(o.totalMnt)}</span>
+        <span className="text-xs text-slate-400">
+          {(o.payments ?? []).some((p) => p.method === 'CREDIT' && p.status === 'UNPAID' && p.amountMnt > 0) ? 'дараа төлөх' : 'төлсөн'} {tugrik(o.totalMnt)}
+        </span>
       </div>
       <p className="text-sm text-slate-300">
         {o.customerName} · {o.customerPhone}
@@ -230,9 +238,12 @@ export default function WarehouseTicketsPage() {
             Ээлжинд: <span className="font-semibold text-amber-brand">{staffName}</span>
           </p>
         </div>
-        <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
-          Шинэчлэх
-        </button>
+        <div className="flex gap-2">
+          <input className="w-56" placeholder="Дугаар, нэр, утас…" value={find} onChange={(e) => setFind(e.target.value)} />
+          <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
+            Шинэчлэх
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
@@ -335,7 +346,7 @@ export default function WarehouseTicketsPage() {
               </tr>
             </thead>
             <tbody>
-              {recent.map((o) => (
+              {recent.filter(matches).map((o) => (
                 <tr key={o.id} className="border-t border-slate-800">
                   <td className="p-3 font-semibold text-white">{o.orderNumber}</td>
                   <td className="p-3">
@@ -343,7 +354,7 @@ export default function WarehouseTicketsPage() {
                       {o.customerName}
                       {o.customerPhone ? ` · ${o.customerPhone}` : ''}
                     </p>
-                    <p className="text-xs text-slate-400">{vehicleInfo(o)}</p>
+                    <p className="text-xs text-slate-400">{vehicleInfo(o, features.enabled('DELIVERY'))}</p>
                   </td>
                   <td className="p-3 text-slate-300">{formatTs(o.pickingStartedAt)}</td>
                   <td className="p-3 text-slate-300">{formatTs(o.completedAt ?? o.preparedAt)}</td>

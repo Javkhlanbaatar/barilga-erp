@@ -124,6 +124,8 @@ enum CustomerType {
 
 /// Same legal entity on both sides, so a transfer only moves stock (no sale, no E-Barimt).
 enum TransferStatus {
+  /// A shop asked for stock; nothing has moved yet.
+  REQUESTED
   IN_TRANSIT
   RECEIVED
   CANCELLED
@@ -155,6 +157,7 @@ model User {
   payrolls             Payroll[]
   customersCreated     Customer[]                 @relation("CustomerCreatedBy")
   transfersSent        StockTransfer[]            @relation("TransferSentBy")
+  transfersRequested   StockTransfer[]            @relation("TransferRequestedBy")
   transfersReceived    StockTransfer[]            @relation("TransferReceivedBy")
   transfersCancelled   StockTransfer[]            @relation("TransferCancelledBy")
   featureFlagChanges   FeatureFlag[]              @relation("FeatureFlagUpdatedBy")
@@ -502,6 +505,8 @@ model Payment {
   qpayQrText    String?
   qpayQrImage   String?       @db.Text
   qpayPayload   Json?
+  /// The staff member who recorded the money (cash drawer reports follow this, not who made the order).
+  recordedById  String?       @map("recorded_by_id")
   paidAt        DateTime?
   pollAttempts  Int           @default(0)
   nextPollAt    DateTime?
@@ -624,9 +629,16 @@ model StockTransfer {
   /// Set when the transfer collects stock for an order (its dispatch warehouse is the destination).
   orderId         String?        @map("order_id")
   order           Order?         @relation(fields: [orderId], references: [id])
-  sentById        String         @map("sent_by_id")
-  sentBy          User           @relation("TransferSentBy", fields: [sentById], references: [id])
-  sentAt          DateTime       @default(now()) @map("sent_at")
+  /// Who asked for it (requests only) and when.
+  requestedById   String?        @map("requested_by_id")
+  requestedBy     User?          @relation("TransferRequestedBy", fields: [requestedById], references: [id])
+  requestedAt     DateTime?      @map("requested_at")
+  /// Empty while it is only a request.
+  sentById        String?        @map("sent_by_id")
+  sentBy          User?          @relation("TransferSentBy", fields: [sentById], references: [id])
+  sentAt          DateTime?      @map("sent_at")
+  /// Some lines arrived short (see receivedQty / shortageReason on the items).
+  hasShortage     Boolean        @default(false) @map("has_shortage")
   receivedById    String?        @map("received_by_id")
   receivedBy      User?          @relation("TransferReceivedBy", fields: [receivedById], references: [id])
   receivedAt      DateTime?      @map("received_at")
@@ -652,7 +664,13 @@ model StockTransferItem {
   transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
   productId  String        @map("product_id")
   product    Product       @relation(fields: [productId], references: [id])
+  /// What was sent (0 while it is only a request).
   quantity   Decimal       @db.Decimal(12, 3)
+  /// What the requesting shop asked for.
+  requestedQty   Decimal?  @map("requested_qty") @db.Decimal(12, 3)
+  /// What actually arrived; set on receipt.
+  receivedQty    Decimal?  @map("received_qty") @db.Decimal(12, 3)
+  shortageReason String?   @map("shortage_reason")
 
   @@unique([transferId, productId])
   @@map("inv_stock_transfer_items")

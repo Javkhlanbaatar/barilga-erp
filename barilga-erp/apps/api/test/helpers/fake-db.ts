@@ -121,6 +121,12 @@ class Table {
         out[key] = parent ? parentTable.decorate(parent, isPlain(value) ? (value as Row) : {}) : null;
       }
     }
+    // To-many `items` on the parents that own item rows (transfers, returns, receipts).
+    const owned = NESTED_ITEMS[this.name];
+    if (include?.items && owned) {
+      const child = (this.db as any)[owned.table] as Table;
+      out.items = child.rows.filter((r: Row) => r[owned.fk] === row.id).map((r: Row) => ({ ...r }));
+    }
     if (include?.invoice && this.name === 'order') {
       const inv = this.db.invoice.rows.find((i) => i.orderId === row.id);
       out.invoice = inv ? { ...inv } : null;
@@ -284,6 +290,11 @@ export class FakeDb {
       const mine = this.payment.rows.filter((p) => p.orderId === row.id);
       if (cond.some && !mine.some((p) => this.payment.matches(p, cond.some))) return false;
       if (cond.none && mine.some((p) => this.payment.matches(p, cond.none))) return false;
+      return true;
+    }
+    if (table === 'order' && key === 'items') {
+      const mine = this.orderItem.rows.filter((i) => i.orderId === row.id);
+      if (cond.some && !mine.some((i) => this.orderItem.matches(i, cond.some))) return false;
       return true;
     }
     if (table === 'stockTransferItem' && key === 'transfer') {

@@ -116,6 +116,11 @@ export class SettleCreditDto {
   amountMnt!: number;
 }
 
+export class PayRemainingDto {
+  @IsEnum(['CASH', 'CARD', 'TRANSFER'])
+  method!: 'CASH' | 'CARD' | 'TRANSFER';
+}
+
 export class PaymentSplitDto {
   @IsEnum(CheckoutPaymentMethod)
   method!: CheckoutPaymentMethod;

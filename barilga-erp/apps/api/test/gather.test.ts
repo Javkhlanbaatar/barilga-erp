@@ -121,6 +121,19 @@ describe('gathering an order from all warehouses', () => {
     assert.equal(Number(w.db.product.rows[0].stockQty), 3, '15 in total − 12 sold; nothing created or lost');
   });
 
+  it('stock already promised to another paid order at a warehouse is not counted as free', async () => {
+    const w = world();
+    const { p, order } = await seed(w);
+    // Another paid order at Shop C will take 6 of its 8.
+    const other = await w.db.order.create({
+      data: { orderNumber: 'BR-20261012-0002', status: 'READY_FOR_LOADING', totalMnt: 0, warehouseId: 'wh-c', deliveryMethod: 'SELF_PICKUP' },
+    });
+    await w.db.orderItem.create({ data: { orderId: other.id, productId: p.id, quantity: D(6), unitPrice: 1000, lineTotal: 6000, sourceType: 'INTERNAL' } });
+    const plan = await w.gather.plan(order.id);
+    assert.equal(plan.lines[0].toGather, 7, 'B gives 5, C only its free 2');
+    assert.equal(plan.lines[0].unavailable, 3);
+  });
+
   it('only paid orders waiting for loading can be gathered, and only while transfers are switched on', async () => {
     const w = world();
     const { order } = await seed(w);

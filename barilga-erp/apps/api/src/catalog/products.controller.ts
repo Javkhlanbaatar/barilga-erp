@@ -164,11 +164,16 @@ export class ProductsController {
               'There are several warehouses; change stock with POST /inventory/adjust and a warehouseId',
             );
           }
-          await this.inventory.adjustInTx(tx, {
+          // The typed value is that warehouse's count; compare with its own balance read inside the
+          // transaction (not the product total read earlier, which a sale may have changed meanwhile).
+          const bal = await tx.stockBalance.findUnique({
+            where: { warehouseId_productId: { warehouseId: warehouses[0].id, productId: id } },
+          });
+          const delta = Math.round((stockQty - Number(bal?.quantity ?? 0)) * 1000) / 1000;
+          if (delta !== 0) await this.inventory.adjustInTx(tx, {
             warehouseId: warehouses[0].id,
             productId: id,
-            // Move the total to the typed value by changing the one warehouse that exists.
-            delta: Math.round((stockQty - Number(existing.stockQty)) * 1000) / 1000,
+            delta,
             reason: 'Quantity edited on the product',
             actorId: user.id,
           });

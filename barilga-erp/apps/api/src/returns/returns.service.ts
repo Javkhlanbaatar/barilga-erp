@@ -35,6 +35,8 @@ export class ReturnsService {
           async (tx) => this.processReturn(tx, orderId, dto, user),
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
+        // The return paid off the last of the debt: the order is now fully settled and gets its receipt.
+        if (created.debtClosed) await this.ebarimt.issueAfterPaid(orderId);
         await this.ebarimt.refundForReturn({
           returnId: created.id,
           orderNumber: created.orderNumber,
@@ -158,6 +160,7 @@ export class ReturnsService {
     if (dto.refundMethod === PayMethod.OFFSET) {
       throw new BadRequestException('A refund is paid out (cash, card, QPay, transfer) or taken off a debt (CREDIT)');
     }
+    let debtClosed = false;
     const credit = order.payments.find((p) => p.method === PayMethod.CREDIT && p.status === PaymentStatus.UNPAID);
     if (credit && credit.amountMnt > 0) {
       if (dto.refundMethod !== PayMethod.CREDIT) {
@@ -176,6 +179,7 @@ export class ReturnsService {
         data: { amountMnt: left, ...(left === 0 ? { status: PaymentStatus.PAID, paidAt: new Date() } : {}) },
       });
       if (lowered.count !== 1) throw new BadRequestException('The debt on this order just changed; reload and try again');
+      debtClosed = left === 0;
     } else if (dto.refundMethod === PayMethod.CREDIT) {
       throw new BadRequestException('Nothing is owed on this order; choose how the money is refunded');
     }
@@ -236,6 +240,7 @@ export class ReturnsService {
     return {
       id: salesReturn.id,
       refundAmount,
+      debtClosed,
       orderNumber: order.orderNumber,
       receiptId: order.receiptId,
       ebarimtItems: returnLines.map((l) => ({

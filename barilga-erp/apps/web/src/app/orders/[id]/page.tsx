@@ -94,7 +94,14 @@ export default function OrderDetailPage() {
   const hasPaidSplit = splits.some((p) => p.status === 'PAID');
   const canCancel = canCancelRole && order.status === 'PENDING_PAYMENT' && !hasPaidSplit;
   // Fees can only change before any money is received; the server re-issues the QPay invoice.
-  const canEditFees = canOverrideFees && order.status === 'PENDING_PAYMENT' && !hasPaidSplit;
+  // Only delivery/unloading/time fees exist, so there is nothing to edit while delivery is switched off.
+  const canEditFees = canOverrideFees && order.status === 'PENDING_PAYMENT' && !hasPaidSplit && features.enabled('DELIVERY');
+  // A waiting QPay invoice or awaited transfer that the customer settled another way at the till.
+  const waitingMnt =
+    order.status === 'PENDING_PAYMENT'
+      ? (order.payments ?? []).filter((p) => p.status === 'UNPAID' && (p.method === 'QPAY' || p.method === 'TRANSFER')).reduce((s, p) => s + p.amountMnt, 0)
+      : 0;
+  const canTakePayment = user?.role === 'ADMIN' || user?.role === 'MANAGER' || user?.role === 'BORLUULAGCH';
   const canReturn =
     (user?.role === 'ADMIN' || user?.role === 'MANAGER' || user?.role === 'BORLUULAGCH') &&
     (order.status === 'COMPLETED' || order.status === 'READY_FOR_LOADING');
@@ -320,8 +327,38 @@ export default function OrderDetailPage() {
               Захиалга цуцлах
             </button>
           )}
+          {canTakePayment && (
+            <a href="/pos" className="btn-primary text-sm">
+              + Шинэ борлуулалт
+            </a>
+          )}
         </div>
       </div>
+      {canTakePayment && waitingMnt > 0 && (
+        <div className="card mb-6 flex flex-wrap items-center justify-between gap-2 border-amber-700/60">
+          <p className="text-sm">
+            Хүлээгдэж буй төлбөр: <b>{tugrik(waitingMnt)}</b>. Харилцагч өөр хэлбэрээр төлсөн бол:
+          </p>
+          <div className="flex gap-2">
+            {(['CASH', 'CARD', 'TRANSFER'] as const).map((m) => (
+              <button
+                key={m}
+                className="btn-ghost text-sm"
+                onClick={async () => {
+                  if (!window.confirm(`${tugrik(waitingMnt)}-ийг ${PAY_LABEL[m]}-ээр авсан уу? QPay нэхэмжлэх хүчингүй болно.`)) return;
+                  try {
+                    setOrder(await api<Order>(`/orders/${order.id}/pay-remaining`, { method: 'POST', body: JSON.stringify({ method: m }) }));
+                  } catch (err) {
+                    window.alert(err instanceof Error ? err.message : 'Алдаа');
+                  }
+                }}
+              >
+                {PAY_LABEL[m]}-ээр авсан
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {canDispatch && order.status === 'READY_FOR_LOADING' && features.enabled('STOCK_TRANSFERS') && (
         <GatherPanel orderId={order.id} />
       )}
@@ -329,7 +366,7 @@ export default function OrderDetailPage() {
         <CreditPanel order={order} onPaid={setOrder} />
       )}
       {features.enabled('INVOICES') && <InvoicePanel order={order} canManage={canDispatch} onOrder={setOrder} />}
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid gap-6 md:grid-cols-2">
         <div className="card space-y-4">
           <h3 className="font-semibold">Төлбөрийн хуваарилалт</h3>
           {splits.map((p) => (

@@ -5,7 +5,16 @@ import { api } from '@/lib/api';
 import type { Customer } from '@/lib/types';
 
 /** Search registered customers at the till. Picking one links the order to them; walk-in sales need none. */
-export function CustomerPicker({ value, onChange }: { value: Customer | null; onChange: (c: Customer | null) => void }) {
+export function CustomerPicker({
+  value,
+  onChange,
+  filter,
+}: {
+  value: Customer | null;
+  onChange: (c: Customer | null) => void;
+  /** Narrows the matches, e.g. to suppliers on a goods receipt. */
+  filter?: (c: Customer) => boolean;
+}) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Customer[]>([]);
   const [open, setOpen] = useState(false);
@@ -18,7 +27,8 @@ export function CustomerPicker({ value, onChange }: { value: Customer | null; on
     }
     const handle = window.setTimeout(async () => {
       try {
-        setResults(await api<Customer[]>(`/customers?q=${encodeURIComponent(term)}`));
+        const found = await api<Customer[]>(`/customers?q=${encodeURIComponent(term)}`);
+        setResults(filter ? found.filter(filter) : found);
         setOpen(true);
       } catch {
         setResults([]);

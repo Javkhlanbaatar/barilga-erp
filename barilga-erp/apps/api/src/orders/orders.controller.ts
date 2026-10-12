@@ -15,6 +15,7 @@ import {
   CreateOrderDto,
   OverrideFeesDto,
   PickItemDto,
+  PayRemainingDto,
   SettleCreditDto,
   QuoteOrderDto,
 } from './dto/order.dto';
@@ -51,8 +52,16 @@ export class OrdersController {
 
   @Get()
   @Roles(Role.ADMIN, Role.MANAGER, Role.BORLUULAGCH)
-  list(@CurrentUser() user: AuthUser, @Query('status') status?: OrderStatus) {
-    return this.orders.list(user, status);
+  list(
+    @CurrentUser() user: AuthUser,
+    @Query('status') status?: OrderStatus,
+    @Query('q') q?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.orders.list(user, status, { q, from, to, skip: skip ? Number(skip) : undefined, take: take ? Number(take) : undefined });
   }
 
   /** Paid release tickets for warehouse loading only. */
@@ -111,6 +120,13 @@ export class OrdersController {
   @Roles(Role.BORLUULAGCH, Role.ADMIN, Role.MANAGER)
   issueEbarimt(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.orders.issueEbarimt(id, user);
+  }
+
+  /** The waiting part of an order (QPay never paid, transfer came as cash…) was paid another way. */
+  @Post(':id/pay-remaining')
+  @Roles(...POS_ROLES)
+  payRemaining(@Param('id') id: string, @Body() dto: PayRemainingDto, @CurrentUser() user: AuthUser) {
+    return this.orders.payRemaining(id, dto.method, user);
   }
 
   /** The invoiced bank transfer arrived: release the order. */

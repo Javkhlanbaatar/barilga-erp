@@ -120,7 +120,8 @@ export class CustomersService {
           method: PayMethod.CREDIT,
           status: PaymentStatus.UNPAID,
           amountMnt: { gt: 0 },
-          order: { customerId: id, status: { not: OrderStatus.CANCELLED } },
+          // Same rule as the partner account: only released goods are owed.
+          order: { customerId: id, status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] } },
         },
         include: { order: { select: { id: true, orderNumber: true, totalMnt: true, createdAt: true } } },
         orderBy: { createdAt: 'asc' },

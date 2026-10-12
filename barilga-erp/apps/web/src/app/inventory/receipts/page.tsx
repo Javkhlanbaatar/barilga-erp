@@ -103,7 +103,7 @@ export default function ReceiptsPage() {
 
   function addLine(p: Product) {
     if (lines.some((l) => l.productId === p.id)) return;
-    setLines([...lines, { productId: p.id, sku: p.sku, nameMn: p.nameMn, unit: p.unit, quantity: '', unitCost: '' }]);
+    setLines([...lines, { productId: p.id, sku: p.sku, nameMn: p.nameMn, unit: p.unit, quantity: '1', unitCost: '' }]);
     setSearch('');
     setResults([]);
   }
@@ -271,6 +271,7 @@ export default function ReceiptsPage() {
                     setPartner(c);
                     if (c) setSupplierName(c.name);
                   }}
+                  filter={(c) => !!c.sellsToUs || !!c.barterContract}
                 />
                 {!partner && (
                   <input
@@ -290,7 +291,27 @@ export default function ReceiptsPage() {
             </div>
 
             <div className="relative">
-              <input className="w-full" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Бараа хайх (код эсвэл нэр)…" />
+              <input
+                className="w-full"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  // Barcode scanner / Enter: add the exact code or the only match.
+                  if (e.key !== 'Enter') return;
+                  e.preventDefault();
+                  const t = search.trim().toLowerCase();
+                  const hit = results.find((r) => r.sku.toLowerCase() === t) ?? (results.length === 1 ? results[0] : undefined);
+                  if (hit) return addLine(hit);
+                  // A scanner is faster than the search: look the code up directly.
+                  void api<Product[]>(`/products?q=${encodeURIComponent(search.trim())}`)
+                    .then((found) => {
+                      const exact = found.find((r) => r.sku.toLowerCase() === t);
+                      if (exact) addLine(exact);
+                    })
+                    .catch(() => undefined);
+                }}
+                placeholder="Бараа хайх эсвэл баркод уншуулах (Enter нэмнэ)…"
+              />
               {results.length > 0 && (
                 <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded border border-slate-700 bg-steel-900 divide-y divide-slate-800">
                   {results.map((p) => (

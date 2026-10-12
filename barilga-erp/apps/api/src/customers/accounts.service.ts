@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AccountEntryKind, OrderStatus, PaymentStatus, PayMethod, Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PaymentService } from '../payment/payment.service';
@@ -48,7 +48,8 @@ export class AccountsService {
         method: PayMethod.CREDIT,
         status: PaymentStatus.UNPAID,
         amountMnt: { gt: 0 },
-        order: { customerId, status: { not: OrderStatus.CANCELLED } },
+        // Only goods actually released are owed; a pending order is still waiting for its other payments.
+        order: { customerId, status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] } },
       },
       include: { order: { select: { id: true, orderNumber: true, createdAt: true } } },
       orderBy: { createdAt: 'asc' },
@@ -71,7 +72,7 @@ export class AccountsService {
     const customer = await this.requireCustomer(customerId);
     const [creditRows, creditReturns, entries] = await Promise.all([
       this.prisma.payment.findMany({
-        where: { method: PayMethod.CREDIT, order: { customerId, status: { not: OrderStatus.CANCELLED } } },
+        where: { method: PayMethod.CREDIT, order: { customerId, status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] } } },
         include: { order: { select: { id: true, orderNumber: true, createdAt: true } } },
       }),
       this.prisma.salesReturn.findMany({
@@ -146,7 +147,7 @@ export class AccountsService {
           method: PayMethod.CREDIT,
           status: PaymentStatus.UNPAID,
           amountMnt: { gt: 0 },
-          order: { status: { not: OrderStatus.CANCELLED } },
+          order: { status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] } },
         },
         include: { order: { select: { customerId: true } } },
       }),
@@ -245,16 +246,24 @@ export class AccountsService {
     for (const row of await this.openCredit(customerId)) {
       if (left <= 0) break;
       const take = Math.min(left, row.amountMnt);
-      await this.payments.settleCredit(row.order.id, 'OFFSET', take, user.id);
-      await this.prisma.accountEntry.create({
-        data: {
-          customerId,
-          kind: AccountEntryKind.OFFSET,
-          amountMnt: -take,
-          description: `Хасалт — ${row.order.orderNumber}`,
-          refType: 'ORDER',
-          refId: row.order.id,
-          createdById: user.id,
+      // Settlement and OFFSET line in one transaction, re-checking our payable inside it.
+      await this.payments.settleCredit(row.order.id, 'OFFSET', take, user.id, {
+        before: async (tx) => {
+          const agg = await tx.accountEntry.aggregate({ where: { customerId }, _sum: { amountMnt: true } });
+          if (take > (agg._sum.amountMnt ?? 0)) throw new ConflictException('Өглөг өөрчлөгдсөн байна, дахин оролдоно уу / Payable changed; try again');
+        },
+        after: async (tx) => {
+          await tx.accountEntry.create({
+            data: {
+              customerId,
+              kind: AccountEntryKind.OFFSET,
+              amountMnt: -take,
+              description: `Хасалт — ${row.order.orderNumber}`,
+              refType: 'ORDER',
+              refId: row.order.id,
+              createdById: user.id,
+            },
+          });
         },
       });
       applied.push({ orderNumber: row.order.orderNumber, amountMnt: take });
@@ -262,6 +271,30 @@ export class AccountsService {
     }
     this.log.log(`Offset ${amount - left}₮ for ${customerId} by ${user.id}: ${applied.map((a) => a.orderNumber).join(', ')}`);
     return { offsetMnt: amount - left, applied, ...(await this.balance(customerId)) };
+  }
+
+  /**
+   * The customer pays off what they owe in one go: the money goes to their oldest open orders first. Each order
+   * is settled on its own (and gets its E-Barimt when fully paid), so a failure part-way keeps what was done.
+   */
+  async payDebt(customerId: string, method: 'CASH' | 'CARD' | 'TRANSFER', amountMnt: number, user: AuthUser) {
+    await this.requireCustomer(customerId);
+    if (!Number.isInteger(amountMnt) || amountMnt <= 0) throw new BadRequestException('Amount must be a positive whole number');
+    const open = await this.openCredit(customerId);
+    const owed = open.reduce((s, p) => s + p.amountMnt, 0);
+    if (owed === 0) throw new BadRequestException('Энэ харилцагч өргүй / Nothing is owed');
+    if (amountMnt > owed) throw new BadRequestException(`Нийт өр ${owed}₮ / Only ${owed}₮ is owed`);
+    let left = amountMnt;
+    const applied: Array<{ orderNumber: string; amountMnt: number }> = [];
+    for (const row of open) {
+      if (left <= 0) break;
+      const take = Math.min(left, row.amountMnt);
+      await this.payments.settleCredit(row.order.id, method, take, user.id);
+      applied.push({ orderNumber: row.order.orderNumber, amountMnt: take });
+      left -= take;
+    }
+    this.log.log(`Debt payment ${amountMnt}₮ ${method} from ${customerId} by ${user.id}: ${applied.map((a) => a.orderNumber).join(', ')}`);
+    return { paidMnt: amountMnt, applied, ...(await this.balance(customerId)) };
   }
 
   /** Purchases add to what we owe, payments to the partner reduce it; adjustments keep their sign. */

@@ -8,17 +8,49 @@ import { api, tugrik } from '@/lib/api';
 import { hasRole, homeForRole, OVERSIGHT_ROLES, POS_ROLES } from '@/lib/rbac';
 import { AccountPanel } from '@/components/account-panel';
 import { useFeatures } from '@/lib/features';
-import { AuthUser, Customer, CustomerDetail, CustomerType, PriceList } from '@/lib/types';
+import { AuthUser, Customer, CustomerDetail, CustomerType, ORDER_STATUS_LABEL, PriceList } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
 
 const TYPE_LABEL: Record<CustomerType, string> = { INDIVIDUAL: 'Хувь хүн', COMPANY: 'Байгууллага' };
-const STATUS_LABEL: Record<string, string> = {
-  PENDING_PAYMENT: 'Төлбөр хүлээж буй',
-  READY_FOR_LOADING: 'Ачихад бэлэн',
-  COMPLETED: 'Дууссан',
-  CANCELLED: 'Цуцалсан',
-};
+const STATUS_LABEL = ORDER_STATUS_LABEL;
+
+/** Takes a payment against the customer's whole debt; the server applies it to the oldest orders first. */
+function PayDebt({ customerId, owed, onDone }: { customerId: string; owed: number; onDone: () => void }) {
+  const [amount, setAmount] = useState(String(owed));
+  const [method, setMethod] = useState<'CASH' | 'CARD' | 'TRANSFER'>('CASH');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  async function pay() {
+    const n = Math.round(Number(amount));
+    if (!(n > 0) || n > owed) return setMsg(`1–${tugrik(owed)} хооронд`);
+    if (!window.confirm(`${tugrik(n)} төлбөр авах уу? Хамгийн хуучин захиалгаас эхэлж хаагдана.`)) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      await api(`/customers/${customerId}/pay-debt`, { method: 'POST', body: JSON.stringify({ method, amountMnt: n }) });
+      onDone();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Алдаа');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <input className="w-32" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+        <option value="CASH">Бэлэн</option>
+        <option value="CARD">Карт</option>
+        <option value="TRANSFER">Шилжүүлэг</option>
+      </select>
+      <button className="btn-primary text-sm" disabled={busy} onClick={() => void pay()}>
+        Өр төлөх
+      </button>
+      {msg && <span className="text-xs text-red-400">{msg}</span>}
+    </div>
+  );
+}
 
 const emptyForm = {
   type: 'INDIVIDUAL' as CustomerType,
@@ -284,7 +316,9 @@ export default function CustomersPage() {
                       </li>
                     ))}
                   </ul>
-                  <p className="text-[11px] text-slate-500 mt-1">Төлбөрийг захиалгын хуудаснаас бүртгэнэ.</p>
+                  {features.enabled('CREDIT_SALES') && (
+                    <PayDebt customerId={detail.id} owed={detail.credit.owedMnt} onDone={() => void openDetail(detail)} />
+                  )}
                 </div>
               )}
               <div className="grid grid-cols-2 gap-2">
