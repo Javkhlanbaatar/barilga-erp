@@ -499,6 +499,7 @@ export type FeatureKey =
   | 'PRICE_LISTS'
   | 'PARTNER_ACCOUNTS'
   | 'HR'
+  | 'EBARIMT'
   | 'ONLINE_SHOP';
 
 export type FeatureSwitch = {

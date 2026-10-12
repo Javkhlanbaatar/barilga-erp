@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ReportsNav } from '@/components/reports-nav';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
+import { useFeatures } from '@/lib/features';
 import { AuthUser, DailyReport } from '@/lib/types';
 
 function todayYmd() {
@@ -27,6 +28,7 @@ const BAR_COLOR: Record<DailyReport['payments'][number]['method'], string> = {
 
 export default function DailyReportPage() {
   const router = useRouter();
+  const features = useFeatures();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [startDate, setStartDate] = useState(todayYmd);
   const [endDate, setEndDate] = useState(todayYmd);
@@ -240,7 +242,7 @@ export default function DailyReportPage() {
             </article>
           </section>
 
-          {report.ebarimt && (
+          {features.enabled('EBARIMT') && report.ebarimt && (
             <article className="card overflow-auto mb-5">
               <h3 className="font-semibold mb-3">И-Баримт</h3>
               <p className="text-sm text-slate-400 mb-3">

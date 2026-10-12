@@ -389,7 +389,7 @@ export default function OrderDetailPage() {
               {(order.returns ?? []).map((r) => (
                 <p key={r.id} className="text-xs text-slate-400">
                   {tugrik(r.refundAmount)} {r.refundMethod} — {r.reason}
-                  {r.ebarimtRefundId ? ` · E-Barimt ${r.ebarimtRefundId}` : ''}
+                  {features.enabled('EBARIMT') && r.ebarimtRefundId ? ` · E-Barimt ${r.ebarimtRefundId}` : ''}
                   {r.refundStatus === 'PAID_OUT' ? ' · мөнгө буцаагдсан' : ' · мөнгө буцаагдаагүй (гараар олгоно)'}
                 </p>
               ))}
@@ -455,6 +455,7 @@ export default function OrderDetailPage() {
             </div>
           )}
 
+          {features.enabled('EBARIMT') && (
           <div className="border-t border-slate-700 pt-3 space-y-2">
             <h4 className="text-sm font-semibold">И-Баримт</h4>
             <p className="text-sm">
@@ -491,6 +492,7 @@ export default function OrderDetailPage() {
               </button>
             )}
           </div>
+          )}
           {order.feeOverrides?.map((a) => (
             <p key={a.id} className="text-xs text-slate-400">
               {a.actor.fullName ?? a.actor.name}: {tugrik(a.previousTotal)} → {tugrik(a.newTotal)} — {a.reason}

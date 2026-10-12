@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from 'react';
 import { api, tugrik } from '@/lib/api';
+import { useFeatures } from '@/lib/features';
 import type { Order } from '@/lib/types';
 
 /** What is still owed on an order released on account (зарлагаар), 0 when nothing. */
@@ -17,6 +18,7 @@ export function owedOnOrder(order: Order) {
  */
 export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order) => void }) {
   const owed = owedOnOrder(order);
+  const features = useFeatures();
   const [amount, setAmount] = useState(owed);
   const [method, setMethod] = useState<'CASH' | 'CARD' | 'TRANSFER'>('CASH');
   const [busy, setBusy] = useState(false);
@@ -49,7 +51,8 @@ export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order
         <div>
           <h3 className="font-semibold">Зарлагаар олгосон — өр</h3>
           <p className="text-sm text-slate-400">
-            Үлдэгдэл өр: <span className="text-lg font-bold text-amber-300">{tugrik(owed)}</span>. И-баримт өр бүрэн төлөгдөхөд гарна.
+            Үлдэгдэл өр: <span className="text-lg font-bold text-amber-300">{tugrik(owed)}</span>.
+            {features.enabled('EBARIMT') && ' И-баримт өр бүрэн төлөгдөхөд гарна.'}
           </p>
         </div>
       </div>

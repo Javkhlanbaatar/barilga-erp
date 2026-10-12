@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Optional, Logger, NotFoundException } from '@nestjs/common';
 import { BillType, EbarimtStatus, OrderStatus, PayMethod, PaymentStatus, Prisma } from '@prisma/client';
 import { EbarimtClient, EbarimtReceiptItem } from './ebarimt.client';
 import { PrismaService } from '../prisma/prisma.service';
+import { FeaturesService } from '../features/features.service';
 
 const VAT_RATE_INCLUSIVE = 10 / 110;
 const DEFAULT_CLASSIFICATION = '2301010';
@@ -25,7 +26,13 @@ export class EbarimtService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly client: EbarimtClient,
+    @Optional() private readonly features?: FeaturesService,
   ) {}
+
+  /** Switched off: the ERP sends nothing to POSAPI (receipts are issued through another system). */
+  private async enabled() {
+    return this.features ? this.features.isEnabled('EBARIMT') : true;
+  }
 
   /**
    * Issue after full payment. Never throws for POSAPI/network failures so checkout is not blocked.
@@ -41,6 +48,10 @@ export class EbarimtService {
   }
 
   async issueForOrder(orderId: string, opts: { quiet?: boolean } = {}) {
+    if (!(await this.enabled())) {
+      if (opts.quiet) return { ok: false as const, error: 'module_off' };
+      throw new ForbiddenException('Module EBARIMT is switched off');
+    }
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: { items: { include: { product: true, returnItems: true } }, payments: true },
@@ -160,6 +171,10 @@ export class EbarimtService {
     amount: number;
     items: Array<{ name: string; qty: number; unitPrice: number; totalAmount: number }>;
   }) {
+    if (!(await this.enabled())) {
+      await this.prisma.salesReturn.update({ where: { id: input.returnId }, data: { ebarimtStatus: null } });
+      return { ok: false as const, error: 'module_off' };
+    }
     try {
       const result = await this.client.returnReceipt({
         orderNumber: input.orderNumber,
@@ -190,6 +205,7 @@ export class EbarimtService {
   }
 
   async retryDue() {
+    if (!(await this.enabled())) return { checked: 0 };
     const due = await this.prisma.order.findMany({
       where: {
         ebarimtStatus: { in: [EbarimtStatus.FAILED, EbarimtStatus.PENDING] },
