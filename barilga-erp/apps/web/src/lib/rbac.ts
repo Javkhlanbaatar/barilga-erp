@@ -15,3 +15,6 @@ export function homeForRole(role: Role | null | undefined): string {
 export function hasRole(role: Role | null | undefined, allowed: Role[]): role is Role {
   return Boolean(role && allowed.includes(role));
 }
+
+/** Send/receive warehouse transfers (staff are limited to their own warehouse by the API). */
+export const TRANSFER_ROLES: Role[] = ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'];

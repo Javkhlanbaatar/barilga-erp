@@ -2,8 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
+import { GatherPanel } from '@/components/gather-panel';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
+import { useFeatures } from '@/lib/features';
 import { AuthUser, ebarimtStatusLabel, isHiredTransport, Order, PaymentSplit, VEHICLE_LABEL } from '@/lib/types';
 import { POS_ROLES, TRANSPORT_ROLES, hasRole } from '@/lib/rbac';
 
@@ -31,6 +33,7 @@ export default function OrderDetailPage() {
   const [assignItemId, setAssignItemId] = useState<string | null>(null);
   const [supplierName, setSupplierName] = useState('');
   const [supplierReason, setSupplierReason] = useState('');
+  const features = useFeatures();
   const canDispatch = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const canTransport = hasRole(user?.role, TRANSPORT_ROLES);
   const canOverrideFees = user?.role === 'BORLUULAGCH';
@@ -285,6 +288,9 @@ export default function OrderDetailPage() {
           )}
         </div>
       </div>
+      {canDispatch && order.status === 'READY_FOR_LOADING' && features.enabled('STOCK_TRANSFERS') && (
+        <GatherPanel orderId={order.id} />
+      )}
       <div className="grid grid-cols-2 gap-6">
         <div className="card space-y-4">
           <h3 className="font-semibold">Төлбөрийн хуваарилалт</h3>

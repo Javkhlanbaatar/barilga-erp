@@ -4,8 +4,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
+import { CustomerPicker } from '@/components/customer-picker';
 import { ProductImage } from '@/components/product-image';
-import { AuthUser, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
+import { useFeatures } from '@/lib/features';
+import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
 import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
 type PaymentMethod = 'QPAY' | 'CASH' | 'CARD';
@@ -59,6 +61,8 @@ export default function CheckoutPOS() {
   const [address, setAddress] = useState('');
   const [billType, setBillType] = useState<'CITIZEN' | 'COMPANY'>('CITIZEN');
   const [customerRegNumber, setCustomerRegNumber] = useState('');
+  const [customer, setCustomer] = useState<Customer | null>(null);
+  const features = useFeatures();
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -229,6 +233,19 @@ export default function CheckoutPOS() {
     return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' ? 'PENDING' : 'PAID' }];
   }
 
+  /** Picking a registered customer fills the order snapshot (still editable); a company also sets the E-Barimt РД. */
+  function pickCustomer(c: Customer | null) {
+    setCustomer(c);
+    if (!c) return;
+    setCustomerName(c.name);
+    setCustomerPhone(c.phone);
+    if (c.type === 'COMPANY' && c.regNumber) {
+      setBillType('COMPANY');
+      setCustomerRegNumber(c.regNumber);
+    }
+    if (c.address && !address) setAddress(c.address);
+  }
+
   async function handleCheckout() {
     setBusy(true);
     setError('');
@@ -244,6 +261,7 @@ export default function CheckoutPOS() {
           isUnloading: ourDelivery && isUnloading,
           unloadingRequested: ourDelivery && isUnloading,
           items,
+          customerId: customer?.id,
           customerName,
           customerPhone,
           deliveryAddress: address,
@@ -503,6 +521,7 @@ export default function CheckoutPOS() {
             </select>
           </div>
 
+          {features.enabled('CUSTOMERS') && <CustomerPicker value={customer} onChange={pickCustomer} />}
           <input
             placeholder="Харилцагчийн нэр"
             className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"

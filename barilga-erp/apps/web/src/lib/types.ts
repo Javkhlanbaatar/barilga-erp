@@ -405,3 +405,75 @@ export const ROLE_LABEL: Record<Role, string> = {
   BORLUULAGCH: 'Кассчин',
   ACHIGCH_BELTGEGCH: 'Агуулах',
 };
+
+// ───────── Phase 2B: customers, transfers, gathering, module switches ─────────
+
+export type CustomerType = 'INDIVIDUAL' | 'COMPANY';
+
+export type Customer = {
+  id: string;
+  type: CustomerType;
+  name: string;
+  phone: string;
+  regNumber: string | null;
+  email: string | null;
+  address: string | null;
+  notes: string | null;
+  isActive: boolean;
+  createdAt: string;
+};
+
+export type CustomerDetail = Customer & {
+  stats: { completedOrders: number; completedTotalMnt: number };
+  recentOrders: Array<{ id: string; orderNumber: string; status: Order['status']; totalMnt: number; createdAt: string }>;
+};
+
+export type TransferStatus = 'IN_TRANSIT' | 'RECEIVED' | 'CANCELLED';
+
+type WarehouseRef = { id: string; code: string; name: string };
+type PersonRef = { id: string; fullName: string } | null;
+
+export type StockTransfer = {
+  id: string;
+  transferNumber: string;
+  status: TransferStatus;
+  fromWarehouse: WarehouseRef;
+  toWarehouse: WarehouseRef;
+  notes: string | null;
+  order: { id: string; orderNumber: string } | null;
+  sentBy: PersonRef;
+  sentAt: string;
+  receivedBy: PersonRef;
+  receivedAt: string | null;
+  cancelledBy: PersonRef;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  items: Array<{ id: string; quantity: string | number; product: { id: string; sku: string; nameMn: string; unit: string } }>;
+};
+
+export type GatherPlan = {
+  orderId: string;
+  orderNumber: string;
+  status: Order['status'];
+  dispatchWarehouse: WarehouseRef;
+  complete: boolean;
+  lines: Array<{
+    product: { id: string; sku?: string; nameMn?: string; unit?: string };
+    needed: number;
+    atDispatch: number;
+    inTransit: number;
+    toGather: number;
+    unavailable: number;
+  }>;
+  transfers: Array<{ from?: WarehouseRef; items: Array<{ product: { id: string; sku?: string; nameMn?: string }; quantity: number }> }>;
+};
+
+export type FeatureKey = 'CUSTOMERS' | 'STOCK_TRANSFERS';
+
+export type FeatureSwitch = {
+  key: FeatureKey;
+  nameMn: string;
+  enabled: boolean;
+  isDefault: boolean;
+  updatedAt: string | null;
+};
