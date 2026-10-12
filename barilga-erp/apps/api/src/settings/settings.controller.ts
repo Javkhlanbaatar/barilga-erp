@@ -6,6 +6,7 @@ import { CATALOG_READ_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CompanySettingsDto } from './company.dto';
+import { PrintSettingsDto } from './print.dto';
 import { SettingsService } from './settings.service';
 
 @Controller('settings')
@@ -24,5 +25,18 @@ export class SettingsController {
   @Roles(Role.ADMIN)
   setCompany(@Body() dto: CompanySettingsDto, @CurrentUser() user: AuthUser) {
     return this.settings.setCompany(dto, user.id);
+  }
+
+  /** Paper layout per document; everyone reads it so printing never asks again. */
+  @Get('print')
+  @Roles(...CATALOG_READ_ROLES)
+  print() {
+    return this.settings.print();
+  }
+
+  @Put('print')
+  @Roles(Role.ADMIN)
+  setPrint(@Body() dto: PrintSettingsDto, @CurrentUser() user: AuthUser) {
+    return this.settings.setPrint(dto, user.id);
   }
 }

@@ -464,7 +464,7 @@ export default function CheckoutPOS() {
             </div>
           ))}
 
-          {/* Delivery is opt-in: unticked = the customer collects (themselves or with their own driver). */}
+          {/* Delivery is opt-in: unticked = the customer collects the goods themselves. */}
           <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm cursor-pointer">
             <input
               type="checkbox"
@@ -474,17 +474,6 @@ export default function CheckoutPOS() {
             />
             <span className="font-semibold">Хүргэлт хийлгэх</span>
           </label>
-
-          {!ourDelivery && (
-            <div className="grid grid-cols-2 gap-1.5">
-              <button type="button" onClick={() => setDeliveryType('SELF_PICKUP')} className={chipClass(deliveryType === 'SELF_PICKUP', 'bg-amber-500 text-slate-950 border-amber-500 font-bold')}>
-                Өөрөө авах
-              </button>
-              <button type="button" onClick={() => setDeliveryType('CUSTOMER_DRIVER')} className={chipClass(deliveryType === 'CUSTOMER_DRIVER', 'bg-amber-500 text-slate-950 border-amber-500 font-bold')}>
-                Жолооч явуулах
-              </button>
-            </div>
-          )}
 
           {ourDelivery && (
             <div className="space-y-3 rounded-lg border border-amber-700/50 p-3">

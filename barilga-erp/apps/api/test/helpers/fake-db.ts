@@ -199,7 +199,7 @@ export class FakeDb {
     notes: null, status: 'PENDING_PAYMENT', ebarimtStatus: 'NOT_ISSUED', ebarimtAttempts: 0,
     receiptId: null, vehicleNumber: null, driverPhone: null, driverName: null,
     deliveryMethod: 'SELF_PICKUP', completedAt: null, completedById: null, preparedAt: null, preparedById: null,
-    feesOverridden: false,
+    feesOverridden: false, pickingStartedAt: null, pickingStartedById: null,
   }));
   payment = new Table(this, 'payment', () => ({
     status: 'UNPAID', provider: 'QPAY', method: 'QPAY', qpayInvoiceId: null, qpayPayload: null,

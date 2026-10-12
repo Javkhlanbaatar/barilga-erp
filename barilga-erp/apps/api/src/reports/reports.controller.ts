@@ -8,6 +8,7 @@ import { REPORT_ROLES } from '../auth/rbac';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { DailyQueryDto } from './dto/daily-query.dto';
 import { WarehouseReportQueryDto } from './dto/warehouse-query.dto';
+import { FulfillmentReportService } from './fulfillment-report.service';
 import { ReportsService } from './reports.service';
 import { WarehouseReportService } from './warehouse-report.service';
 
@@ -17,6 +18,7 @@ export class ReportsController {
   constructor(
     private readonly reports: ReportsService,
     private readonly warehouseReport: WarehouseReportService,
+    private readonly fulfillmentReport: FulfillmentReportService,
   ) {}
 
   @Get('daily')
@@ -37,5 +39,13 @@ export class ReportsController {
   @RequireFeature('WAREHOUSE_REPORT')
   warehouse(@Query() query: WarehouseReportQueryDto, @CurrentUser() user: AuthUser) {
     return this.warehouseReport.report(query, user);
+  }
+
+  /** Preparation times: paid → started → completed, per order and per person (managers/admin). */
+  @Get('fulfillment')
+  @Roles(Role.ADMIN, Role.MANAGER)
+  @RequireFeature('PICKING')
+  fulfillment(@Query() query: WarehouseReportQueryDto) {
+    return this.fulfillmentReport.report(query);
   }
 }

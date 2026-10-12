@@ -42,6 +42,7 @@ const ORDER_INCLUDE = {
   createdBy: { select: { id: true, fullName: true, role: true } },
   completedBy: { select: { id: true, fullName: true, role: true } },
   preparedBy: { select: { id: true, fullName: true, role: true } },
+  pickingStartedBy: { select: { id: true, fullName: true } },
   feeOverrides: { orderBy: { createdAt: 'desc' as const }, include: { actor: { select: { fullName: true, role: true } } } },
   returns: {
     orderBy: { createdAt: 'desc' as const },
@@ -584,6 +585,34 @@ export class OrdersService {
     throw lastError;
   }
 
+  /** Sets the start of preparation once (the first caller wins; later calls change nothing). */
+  private markPickingStarted(orderId: string, userId: string) {
+    return this.prisma.order.updateMany({
+      where: { id: orderId, status: OrderStatus.READY_FOR_LOADING, pickingStartedAt: null },
+      data: { pickingStartedAt: new Date(), pickingStartedById: userId },
+    });
+  }
+
+  /**
+   * "Би бэлдье": a worker takes the order; it moves from the queue to "being prepared" and the preparation
+   * time starts. Pressing it again (or by a second picker joining) keeps the original start.
+   */
+  async startPicking(orderId: string, user: AuthUser) {
+    if (!isWarehouseActor(user.role)) {
+      throw new ForbiddenException('Warehouse staff, cashiers, managers, or admin can prepare orders');
+    }
+    if (this.features) await this.features.assertEnabled('PICKING');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (order.status !== OrderStatus.READY_FOR_LOADING) {
+      throw new BadRequestException('Only a paid order waiting for loading can be prepared');
+    }
+    const started = await this.markPickingStarted(orderId, user.id);
+    if (started.count === 1) this.log.log(`Picking started on ${order.orderNumber} by ${user.id}`);
+    return this.findOne(orderId, user);
+  }
+
   /**
    * Picking checklist: a worker ticks one line as prepared (or unticks a mistake). Several people can pick
    * one order at once; each line records who picked it. Only for paid orders waiting to be loaded.
@@ -600,6 +629,8 @@ export class OrdersService {
     if (order.status !== OrderStatus.READY_FOR_LOADING) {
       throw new BadRequestException('Only a paid order waiting for loading can be picked');
     }
+    // Ticking the first line also starts preparation, so the clock runs even if nobody pressed "start".
+    if (picked) await this.markPickingStarted(orderId, user.id);
     // Conditional update: two people ticking the same line at once leave one consistent picker.
     const changed = await this.prisma.orderItem.updateMany({
       where: { id: itemId, orderId, pickedAt: picked ? null : { not: null } },

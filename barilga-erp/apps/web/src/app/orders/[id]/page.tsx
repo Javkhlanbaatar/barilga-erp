@@ -280,6 +280,7 @@ export default function OrderDetailPage() {
             {[
               ['invoice', 'Нэхэмжлэх'],
               ['receipt', 'Баримт'],
+              ['issueNote', 'Зарлагын баримт'],
               ['picklist', 'Бэлтгэх хуудас'],
             ].map(([doc, label]) => (
               <a

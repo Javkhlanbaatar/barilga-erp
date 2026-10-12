@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanySettingsDto } from './company.dto';
+import { Orientation, PaperSize, PRINT_DOCS, PrintDoc, PrintSettingsDto } from './print.dto';
 
 const COMPANY_KEY = 'COMPANY';
 
@@ -27,6 +28,17 @@ const EMPTY_COMPANY: CompanySettings = {
   receiptFooter: '',
 };
 
+const PRINT_KEY = 'PRINT';
+
+export type PrintSettings = Record<PrintDoc, { paper: PaperSize; orientation: Orientation; copies: number }>;
+
+const DEFAULT_PRINT: PrintSettings = {
+  invoice: { paper: 'A4', orientation: 'portrait', copies: 1 },
+  receipt: { paper: '80MM', orientation: 'portrait', copies: 1 },
+  issueNote: { paper: 'A5', orientation: 'landscape', copies: 1 },
+  picklist: { paper: 'A4', orientation: 'portrait', copies: 1 },
+};
+
 @Injectable()
 export class SettingsService {
   private readonly log = new Logger(SettingsService.name);
@@ -39,6 +51,31 @@ export class SettingsService {
     const value = (row?.value ?? {}) as Partial<CompanySettings>;
     const merged = { ...EMPTY_COMPANY, ...value, bankAccounts: value.bankAccounts ?? [] };
     return { ...merged, configured: Boolean(merged.name) };
+  }
+
+  /** Paper size, orientation and copies per printed document; defaults until an admin changes them. */
+  async print(): Promise<PrintSettings> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: PRINT_KEY } });
+    const saved = (row?.value ?? {}) as Partial<PrintSettings>;
+    return Object.fromEntries(
+      PRINT_DOCS.map((doc) => [doc, { ...DEFAULT_PRINT[doc], ...(saved[doc] ?? {}) }]),
+    ) as PrintSettings;
+  }
+
+  async setPrint(dto: PrintSettingsDto, actorId: string) {
+    const merged = { ...(await this.print()) };
+    for (const doc of PRINT_DOCS) {
+      const next = dto[doc];
+      if (next) merged[doc] = { paper: next.paper, orientation: next.orientation, copies: next.copies };
+    }
+    const json = merged as unknown as Prisma.InputJsonValue;
+    await this.prisma.appSetting.upsert({
+      where: { key: PRINT_KEY },
+      create: { key: PRINT_KEY, value: json, updatedById: actorId },
+      update: { value: json, updatedById: actorId },
+    });
+    this.log.log(`Print settings updated by ${actorId}`);
+    return merged;
   }
 
   async setCompany(dto: CompanySettingsDto, actorId: string) {

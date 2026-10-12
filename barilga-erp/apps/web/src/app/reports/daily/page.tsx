@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ReportsNav } from '@/components/reports-nav';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { AuthUser, DailyReport } from '@/lib/types';
@@ -93,12 +94,13 @@ export default function DailyReportPage() {
 
   return (
     <Shell>
+      <ReportsNav />
       <div className="print:hidden flex flex-wrap items-end justify-between gap-4 mb-5">
         <div>
-          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Daily closure</p>
-          <h2 className="text-xl font-bold">Sales analytics</h2>
+          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Тайлан</p>
+          <h2 className="text-xl font-bold">Борлуулалтын тайлан</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Paid splits from ord_payment_splits · Asia/Ulaanbaatar calendar days
+            Төлбөрийг төлсөн өдрөөр нь тооцно (Улаанбаатарын цаг)
           </p>
         </div>
         <div className="flex gap-2">
@@ -146,7 +148,7 @@ export default function DailyReportPage() {
         <>
           <header className="hidden print:block mb-6 border-b border-black pb-3">
             <p className="text-xs tracking-[0.3em] uppercase">Barilga ERP · Z-Report</p>
-            <h1 className="text-2xl font-bold text-black">Daily closure</h1>
+            <h1 className="text-2xl font-bold text-black">Борлуулалтын тайлан</h1>
             <p className="text-sm">
               {report.range.startDate} → {report.range.endDate} ({report.range.timeZone})
             </p>

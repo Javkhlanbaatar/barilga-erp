@@ -105,6 +105,13 @@ export class OrdersController {
     return this.orders.issueEbarimt(id, user);
   }
 
+  /** "Би бэлдье": move the order to "being prepared" and start the preparation clock. */
+  @Patch(':id/start-picking')
+  @Roles(...FULFILLMENT_ROLES)
+  startPicking(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.orders.startPicking(id, user);
+  }
+
   /** Picking checklist: tick/untick one line as prepared. */
   @Patch(':id/items/:itemId/pick')
   @Roles(...FULFILLMENT_ROLES)

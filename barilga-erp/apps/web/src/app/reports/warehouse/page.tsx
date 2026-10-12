@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ReportsNav } from '@/components/reports-nav';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { hasRole, homeForRole, OVERSIGHT_ROLES } from '@/lib/rbac';
@@ -68,6 +69,7 @@ export default function WarehouseReportPage() {
 
   return (
     <Shell>
+      <ReportsNav />
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4 print:mb-2">
         <div>
           <p className="text-amber-brand text-xs tracking-[0.2em] uppercase print:hidden">Тайлан</p>

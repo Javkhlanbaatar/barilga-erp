@@ -264,6 +264,9 @@ export type Order = {
   preparedBy?: { id?: string; name?: string; fullName?: string; role: string } | null;
   preparedById?: string | null;
   preparedAt?: string | null;
+  /** Set when someone pressed «Би бэлдье» (or ticked the first line). */
+  pickingStartedAt?: string | null;
+  pickingStartedBy?: { id: string; fullName: string } | null;
   billType?: 'CITIZEN' | 'COMPANY';
   customerRegNumber?: string | null;
   receiptId?: string | null;

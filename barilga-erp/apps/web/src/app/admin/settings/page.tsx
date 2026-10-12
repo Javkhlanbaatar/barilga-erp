@@ -151,6 +151,106 @@ export default function AdminSettingsPage() {
           </div>
         </form>
       )}
+      <PrintSettingsForm />
     </Shell>
+  );
+}
+
+type Layout = { paper: 'A4' | 'A5' | '80MM'; orientation: 'portrait' | 'landscape'; copies: number };
+type PrintDoc = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
+const PRINT_DOCS: Array<[PrintDoc, string]> = [
+  ['invoice', 'Нэхэмжлэх'],
+  ['receipt', 'Борлуулалтын баримт'],
+  ['issueNote', 'Зарлагын баримт'],
+  ['picklist', 'Бэлтгэх хуудас'],
+];
+
+/** Paper size, orientation and copies per document — set once, used by every print button. */
+function PrintSettingsForm() {
+  const [layouts, setLayouts] = useState<Record<PrintDoc, Layout> | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    api<Record<PrintDoc, Layout>>('/settings/print')
+      .then(setLayouts)
+      .catch((err) => setMessage({ ok: false, text: err instanceof Error ? err.message : 'Ачаалж чадсангүй' }));
+  }, []);
+
+  const set = (doc: PrintDoc, patch: Partial<Layout>) => layouts && setLayouts({ ...layouts, [doc]: { ...layouts[doc], ...patch } });
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setMessage(null);
+    try {
+      setLayouts(await api<Record<PrintDoc, Layout>>('/settings/print', { method: 'PUT', body: JSON.stringify(layouts) }));
+      setMessage({ ok: true, text: 'Хадгалагдлаа. Хэвлэх бүрт дахин сонгох шаардлагагүй.' });
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Хадгалж чадсангүй' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!layouts) return null;
+  return (
+    <form onSubmit={save} className="card max-w-2xl space-y-3 mt-6">
+      <div>
+        <h3 className="font-semibold">Хэвлэх тохиргоо</h3>
+        <p className="text-xs text-slate-400">
+          Баримт бүрийн цаасны хэмжээ, чиглэл, хувь тоо. 3 давхар (хуулбартай) цаасанд хэвлэх бол 1 хувь сонгоно.
+        </p>
+      </div>
+      {message && <p className={`text-sm ${message.ok ? 'text-emerald-300' : 'text-red-400'}`}>{message.text}</p>}
+      <table className="w-full text-sm">
+        <thead className="text-left text-xs text-slate-400">
+          <tr>
+            <th className="py-1">Баримт</th>
+            <th>Цаас</th>
+            <th>Чиглэл</th>
+            <th>Хувь</th>
+          </tr>
+        </thead>
+        <tbody>
+          {PRINT_DOCS.map(([doc, label]) => (
+            <tr key={doc} className="border-t border-slate-800">
+              <td className="py-2">{label}</td>
+              <td>
+                <select value={layouts[doc].paper} onChange={(e) => set(doc, { paper: e.target.value as Layout['paper'] })}>
+                  <option value="A4">A4</option>
+                  <option value="A5">A5</option>
+                  <option value="80MM">80мм (касс)</option>
+                </select>
+              </td>
+              <td>
+                <select
+                  value={layouts[doc].orientation}
+                  disabled={layouts[doc].paper === '80MM'}
+                  onChange={(e) => set(doc, { orientation: e.target.value as Layout['orientation'] })}
+                >
+                  <option value="portrait">Босоо</option>
+                  <option value="landscape">Хэвтээ</option>
+                </select>
+              </td>
+              <td>
+                <select value={layouts[doc].copies} onChange={(e) => set(doc, { copies: Number(e.target.value) })}>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="flex justify-end">
+        <button className="btn-primary" disabled={saving}>
+          {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+        </button>
+      </div>
+    </form>
   );
 }

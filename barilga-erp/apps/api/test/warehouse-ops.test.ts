@@ -170,3 +170,53 @@ describe('module switches', () => {
     }
   });
 });
+
+describe('"Би бэлдье" — start of preparation', () => {
+  async function setup() {
+    const db = new FakeDb();
+    const features = new FeaturesService(db as any);
+    const inventory = new InventoryService(db as any);
+    const orders = new OrdersService(db as any, {} as any, {} as any, inventory, {} as any, features);
+    (orders as any).findOne = async (id: string) => db.order.rows.find((o: any) => o.id === id);
+    const order = await db.order.create({ data: { orderNumber: 'BR-2', status: 'READY_FOR_LOADING', warehouseId: 'wh-main', totalMnt: 0 } });
+    const line = await db.orderItem.create({ data: { orderId: order.id, productId: 'p1', quantity: D(1) } });
+    return { db, orders, order, line };
+  }
+
+  it('the first person to start owns the start time; a second person joining keeps it', async () => {
+    const { db, orders, order } = await setup();
+    await orders.startPicking(order.id, pickerA);
+    const first = db.order.rows[0].pickingStartedAt;
+    await new Promise((r) => setTimeout(r, 5));
+    await orders.startPicking(order.id, pickerB);
+    assert.equal(db.order.rows[0].pickingStartedById, 'u-pa');
+    assert.equal(db.order.rows[0].pickingStartedAt, first);
+  });
+
+  it('ticking a line starts preparation when nobody pressed start', async () => {
+    const { db, orders, order, line } = await setup();
+    await orders.pickItem(order.id, line.id, true, pickerB);
+    assert.equal(db.order.rows[0].pickingStartedById, 'u-pb');
+    assert.ok(db.order.rows[0].pickingStartedAt instanceof Date);
+  });
+
+  it('cannot start an unpaid order or one in another warehouse', async () => {
+    const { db, orders, order } = await setup();
+    await assert.rejects(() => orders.startPicking(order.id, otherShop), ForbiddenException);
+    await db.order.update({ where: { id: order.id }, data: { status: 'PENDING_PAYMENT' } });
+    await assert.rejects(() => orders.startPicking(order.id, pickerA), BadRequestException);
+    assert.equal(db.order.rows[0].pickingStartedAt, null);
+  });
+});
+
+describe('print settings', () => {
+  it('default per document until an admin changes one; the others keep their defaults', async () => {
+    const svc = new SettingsService(new FakeDb() as any);
+    const defaults = await svc.print();
+    assert.deepEqual(defaults.receipt, { paper: '80MM', orientation: 'portrait', copies: 1 });
+    await svc.setPrint({ issueNote: { paper: 'A4', orientation: 'portrait', copies: 2 } }, 'u-admin');
+    const after = await svc.print();
+    assert.deepEqual(after.issueNote, { paper: 'A4', orientation: 'portrait', copies: 2 });
+    assert.deepEqual(after.invoice, defaults.invoice);
+  });
+});

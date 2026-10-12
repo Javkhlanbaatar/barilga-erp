@@ -140,6 +140,7 @@ model User {
   transfersCancelled   StockTransfer[]            @relation("TransferCancelledBy")
   featureFlagChanges   FeatureFlag[]              @relation("FeatureFlagUpdatedBy")
   pickedItems          OrderItem[]                @relation("ItemPickedBy")
+  pickingStarted       Order[]                    @relation("PickingStartedBy")
   stockReceipts        StockReceipt[]             @relation("StockReceiptBy")
   settingChanges       AppSetting[]               @relation("AppSettingUpdatedBy")
 
@@ -245,14 +246,18 @@ model Order {
   warehouseId String?    @map("warehouse_id")
   warehouse   Warehouse? @relation("OrderWarehouse", fields: [warehouseId], references: [id])
 
-  createdById   String
-  createdBy     User      @relation("CreatedBy", fields: [createdById], references: [id])
-  completedById String?
-  completedBy   User?     @relation("CompletedBy", fields: [completedById], references: [id])
-  completedAt   DateTime?
-  preparedById  String?   @map("prepared_by_id")
-  preparedBy    User?     @relation("PreparedBy", fields: [preparedById], references: [id])
-  preparedAt    DateTime? @map("prepared_at")
+  createdById        String
+  createdBy          User      @relation("CreatedBy", fields: [createdById], references: [id])
+  completedById      String?
+  completedBy        User?     @relation("CompletedBy", fields: [completedById], references: [id])
+  completedAt        DateTime?
+  preparedById       String?   @map("prepared_by_id")
+  preparedBy         User?     @relation("PreparedBy", fields: [preparedById], references: [id])
+  preparedAt         DateTime? @map("prepared_at")
+  /// When a worker pressed "Би бэлдье" (or ticked the first line): the order moves to "being prepared".
+  pickingStartedAt   DateTime? @map("picking_started_at")
+  pickingStartedById String?   @map("picking_started_by_id")
+  pickingStartedBy   User?     @relation("PickingStartedBy", fields: [pickingStartedById], references: [id])
 
   billType           BillType      @default(CITIZEN)
   customerRegNumber  String?
