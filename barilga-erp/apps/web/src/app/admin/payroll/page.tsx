@@ -7,6 +7,8 @@ import { api, tugrik } from '@/lib/api';
 import { AuthUser, PayrollReport, ROLE_LABEL } from '@/lib/types';
 import { OVERSIGHT_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
+const PAYROLL_STATUS_LABEL: Record<string, string> = { DRAFT: 'Ноорог', PAID: 'Олгосон' };
+
 export default function PayrollPage() {
   const router = useRouter();
   const [allowed, setAllowed] = useState(false);
@@ -22,7 +24,7 @@ export default function PayrollPage() {
     try {
       setReport(await api<PayrollReport>(`/hr/payroll?periodMonth=${month}`));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load payroll');
+      setError(err instanceof Error ? err.message : 'Цалин ачаалж чадсангүй');
     } finally {
       setLoading(false);
     }
@@ -49,7 +51,7 @@ export default function PayrollPage() {
       await api(`/hr/payroll/${id}/pay`, { method: 'PATCH', body: '{}' });
       await load(period);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Pay failed');
+      setError(err instanceof Error ? err.message : 'Төлбөр бүртгэж чадсангүй');
     }
   }
 
@@ -59,15 +61,15 @@ export default function PayrollPage() {
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <div>
-          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Payroll</p>
+          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Цалин</p>
           <h2 className="text-xl font-bold">Сарын цалин</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Base salary + {tugrik(report?.rates.ticketBonusMnt ?? 15000)} per completed ticket
-            {report ? ` + ${(report.rates.salesCommissionBps / 100).toFixed(2)}% of cashier sales` : ''}.
+            Үндсэн цалин + гүйцэтгэсэн тасалбар тутамд {tugrik(report?.rates.ticketBonusMnt ?? 15000)}
+            {report ? ` + ${(report.rates.salesCommissionBps / 100).toFixed(2)}% кассчны борлуулалтаас` : ''}.
           </p>
         </div>
         <label className="text-xs text-slate-400">
-          Period
+          Сар
           <input
             type="month"
             className="mt-1 block"
@@ -81,14 +83,14 @@ export default function PayrollPage() {
         <table className="w-full text-sm min-w-[720px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
-              <th className="p-3">Staff</th>
-              <th>Role</th>
-              <th className="text-right">Tickets</th>
-              <th className="text-right">Sales</th>
-              <th className="text-right">Base</th>
-              <th className="text-right">Bonus</th>
-              <th className="text-right">Net</th>
-              <th>Status</th>
+              <th className="p-3">Ажилтан</th>
+              <th>Албан тушаал</th>
+              <th className="text-right">Тасалбар</th>
+              <th className="text-right">Борлуулалт</th>
+              <th className="text-right">Үндсэн</th>
+              <th className="text-right">Урамшуулал</th>
+              <th className="text-right">Гарт олгох</th>
+              <th>Төлөв</th>
               {user?.role === 'ADMIN' && <th />}
             </tr>
           </thead>
@@ -102,12 +104,12 @@ export default function PayrollPage() {
                 <td className="text-right">{tugrik(row.baseSalary)}</td>
                 <td className="text-right">{tugrik(row.fulfillmentBonus)}</td>
                 <td className="text-right font-semibold">{tugrik(row.netSalary)}</td>
-                <td>{row.status}</td>
+                <td>{PAYROLL_STATUS_LABEL[row.status] ?? row.status}</td>
                 {user?.role === 'ADMIN' && (
                   <td className="pr-3 text-right">
                     {row.status === 'DRAFT' && (
                       <button className="btn-ghost text-xs px-3 py-1" onClick={() => void markPaid(row.id)}>
-                        Mark paid
+                        Олгосон гэж тэмдэглэх
                       </button>
                     )}
                   </td>
@@ -116,7 +118,7 @@ export default function PayrollPage() {
             ))}
           </tbody>
         </table>
-        {loading && <p className="p-3 text-slate-500">Calculating…</p>}
+        {loading && <p className="p-3 text-slate-500">Тооцоолж байна…</p>}
       </div>
     </Shell>
   );

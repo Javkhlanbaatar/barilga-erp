@@ -506,6 +506,7 @@ export type FeatureKey =
   | 'PRICE_LISTS'
   | 'PARTNER_ACCOUNTS'
   | 'HR'
+  | 'INVOICES'
   | 'EBARIMT'
   | 'ONLINE_SHOP';
 
@@ -607,4 +608,42 @@ export type AccountStatement = {
     entryId?: string;
     editable?: boolean;
   }>;
+};
+
+export type InvoiceState = 'DRAFT' | 'SENT' | 'VIEWED' | 'PARTIAL' | 'OVERDUE' | 'PAID' | 'CANCELLED';
+
+export const INVOICE_STATE_LABEL: Record<InvoiceState, string> = {
+  DRAFT: 'Илгээгээгүй',
+  SENT: 'Илгээсэн',
+  VIEWED: 'Харилцагч нээсэн',
+  PARTIAL: 'Хэсэгчлэн төлсөн',
+  OVERDUE: 'Хугацаа хэтэрсэн',
+  PAID: 'Төлөгдсөн',
+  CANCELLED: 'Цуцалсан',
+};
+
+export type Invoice = {
+  id: string;
+  invoiceNumber: string;
+  orderId: string;
+  customerId: string | null;
+  recipientEmail: string | null;
+  recipientPhone: string | null;
+  dueDate: string | null;
+  note: string | null;
+  lastSentVia: string | null;
+  sentAt: string | null;
+  sendCount: number;
+  viewedAt: string | null;
+  cancelledAt: string | null;
+  createdAt: string;
+  publicPath: string;
+  /** Only on the single-order read, for building the link. */
+  token?: string;
+  paidMnt: number;
+  owedMnt: number;
+  state: InvoiceState;
+  order: { id: string; orderNumber: string; status: string; totalMnt: number; customerName: string; customerPhone: string; createdAt: string };
+  customer: { id: string; name: string; email: string | null } | null;
+  createdBy: { id: string; fullName: string } | null;
 };

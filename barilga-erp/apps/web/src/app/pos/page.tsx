@@ -10,7 +10,7 @@ import { useFeatures } from '@/lib/features';
 import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
 import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
-type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT';
+type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT' | 'INVOICE';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
 type CartLine = {
   product: Product;
@@ -59,6 +59,7 @@ export default function CheckoutPOS() {
   const [splitCredit, setSplitCredit] = useState(0);
   const [splitTransfer, setSplitTransfer] = useState(0);
   const [splitContract, setSplitContract] = useState(0);
+  const [splitInvoice, setSplitInvoice] = useState(0);
   /** What we owe the selected supply/barter partner — the most a contract sale can take. */
   const [partnerPayable, setPartnerPayable] = useState<number | null>(null);
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
@@ -125,7 +126,7 @@ export default function CheckoutPOS() {
         setProducts(list.map((p) => ({ ...p, stockQty: qty.get(p.id) ?? p.stockQty })));
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Catalog failed');
+        setError(err instanceof Error ? err.message : 'Бараа ачаалж чадсангүй');
       });
   }, [warehouseChoice, myWarehouseId, warehouses]);
 
@@ -137,7 +138,7 @@ export default function CheckoutPOS() {
           productId: c.product.id,
           quantity: c.quantity,
           sourceType: c.sourceType,
-          supplierName: c.sourceType === 'EXTERNAL_SUPPLIER' ? c.supplierName || 'Other store' : undefined,
+          supplierName: c.sourceType === 'EXTERNAL_SUPPLIER' ? c.supplierName || 'Өөр дэлгүүр' : undefined,
         })),
     [cart],
   );
@@ -169,7 +170,7 @@ export default function CheckoutPOS() {
       .then(setQuote)
       .catch((err: unknown) => {
         setQuote(null);
-        setError(err instanceof Error ? err.message : 'Quote failed');
+        setError(err instanceof Error ? err.message : 'Тооцоо амжилтгүй');
       });
   }, [zoneId, deliveryType, time, isUnloading, ourDelivery, items, cart, customer]);
 
@@ -193,13 +194,13 @@ export default function CheckoutPOS() {
         ? productsRef.current.find((p) => productMatchesQuery(p, code))
         : undefined);
     if (!match) {
-      setError(`No product for barcode / SKU: ${code}`);
+      setError(`Ийм баркод / SKU-тай бараа алга: ${code}`);
       setScanFlash('');
       return;
     }
     cartAddRef.current(match);
     setError('');
-    setScanFlash(`Added ${match.sku} — ${match.nameMn}`);
+    setScanFlash(`Нэмэгдлээ: ${match.sku} — ${match.nameMn}`);
     window.setTimeout(() => setScanFlash(''), 2500);
     setScanCode('');
     scanRef.current?.focus();
@@ -237,7 +238,8 @@ export default function CheckoutPOS() {
   const contractPartner = !!customer && (!!customer.sellsToUs || !!customer.barterContract);
   const contractOffered = features.enabled('PARTNER_ACCOUNTS') && contractPartner && (partnerPayable ?? 0) > 0;
   const deliveryOffered = features.enabled('DELIVERY');
-  const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit + splitContract;
+  const invoiceOffered = features.enabled('INVOICES');
+  const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit + splitContract + splitInvoice;
   const linePrice = new Map((quote?.lines ?? []).map((l) => [l.productId, l]));
   const splitOk = paymentMode === 'SPLIT' && totalMnt > 0 && splitSum === totalMnt && splitSum > 0;
 
@@ -250,9 +252,10 @@ export default function CheckoutPOS() {
         { method: 'TRANSFER' as const, amount: splitTransfer, status: 'PAID' },
         { method: 'CREDIT' as const, amount: splitCredit, status: 'PENDING' },
         { method: 'CONTRACT' as const, amount: splitContract, status: 'PAID' },
+        { method: 'INVOICE' as const, amount: splitInvoice, status: 'PENDING' },
       ].filter((p) => p.amount > 0);
     }
-    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' || paymentMethod === 'CREDIT' ? 'PENDING' : 'PAID' }];
+    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' || paymentMethod === 'CREDIT' || paymentMethod === 'INVOICE' ? 'PENDING' : 'PAID' }];
   }
 
   /** Picking a registered customer fills the order snapshot (still editable); a company also sets the E-Barimt РД. */
@@ -303,7 +306,7 @@ export default function CheckoutPOS() {
       });
       router.push(`/orders/${order.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Create failed');
+      setError(err instanceof Error ? err.message : 'Захиалга үүсгэж чадсангүй');
     } finally {
       setBusy(false);
     }
@@ -322,6 +325,8 @@ export default function CheckoutPOS() {
       ? 'Дараа төлөхөөр олгох (зээл)'
       : paymentMethod === 'CONTRACT' && paymentMode === 'SINGLE'
       ? 'Гэрээгээр олгох (өглөгөөс хасна)'
+      : paymentMethod === 'INVOICE' && paymentMode === 'SINGLE'
+      ? 'Нэхэмжлэх үүсгэх (шилжүүлэг хүлээнэ)'
       : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж'})`;
   const canSubmit =
     !busy &&
@@ -367,12 +372,12 @@ export default function CheckoutPOS() {
             </div>
           )}
           <label className="block text-xs text-slate-400">
-            Search name, description, SKU
+            Нэр, тайлбар, SKU-гаар хайх
             <input
               className="mt-1 w-full"
               value={searchQuery}
               autoComplete="off"
-              placeholder="e.g. foundation, цемент, CEM-42"
+              placeholder="жишээ: суурь, цемент, CEM-42"
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </label>
@@ -384,24 +389,24 @@ export default function CheckoutPOS() {
             }}
           >
             <label className="flex-1 min-w-[220px] text-xs text-slate-400">
-              Barcode / SKU scanner
+              Баркод / SKU уншигч
               <input
                 ref={scanRef}
                 className="mt-1 w-full"
                 value={scanCode}
                 autoComplete="off"
-                placeholder="Scan or type SKU, then Enter"
+                placeholder="Уншуулах эсвэл SKU бичээд Enter дарна"
                 onChange={(e) => setScanCode(e.target.value)}
               />
             </label>
             <button type="submit" className="btn-ghost mt-5">
-              Add
+              Нэмэх
             </button>
           </form>
           {scanFlash && <p className="text-emerald-400 text-sm">{scanFlash}</p>}
           {lowStockProducts.length > 0 && (
             <div className="rounded-xl border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
-              Low stock: {lowStockProducts.map((p) => `${p.nameMn} (${Number(p.stockQty)} ${p.unit})`).join(' · ')}
+              Дуусч буй: {lowStockProducts.map((p) => `${p.nameMn} (${Number(p.stockQty)} ${p.unit})`).join(' · ')}
             </div>
           )}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -423,7 +428,7 @@ export default function CheckoutPOS() {
                         status === 'OUT_OF_STOCK' ? 'bg-red-800 text-red-100' : 'bg-amber-700 text-amber-100'
                       }`}
                     >
-                      {status === 'OUT_OF_STOCK' ? 'Out' : 'Low'}
+                      {status === 'OUT_OF_STOCK' ? 'Дууссан' : 'Дуусч буй'}
                     </span>
                   )}
                 </div>
@@ -433,7 +438,7 @@ export default function CheckoutPOS() {
                   {tugrik(p.priceMnt)} / {p.unit}
                 </p>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  {Number(p.weightKg)}кг · stock {Number(p.stockQty)}
+                  {Number(p.weightKg)}кг · үлдэгдэл {Number(p.stockQty)}
                 </p>
               </button>
               );
@@ -487,7 +492,7 @@ export default function CheckoutPOS() {
                           ? {
                               ...x,
                               sourceType: e.target.checked ? 'EXTERNAL_SUPPLIER' : 'INTERNAL',
-                              supplierName: e.target.checked ? x.supplierName || 'Other store' : '',
+                              supplierName: e.target.checked ? x.supplierName || 'Өөр дэлгүүр' : '',
                             }
                           : x,
                       ),
@@ -638,6 +643,7 @@ export default function CheckoutPOS() {
                   setSplitCredit(0);
                   setSplitTransfer(0);
                   setSplitContract(0);
+                  setSplitInvoice(0);
                 }}
                 className={chipClass(paymentMode === 'SPLIT', 'bg-slate-100 text-slate-950 border-slate-100 font-bold')}
               >
@@ -662,6 +668,15 @@ export default function CheckoutPOS() {
                 >
                   Банкны шилжүүлэг (орсныг шалгасан)
                 </button>
+                {invoiceOffered && (
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('INVOICE')}
+                    className={`col-span-3 ${chipClass(paymentMethod === 'INVOICE', 'bg-sky-700 text-white border-sky-500 font-semibold')}`}
+                  >
+                    Нэхэмжлэхээр — шилжүүлэг хүлээнэ (мөнгө орсны дараа олгоно)
+                  </button>
+                )}
                 {creditOffered && (
                   <button
                     type="button"
@@ -739,6 +754,18 @@ export default function CheckoutPOS() {
                       className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                       value={splitCredit}
                       onChange={(e) => setSplitCredit(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    />
+                  </label>
+                )}
+                {invoiceOffered && (
+                  <label className="block text-slate-400">
+                    Нэхэмжлэхээр (шилжүүлэг хүлээнэ)
+                    <input
+                      type="number"
+                      min={0}
+                      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
+                      value={splitInvoice}
+                      onChange={(e) => setSplitInvoice(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                     />
                   </label>
                 )}

@@ -108,14 +108,22 @@ class Table {
 
   private decorate(row: Row, args: Row = {}): Row {
     const out: Row = { ...row };
-    const include = args.include as Row | undefined;
-    // Generic to-one include: `include: { receipt: ... }` on a row with `receiptId` attaches that parent.
-    for (const key of Object.keys(include ?? {})) {
+    // A `select` naming relations is treated like an include of those relations (scalars are all returned).
+    const select = isPlain(args.select) ? (args.select as Row) : undefined;
+    const include = (args.include as Row | undefined) ??
+      (select ? Object.fromEntries(Object.entries(select).filter(([, v]) => isPlain(v))) : undefined);
+    // Generic to-one include: `include: { receipt: ... }` on a row with `receiptId` attaches that parent,
+    // decorated with its own nested include/select.
+    for (const [key, value] of Object.entries(include ?? {})) {
       const parentTable = (this.db as any)[RELATION_TABLE[key] ?? key];
       if (parentTable instanceof Table && `${key}Id` in row && !(key in out && key !== 'order')) {
         const parent = parentTable.rows.find((p: Row) => p.id === row[`${key}Id`]);
-        out[key] = parent ? { ...parent } : null;
+        out[key] = parent ? parentTable.decorate(parent, isPlain(value) ? (value as Row) : {}) : null;
       }
+    }
+    if (include?.invoice && this.name === 'order') {
+      const inv = this.db.invoice.rows.find((i) => i.orderId === row.id);
+      out.invoice = inv ? { ...inv } : null;
     }
     if (include?.priceList && this.name === 'customer') {
       const list = this.db.priceList.rows.find((l) => l.id === row.priceListId);
@@ -185,7 +193,7 @@ class Table {
     for (const item of nestedItems ?? []) {
       await (this.db as any)[nested!.table].create({ data: { ...item, [nested!.fk]: row.id } });
     }
-    return { ...row };
+    return args.include || args.select ? this.decorate(row, args) : { ...row };
   }
   private apply(row: Row, data: Row) {
     for (const [key, value] of Object.entries(data)) {
@@ -216,7 +224,7 @@ class Table {
     const row = this.rows.find((r) => this.matches(r, args.where));
     if (!row) throw new Error(`fake-db: ${this.name} not found for update`);
     this.apply(row, args.data);
-    return { ...row };
+    return args.include || args.select ? this.decorate(row, args) : { ...row };
   }
 }
 
@@ -258,6 +266,7 @@ export class FakeDb {
   priceListItem = new Table(this, 'priceListItem', () => ({}));
   accountEntry = new Table(this, 'accountEntry', () => ({ refType: null, refId: null, occurredAt: new Date() }));
   editAudit = new Table(this, 'editAudit', () => ({}));
+  invoice = new Table(this, 'invoice', () => ({ recipientEmail: null, recipientPhone: null, dueDate: null, note: null, lastSentVia: null, sentAt: null, sendCount: 0, viewedAt: null, cancelledAt: null, customerId: null }));
 
   constructor() {
     // Mirrors the migration: there is always exactly one default warehouse.
@@ -300,7 +309,7 @@ export class FakeDb {
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
       this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.priceList, this.priceListItem,
-      this.accountEntry, this.editAudit,
+      this.accountEntry, this.editAudit, this.invoice,
     ];
   }
 

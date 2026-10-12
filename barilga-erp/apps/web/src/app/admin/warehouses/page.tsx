@@ -32,7 +32,7 @@ export default function AdminWarehousesPage() {
     try {
       setRows(await api<Warehouse[]>('/inventory/warehouses?all=true'));
     } catch (err) {
-      flash('error', err instanceof Error ? err.message : 'Failed to load');
+      flash('error', err instanceof Error ? err.message : 'Ачаалж чадсангүй');
     } finally {
       setLoading(false);
     }
@@ -92,7 +92,7 @@ export default function AdminWarehousesPage() {
       setModal(null);
       await load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Save failed');
+      setFormError(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
     } finally {
       setSaving(false);
     }
@@ -104,7 +104,7 @@ export default function AdminWarehousesPage() {
       flash('ok', okText);
       await load();
     } catch (err) {
-      flash('error', err instanceof Error ? err.message : 'Failed');
+      flash('error', err instanceof Error ? err.message : 'Алдаа гарлаа');
     }
   }
 
@@ -112,7 +112,7 @@ export default function AdminWarehousesPage() {
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <div>
-          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Admin</p>
+          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Админ</p>
           <h2 className="text-xl font-bold">Дэлгүүр / агуулах</h2>
           <p className="text-slate-400 text-sm mt-1">
             Дэлгүүр бүр өөрийн агуулахтай. Анхдагч агуулахад хуучин үлдэгдэл хуваарилагдсан.
@@ -123,7 +123,7 @@ export default function AdminWarehousesPage() {
             Агуулах нэмэх
           </button>
           <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
-            Refresh
+            Шинэчлэх
           </button>
         </div>
       </div>

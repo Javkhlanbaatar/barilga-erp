@@ -10,6 +10,7 @@ import { AuthUser, FeatureKey, ROLE_LABEL } from '@/lib/types';
 const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; feature?: FeatureKey }> = [
   { href: '/pos', label: 'ПОС / Захиалга', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
   { href: '/orders', label: 'Захиалгууд', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
+  { href: '/invoices', label: 'Нэхэмжлэх', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'INVOICES' },
   { href: '/warehouse/tickets', label: 'Агуулах / тасалбар', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
   { href: '/admin/attendance', label: 'Ирц', roles: ['ADMIN', 'MANAGER'], feature: 'HR' },
   { href: '/admin/payroll', label: 'Цалин', roles: ['ADMIN', 'MANAGER'], feature: 'HR' },

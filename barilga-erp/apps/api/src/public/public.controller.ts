@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/co
 import { RateLimit, RateLimitGuard } from '../common/rate-limit/rate-limit.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { AssignDriverDto, CreateOrderDto, QuoteOrderDto } from '../orders/dto/order.dto';
+import { InvoicesService } from '../orders/invoices.service';
 import { PublicService } from './public.service';
 
 const MINUTE = 60_000;
@@ -14,7 +15,18 @@ const MINUTE = 60_000;
 // Switching ONLINE_SHOP off closes browsing and ordering; existing customers can still track their orders.
 @UseGuards(RateLimitGuard, FeatureGuard)
 export class PublicController {
-  constructor(private readonly publicOrders: PublicService) {}
+  constructor(
+    private readonly publicOrders: PublicService,
+    private readonly invoices: InvoicesService,
+  ) {}
+
+  /** The buyer's invoice behind the link we sent. Not tied to the online shop switch. */
+  @Get('invoices/:token')
+  @RateLimit({ name: 'public-invoice-read', limit: 60, windowMs: MINUTE })
+  @RequireFeature('INVOICES')
+  invoice(@Param('token') token: string) {
+    return this.invoices.publicView(token);
+  }
 
   /** Not switch-gated, so a closed shop can still say it is closed. */
   @Get('config')

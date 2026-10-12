@@ -164,6 +164,7 @@ model User {
   settingChanges       AppSetting[]               @relation("AppSettingUpdatedBy")
   accountEntries       AccountEntry[]             @relation("AccountEntryBy")
   editAudits           EditAudit[]                @relation("EditAuditBy")
+  invoices             Invoice[]                  @relation("InvoiceBy")
 
   @@map("sys_users")
 }
@@ -303,6 +304,7 @@ model Order {
   payments             Payment[]
   feeOverrides         FeeOverrideAudit[]
   returns              SalesReturn[]
+  invoice              Invoice?
   supplierPayables     SupplierPayable[]
   stockReconciliations StockReconciliationAudit[]
   /// Transfers that collect this order's stock from other warehouses into its dispatch warehouse.
@@ -600,6 +602,7 @@ model Customer {
 
   orders         Order[]
   accountEntries AccountEntry[]
+  invoices       Invoice[]
   receipts       StockReceipt[]
 
   @@index([phone])
@@ -782,4 +785,35 @@ model EditAudit {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("aud_edits")
+}
+
+/// An invoice sent to a buyer for one order. Paid / owed is read from the order's payments, never stored twice.
+model Invoice {
+  id             String    @id @default(uuid())
+  invoiceNumber  String    @unique @map("invoice_number")
+  orderId        String    @unique @map("order_id")
+  order          Order     @relation(fields: [orderId], references: [id])
+  customerId     String?   @map("customer_id")
+  customer       Customer? @relation(fields: [customerId], references: [id])
+  /// Unguessable key of the read-only public link sent to the buyer.
+  token          String    @unique
+  recipientEmail String?   @map("recipient_email")
+  recipientPhone String?   @map("recipient_phone")
+  dueDate        DateTime? @map("due_date")
+  note           String?
+  /// How it was last sent: LINK, EMAIL, PRINT.
+  lastSentVia    String?   @map("last_sent_via")
+  sentAt         DateTime? @map("sent_at")
+  sendCount      Int       @default(0) @map("send_count")
+  /// First time the buyer opened the public link.
+  viewedAt       DateTime? @map("viewed_at")
+  cancelledAt    DateTime? @map("cancelled_at")
+  createdById    String    @map("created_by_id")
+  createdBy      User      @relation("InvoiceBy", fields: [createdById], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([customerId])
+  @@index([createdAt])
+  @@map("ord_invoices")
 }

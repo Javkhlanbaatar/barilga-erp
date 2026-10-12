@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CreditPanel, owedOnOrder } from '@/components/credit-panel';
 import { GatherPanel } from '@/components/gather-panel';
+import { InvoicePanel } from '@/components/invoice-panel';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
@@ -116,8 +117,8 @@ export default function OrderDetailPage() {
       .filter(([, qty]) => qty > 0)
       .map(([orderItemId, quantity]) => ({ orderItemId, quantity }));
     if (!items.length) {
-      setError('Select at least one quantity to return');
-      setToast('Select at least one quantity to return');
+      setError('Буцаах тоо хэмжээгээ оруулна уу');
+      setToast('Буцаах тоо хэмжээгээ оруулна уу');
       return;
     }
     setSaving(true);
@@ -128,11 +129,11 @@ export default function OrderDetailPage() {
         body: JSON.stringify({ reason: returnReason, refundMethod, items }),
       });
       setReturnOpen(false);
-      setToast('Return recorded — refund money is NOT paid out by the system');
+      setToast('Буцаалт бүртгэгдлээ — мөнгийг систем автоматаар олгохгүй');
       window.setTimeout(() => setToast(''), 4000);
       await load();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Return failed';
+      const message = err instanceof Error ? err.message : 'Буцаалт хийж чадсангүй';
       setError(message);
       setToast(message);
     } finally {
@@ -155,7 +156,7 @@ export default function OrderDetailPage() {
       });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Override failed');
+      setError(err instanceof Error ? err.message : 'Засварыг хадгалж чадсангүй');
     }
   }
 
@@ -166,7 +167,7 @@ export default function OrderDetailPage() {
       await api(`/payments/${order.id}/simulate-paid`, { method: 'POST' });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Simulation failed');
+      setError(err instanceof Error ? err.message : 'Туршилтын төлбөр амжилтгүй');
     }
   }
 
@@ -180,7 +181,7 @@ export default function OrderDetailPage() {
       window.setTimeout(() => setToast(''), 4000);
       await load();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Cancel failed';
+      const message = err instanceof Error ? err.message : 'Цуцалж чадсангүй';
       setError(message);
       setToast(message);
     }
@@ -194,11 +195,11 @@ export default function OrderDetailPage() {
         method: 'PATCH',
         body: JSON.stringify({ vehicleNumber, driverPhone }),
       });
-      setToast('Hired transport saved');
+      setToast('Хөлсний тээвэр хадгалагдлаа');
       window.setTimeout(() => setToast(''), 4000);
       await load();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Assign failed';
+      const message = err instanceof Error ? err.message : 'Оноож чадсангүй';
       setError(message);
       setToast(message);
     }
@@ -215,11 +216,11 @@ export default function OrderDetailPage() {
         body: JSON.stringify({ supplierName, reason: supplierReason || undefined }),
       });
       setAssignItemId(null);
-      setToast('External supplier assigned; stock reconciled');
+      setToast('Гадны нийлүүлэгч оноогдож, үлдэгдэл тохирууллаа');
       window.setTimeout(() => setToast(''), 4000);
       await load();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Assign failed';
+      const message = err instanceof Error ? err.message : 'Оноож чадсангүй';
       setError(message);
       setToast(message);
     } finally {
@@ -234,7 +235,7 @@ export default function OrderDetailPage() {
       await api(`/orders/${order.id}/ebarimt`, { method: 'POST' });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'E-Barimt failed');
+      setError(err instanceof Error ? err.message : 'И-баримт олгож чадсангүй');
     }
   }
 
@@ -251,7 +252,7 @@ export default function OrderDetailPage() {
           </p>
           {(order.preparedBy || order.completedBy) && (
             <p className="text-sm mt-1">
-              Fulfillment staff:{' '}
+              Бэлтгэсэн ажилтан:{' '}
               <span className="font-semibold text-amber-brand">
                 {order.preparedBy?.fullName ?? order.completedBy?.fullName ?? order.completedBy?.name}
               </span>
@@ -259,23 +260,23 @@ export default function OrderDetailPage() {
           )}
           {features.enabled('DELIVERY') && (
           <p className="text-sm text-slate-400">
-            Size class:{' '}
+            Хэмжээний ангилал:{' '}
             <span className="font-medium text-slate-200">
               {order.assignedVehicle ? VEHICLE_LABEL[order.assignedVehicle] ?? order.assignedVehicle : '—'}
             </span>
-            <span className="text-slate-500"> (capacity match, not the hired plate)</span>
+            <span className="text-slate-500"> (даацын ангилал, хөлсний машины дугаар биш)</span>
           </p>
           )}
           {features.enabled('DELIVERY') && isHiredTransport(order.deliveryMethod) && (
             <p className="text-sm">
-              Hired truck plate:{' '}
+              Хөлсний машины дугаар:{' '}
               <span className="font-semibold">{order.vehicleNumber ?? '—'}</span>
               {order.driverPhone ? ` · ${order.driverPhone}` : ''}
             </p>
           )}
           {features.enabled('DELIVERY') && order.trackingToken && (
             <p className="text-sm text-slate-400 mt-1">
-              Tracking:{' '}
+              Хяналтын холбоос:{' '}
               <button
                 type="button"
                 className="text-amber-brand hover:underline"
@@ -327,6 +328,7 @@ export default function OrderDetailPage() {
       {features.enabled('CREDIT_SALES') && order.status !== 'CANCELLED' && (
         <CreditPanel order={order} onPaid={setOrder} />
       )}
+      {features.enabled('INVOICES') && <InvoicePanel order={order} canManage={canDispatch} onOrder={setOrder} />}
       <div className="grid grid-cols-2 gap-6">
         <div className="card space-y-4">
           <h3 className="font-semibold">Төлбөрийн хуваарилалт</h3>
@@ -346,7 +348,7 @@ export default function OrderDetailPage() {
           ))}
           {canSimulatePaid && order.status === 'PENDING_PAYMENT' && qpaySplits.some((p) => p.status !== 'PAID') && (
             <button className="btn-ghost" onClick={simulatePaid}>
-              Mock: үлдсэн QPay PAID
+              Туршилт: үлдсэн QPay-г төлөгдсөн болгох
             </button>
           )}
         </div>
@@ -367,12 +369,12 @@ export default function OrderDetailPage() {
                     <p className="text-xs text-slate-500">
                       {Number(item.quantity)} × {tugrik(item.unitPrice)}
                       {item.sourceType === 'EXTERNAL_SUPPLIER' ? ` · Гаднаас (${item.supplierName ?? 'өөр дэлгүүр'})` : ''}
-                      {taken > 0 ? ` · returned ${taken}` : ''}
-                      {oversold ? ` · warehouse stock ${Number(item.product.stockQty)}` : ''}
+                      {taken > 0 ? ` · буцаасан ${taken}` : ''}
+                      {oversold ? ` · агуулахын үлдэгдэл ${Number(item.product.stockQty)}` : ''}
                     </p>
                     {oversold && (
                       <span className="mt-1 inline-flex rounded-full border border-rose-600 bg-rose-950/70 px-2 py-0.5 text-[11px] font-semibold text-rose-100">
-                        Oversold
+                        Илүү зарагдсан
                       </span>
                     )}
                     {canDispatch && oversold && (
@@ -385,7 +387,7 @@ export default function OrderDetailPage() {
                           setSupplierReason('');
                         }}
                       >
-                        Assign External Supplier
+                        Гадны нийлүүлэгч оноох
                       </button>
                     )}
                   </div>
@@ -396,11 +398,11 @@ export default function OrderDetailPage() {
           </ul>
           {(order.returns ?? []).length > 0 && (
             <div className="pt-2">
-              <h4 className="text-sm font-semibold">Returns</h4>
+              <h4 className="text-sm font-semibold">Буцаалт</h4>
               {(order.returns ?? []).map((r) => (
                 <p key={r.id} className="text-xs text-slate-400">
-                  {tugrik(r.refundAmount)} {r.refundMethod} — {r.reason}
-                  {features.enabled('EBARIMT') && r.ebarimtRefundId ? ` · E-Barimt ${r.ebarimtRefundId}` : ''}
+                  {tugrik(r.refundAmount)} {PAY_LABEL[r.refundMethod] ?? r.refundMethod} — {r.reason}
+                  {features.enabled('EBARIMT') && r.ebarimtRefundId ? ` · И-баримт ${r.ebarimtRefundId}` : ''}
                   {r.refundStatus === 'PAID_OUT' ? ' · мөнгө буцаагдсан' : ' · мөнгө буцаагдаагүй (гараар олгоно)'}
                 </p>
               ))}
@@ -409,7 +411,7 @@ export default function OrderDetailPage() {
           <h3 className="font-semibold pt-2">Төлбөрийн задаргаа</h3>
           {features.enabled('DELIVERY') && (
             <p>
-              Size class:{' '}
+              Хэмжээний ангилал:{' '}
               {order.assignedVehicle ? VEHICLE_LABEL[order.assignedVehicle] ?? order.assignedVehicle : '—'}
             </p>
           )}
@@ -432,7 +434,7 @@ export default function OrderDetailPage() {
               <input type="number" value={timeAdj} onChange={(e) => setTimeAdj(Number(e.target.value))} />
               <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Шалтгаан" />
               <button className="btn-primary" onClick={override}>
-                Audit-тай хадгалах
+                Түүхэнд бүртгэж хадгалах
               </button>
             </div>
           )}
@@ -440,9 +442,9 @@ export default function OrderDetailPage() {
 
           {features.enabled('DELIVERY') && canTransport && isHiredTransport(order.deliveryMethod) && (
             <div className="border-t border-slate-700 pt-3 space-y-2">
-              <h4 className="text-sm font-semibold">Hired truck plate &amp; phone</h4>
+              <h4 className="text-sm font-semibold">Хөлсний машины дугаар, утас</h4>
               <p className="text-xs text-slate-500">
-                Separate from size class above. No internal staff drivers — plate and phone of the hired truck.
+                Дээрх хэмжээний ангиллаас тусдаа. Манай жолооч биш — хөлсөлсөн машины дугаар, утас.
               </p>
               <label className="block text-xs text-slate-400">
                 Ачааны машины дугаар
@@ -463,7 +465,7 @@ export default function OrderDetailPage() {
                 />
               </label>
               <button type="button" className="btn-ghost" onClick={() => void saveTransport()}>
-                Save transport
+                Тээвэр хадгалах
               </button>
             </div>
           )}
@@ -479,7 +481,7 @@ export default function OrderDetailPage() {
               Төлөв:{' '}
               <span className={order.ebarimtStatus === 'ISSUED' ? 'text-emerald-400' : order.ebarimtStatus === 'FAILED' ? 'text-red-400' : 'text-slate-300'}>
                 {ebarimtStatusLabel(order.ebarimtStatus)}
-                {order.ebarimtStatus === 'ISSUED' ? ' (ISSUED)' : ''}
+                {order.ebarimtStatus === 'ISSUED' ? ' (олгосон)' : ''}
               </span>
             </p>
             {order.receiptId && (
@@ -501,7 +503,7 @@ export default function OrderDetailPage() {
             )}
             {order.status !== 'PENDING_PAYMENT' && order.ebarimtStatus !== 'ISSUED' && (
               <button className="btn-ghost" onClick={retryEbarimt}>
-                Retry E-Barimt
+                И-баримт дахин илгээх
               </button>
             )}
           </div>
@@ -513,10 +515,10 @@ export default function OrderDetailPage() {
           ))}
           {canDispatch && (order.stockReconciliations ?? []).length > 0 && (
             <div className="border-t border-slate-700 pt-3 space-y-1">
-              <h4 className="text-sm font-semibold">Stock reconciliation</h4>
+              <h4 className="text-sm font-semibold">Үлдэгдлийн тохируулга</h4>
               {(order.stockReconciliations ?? []).map((a) => (
                 <p key={a.id} className="text-xs text-slate-400">
-                  {a.actor.fullName ?? a.actor.name}: {a.supplierName} · restored {Number(a.quantityRestored)} · stock{' '}
+                  {a.actor.fullName ?? a.actor.name}: {a.supplierName} · буцааж нэмсэн {Number(a.quantityRestored)} · үлдэгдэл{' '}
                   {Number(a.stockBefore)} → {Number(a.stockAfter)}
                   {a.reason ? ` — ${a.reason}` : ''}
                 </p>
@@ -529,37 +531,37 @@ export default function OrderDetailPage() {
       {assignItemId && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
           <form onSubmit={assignSupplier} className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">Assign External Supplier</h3>
+            <h3 className="font-semibold text-lg">Гадны нийлүүлэгч оноох</h3>
             <p className="text-sm text-slate-300">
-              Convert this internal line to an external supplier purchase. Completed orders restore warehouse stock and open a supplier payable.
+              Энэ мөрийг гадны нийлүүлэгчээс авсан болгоно. Олгосон захиалгын хувьд агуулахын үлдэгдэл сэргээгдэж, нийлүүлэгчид өглөг үүснэ.
             </p>
             {error && <p className="text-red-400 text-sm">{error}</p>}
             <label className="block text-xs text-slate-400">
-              Supplier / other store
+              Нийлүүлэгч / өөр дэлгүүр
               <input
                 className="mt-1 w-full"
                 required
                 minLength={2}
                 value={supplierName}
                 onChange={(e) => setSupplierName(e.target.value)}
-                placeholder="Supplier name"
+                placeholder="Нийлүүлэгчийн нэр"
               />
             </label>
             <label className="block text-xs text-slate-400">
-              Reason (optional)
+              Шалтгаан (заавал биш)
               <input
                 className="mt-1 w-full"
                 value={supplierReason}
                 onChange={(e) => setSupplierReason(e.target.value)}
-                placeholder="Sold from another yard / missed checkbox"
+                placeholder="Өөр талбайгаас зарсан / тэмдэглэхээ мартсан"
               />
             </label>
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setAssignItemId(null)}>
-                Cancel
+                Болих
               </button>
               <button className="btn-primary" disabled={saving}>
-                {saving ? 'Saving…' : 'Reconcile'}
+                {saving ? 'Хадгалж байна…' : 'Тохируулах'}
               </button>
             </div>
           </form>
@@ -576,13 +578,13 @@ export default function OrderDetailPage() {
               if (remaining <= 0) {
                 return (
                   <p key={item.id} className="text-xs text-slate-500">
-                    {item.product.nameMn} — fully returned
+                    {item.product.nameMn} — бүрэн буцаагдсан
                   </p>
                 );
               }
               return (
                 <label key={item.id} className="block text-xs text-slate-400">
-                  {item.product.nameMn} (remaining {remaining})
+                  {item.product.nameMn} (үлдсэн {remaining})
                   <input
                     type="number"
                     min={0}
@@ -596,19 +598,19 @@ export default function OrderDetailPage() {
               );
             })}
             <label className="block text-xs text-slate-400">
-              Reason
+              Шалтгаан
               <input className="mt-1 w-full" required minLength={3} value={returnReason} onChange={(e) => setReturnReason(e.target.value)} />
             </label>
             <label className="block text-xs text-slate-400">
-              Refund method
+              Буцаалтын төлбөрийн хэлбэр
               {owedOnOrder(order) > 0 ? (
                 <p className="mt-1 text-amber-300">
                   Энэ захиалгад {tugrik(owedOnOrder(order))} өр байгаа тул буцаалт өрөөс хасагдана (мөнгө олгохгүй).
                 </p>
               ) : (
                 <select className="mt-1 w-full" value={refundMethod} onChange={(e) => setRefundMethod(e.target.value as 'CASH' | 'QPAY' | 'CARD' | 'TRANSFER')}>
-                  <option value="CASH">Cash</option>
-                  <option value="CARD">Card</option>
+                  <option value="CASH">Бэлэн</option>
+                  <option value="CARD">Карт</option>
                   <option value="QPAY">QPay</option>
                   <option value="TRANSFER">Банкны шилжүүлэг</option>
                 </select>
@@ -616,10 +618,10 @@ export default function OrderDetailPage() {
             </label>
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setReturnOpen(false)}>
-                Cancel
+                Болих
               </button>
               <button className="btn-primary" disabled={saving}>
-                {saving ? 'Saving…' : 'Refund'}
+                {saving ? 'Хадгалж байна…' : 'Буцаах'}
               </button>
             </div>
           </form>

@@ -1,4 +1,22 @@
-const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
+/**
+ * The API lives on port 4000 of the same machine that served this page, unless NEXT_PUBLIC_API_URL says
+ * otherwise — so the app also works when opened as 127.0.0.1 or from another computer on the shop network.
+ */
+const API =
+  process.env.NEXT_PUBLIC_API_URL ??
+  (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:4000/api` : 'http://localhost:4000/api');
+
+const OFFLINE =
+  'Сервертэй холбогдож чадсангүй: API (порт 4000) ажиллахгүй байна. Төслийн хавтаснаас «npm run dev:all» ажиллуулна уу.';
+
+/** fetch, with a plain explanation instead of the browser's "Failed to fetch" when the API is down. */
+async function call(url: string, init: RequestInit) {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new Error(OFFLINE);
+  }
+}
 
 export function apiOrigin() {
   try {
@@ -26,7 +44,7 @@ export async function publicApi<T>(path: string, init: RequestInit = {}): Promis
     'Content-Type': 'application/json',
     ...(init.headers as Record<string, string> | undefined),
   };
-  const res = await fetch(`${API}${path}`, { ...init, headers });
+  const res = await call(`${API}${path}`, { ...init, headers });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
@@ -52,7 +70,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...(init.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${API}${path}`, { ...init, headers });
+  const res = await call(`${API}${path}`, { ...init, headers });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) {
@@ -70,7 +88,7 @@ export async function apiUpload<T>(path: string, file: File, field = 'file'): Pr
   const token = getToken();
   const body = new FormData();
   body.append(field, file);
-  const res = await fetch(`${API}${path}`, {
+  const res = await call(`${API}${path}`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body,

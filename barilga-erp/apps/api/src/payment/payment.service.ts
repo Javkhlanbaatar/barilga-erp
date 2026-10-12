@@ -82,6 +82,8 @@ export class PaymentService {
       .map((s) => ({
         method: this.toPayMethod(s.method),
         amount: Math.round(Number(s.amount)),
+        // Sent an invoice: a bank transfer the buyer has not made yet. Held UNPAID until someone confirms it arrived.
+        awaiting: s.method === 'INVOICE',
       }))
       .filter((s) => s.amount > 0);
 
@@ -130,6 +132,19 @@ export class PaymentService {
           paidAt: null,
           nextPollAt: null,
           qpayPayload: { channel: 'CREDIT', originalMnt: split.amount, settlements: [] },
+        });
+        continue;
+      }
+      if (split.awaiting) {
+        rows.push({
+          orderId: order.id,
+          method: PayMethod.TRANSFER,
+          provider: 'INVOICE',
+          amountMnt: split.amount,
+          status: PaymentStatus.UNPAID,
+          paidAt: null,
+          nextPollAt: null,
+          qpayPayload: { channel: 'INVOICE', awaitingTransfer: true },
         });
         continue;
       }
@@ -360,6 +375,25 @@ export class PaymentService {
    * owed any more the CREDIT row is closed (PAID at 0₮) and the E-Barimt is issued, because the sale is now
    * fully paid.
    */
+  /**
+   * A staff member saw the invoiced bank transfer arrive: the awaiting transfer rows become PAID and the order is
+   * released. Conditional on the rows still being UNPAID, so two people confirming at once record it once.
+   */
+  async confirmTransfer(orderId: string, actorId: string) {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    if (order.status === OrderStatus.CANCELLED) throw new BadRequestException('Order is cancelled');
+    const now = new Date();
+    const res = await this.prisma.payment.updateMany({
+      where: { orderId, method: PayMethod.TRANSFER, status: PaymentStatus.UNPAID },
+      data: { status: PaymentStatus.PAID, paidAt: now, qpayPayload: { channel: 'INVOICE', confirmedBy: actorId, confirmedAt: now.toISOString() } },
+    });
+    if (res.count === 0) throw new BadRequestException('Шилжүүлэг хүлээж буй төлбөр алга / No transfer is awaited on this order');
+    this.log.log(`Invoice transfer confirmed on ${order.orderNumber} by ${actorId}`);
+    await this.syncOrderStatus(orderId);
+    return { confirmed: res.count };
+  }
+
   async settleCredit(orderId: string, method: SettleMethod, amountMnt: number, actorId: string) {
     if (!Number.isInteger(amountMnt) || amountMnt <= 0) throw new BadRequestException('Amount must be a positive whole number');
     const result = await this.prisma.$transaction(
@@ -487,11 +521,12 @@ export class PaymentService {
         createdAt: { lt: cutoff },
         payments: { some: {}, none: { status: PaymentStatus.PAID } },
       },
-      select: { id: true },
+      select: { id: true, payments: { select: { method: true, status: true } } },
       take: 50,
     });
     let expired = 0;
-    for (const { id } of stale) {
+    // An invoiced order waits for the buyer's bank transfer for days, not minutes: the QPay window does not apply.
+    for (const { id } of stale.filter((o) => !o.payments.some((p) => p.method === PayMethod.TRANSFER && p.status === PaymentStatus.UNPAID))) {
       try {
         await this.cancelUnpaidOrder(id, `Payment window of ${ttlMinutes} min expired`);
         expired += 1;
@@ -595,7 +630,7 @@ export class PaymentService {
     if (raw === 'CARD') return PayMethod.CARD;
     if (raw === 'QPAY') return PayMethod.QPAY;
     if (raw === 'CREDIT') return PayMethod.CREDIT;
-    if (raw === 'TRANSFER') return PayMethod.TRANSFER;
+    if (raw === 'TRANSFER' || raw === 'INVOICE') return PayMethod.TRANSFER;
     throw new BadRequestException(`Unsupported payment method ${raw}`);
   }
 

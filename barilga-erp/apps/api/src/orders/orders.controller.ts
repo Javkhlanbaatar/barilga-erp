@@ -19,6 +19,7 @@ import {
   QuoteOrderDto,
 } from './dto/order.dto';
 import { GatherService } from './gather.service';
+import { InvoicesService } from './invoices.service';
 import { OrdersService } from './orders.service';
 
 @Controller('orders')
@@ -28,6 +29,7 @@ export class OrdersController {
     private readonly orders: OrdersService,
     private readonly returns: ReturnsService,
     private readonly gather: GatherService,
+    private readonly invoices: InvoicesService,
   ) {}
 
   @Post('quote')
@@ -38,8 +40,13 @@ export class OrdersController {
 
   @Post()
   @Roles(...POS_ROLES)
-  create(@Body() dto: CreateOrderDto, @CurrentUser() user: AuthUser) {
-    return this.orders.create(dto, user);
+  async create(@Body() dto: CreateOrderDto, @CurrentUser() user: AuthUser) {
+    const order = await this.orders.create(dto, user);
+    // "Pay by invoice" at the till: the invoice is made right away, ready to send from the order page.
+    if (dto.payments?.some((p) => p.method === 'INVOICE') || dto.paymentMethod === 'INVOICE') {
+      await this.invoices.create({ orderId: order.id }, user);
+    }
+    return order;
   }
 
   @Get()
@@ -104,6 +111,13 @@ export class OrdersController {
   @Roles(Role.BORLUULAGCH, Role.ADMIN, Role.MANAGER)
   issueEbarimt(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.orders.issueEbarimt(id, user);
+  }
+
+  /** The invoiced bank transfer arrived: release the order. */
+  @Post(':id/confirm-transfer')
+  @Roles(...POS_ROLES)
+  confirmTransfer(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.orders.confirmTransfer(id, user);
   }
 
   /** Record a payment against what is owed on an order released on account. */

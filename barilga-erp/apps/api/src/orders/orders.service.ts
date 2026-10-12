@@ -238,6 +238,7 @@ export class OrdersService {
         throw new ForbiddenException('Энэ харилцагчид дараа төлөх эрх менежерээс олгогдоогүй / Customer may not take goods on account');
       }
     }
+    if (splitMethods.includes(CheckoutPaymentMethod.INVOICE) && this.features) await this.features.assertEnabled('INVOICES');
     const contractSplits = (dto.payments ?? []).filter((p) => p.method === CheckoutPaymentMethod.CONTRACT);
     if (splitMethods.includes(CheckoutPaymentMethod.CONTRACT)) {
       if (this.features) await this.features.assertEnabled('PARTNER_ACCOUNTS');
@@ -268,6 +269,14 @@ export class OrdersService {
       specs,
     });
 
+    // Split payments must add up to the total before anything is written, so a typo at the till does not
+    // leave a cancelled order behind in the list.
+    if (dto.payments?.length) {
+      const sum = dto.payments.reduce((s, p) => s + Math.round(Number(p.amount)), 0);
+      if (sum !== breakdown.totalMnt) {
+        throw new BadRequestException(`Төлбөрийн хуваалт ${sum}₮ нь нийт дүн ${breakdown.totalMnt}₮-тэй тэнцэхгүй / Payment splits do not equal the total`);
+      }
+    }
     const billType = dto.billType ?? BillType.CITIZEN;
     const customerRegNumber = dto.customerRegNumber?.trim() || null;
     if (billType === BillType.COMPANY) {
@@ -679,6 +688,15 @@ export class OrdersService {
   }
 
   /** The customer pays (part of) what they owe on an order released on account. */
+  async confirmTransfer(orderId: string, user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can confirm payments');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    await this.payments.confirmTransfer(orderId, user.id);
+    return this.findOne(orderId, user);
+  }
+
   async settleCredit(orderId: string, method: 'CASH' | 'CARD' | 'TRANSFER', amountMnt: number, user: AuthUser) {
     if (!isPosActor(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can take payments');

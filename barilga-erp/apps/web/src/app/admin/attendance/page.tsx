@@ -6,6 +6,8 @@ import { Shell } from '@/components/shell';
 import { api } from '@/lib/api';
 import { AttendanceBoard, AuthUser, ROLE_LABEL } from '@/lib/types';
 
+const ATTENDANCE_STATUS_LABEL: Record<string, string> = { ON_TIME: 'Цагтаа', LATE: 'Хоцорсон', OVERTIME: 'Илүү цаг' };
+
 function fmt(iso: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('mn-MN', { timeZone: 'Asia/Ulaanbaatar' });
@@ -23,7 +25,7 @@ export default function AttendanceAdminPage() {
       setBoard(await api<AttendanceBoard>('/hr/attendance'));
       setError('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load attendance');
+      setError(err instanceof Error ? err.message : 'Ирц ачаалж чадсангүй');
     }
   }, []);
 
@@ -48,7 +50,7 @@ export default function AttendanceAdminPage() {
       });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Punch failed');
+      setError(err instanceof Error ? err.message : 'Бүртгэж чадсангүй');
     } finally {
       setBusyId(null);
     }
@@ -60,14 +62,14 @@ export default function AttendanceAdminPage() {
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <div>
-          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">HR</p>
-          <h2 className="text-xl font-bold">Ирц / Attendance</h2>
+          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Хүний нөөц</p>
+          <h2 className="text-xl font-bold">Ирц</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Managers record check-in and check-out for staff. Ulaanbaatar time · late after 09:15.
+            Менежер ажилтны ирэх, явах цагийг бүртгэнэ. Улаанбаатарын цагаар · 09:15-аас хойш ирвэл хоцролт.
           </p>
         </div>
         <button className="btn-ghost" onClick={() => void load()}>
-          Refresh
+          Шинэчлэх
         </button>
       </div>
       {error && <p className="text-red-400 mb-3">{error}</p>}
@@ -75,11 +77,11 @@ export default function AttendanceAdminPage() {
         <table className="w-full text-sm min-w-[640px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
-              <th className="p-3">Staff</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th>Since</th>
-              <th className="pr-3 text-right">Actions</th>
+              <th className="p-3">Ажилтан</th>
+              <th>Албан тушаал</th>
+              <th>Төлөв</th>
+              <th>Ирсэн цаг</th>
+              <th className="pr-3 text-right">Үйлдэл</th>
             </tr>
           </thead>
           <tbody>
@@ -92,9 +94,9 @@ export default function AttendanceAdminPage() {
                 <td>{ROLE_LABEL[member.role]}</td>
                 <td>
                   {member.open ? (
-                    <span className="text-emerald-300 font-semibold">In · {member.open.status.replaceAll('_', ' ')}</span>
+                    <span className="text-emerald-300 font-semibold">Ажил дээр · {ATTENDANCE_STATUS_LABEL[member.open.status] ?? member.open.status}</span>
                   ) : (
-                    <span className="text-slate-500">Out</span>
+                    <span className="text-slate-500">Гарсан</span>
                   )}
                 </td>
                 <td>{fmt(member.open?.checkIn ?? null)}</td>
@@ -105,14 +107,14 @@ export default function AttendanceAdminPage() {
                       disabled={Boolean(member.open) || busyId === member.id}
                       onClick={() => void punch(member.id, 'in')}
                     >
-                      Check In
+                      Ирсэн
                     </button>
                     <button
                       className="btn-ghost text-xs px-3 py-1"
                       disabled={!member.open || busyId === member.id}
                       onClick={() => void punch(member.id, 'out')}
                     >
-                      Check Out
+                      Явсан
                     </button>
                   </div>
                 </td>
@@ -121,15 +123,15 @@ export default function AttendanceAdminPage() {
           </tbody>
         </table>
       </div>
-      <h3 className="font-semibold mb-2">Today’s punches</h3>
+      <h3 className="font-semibold mb-2">Өнөөдрийн бүртгэл</h3>
       <div className="card overflow-auto p-0">
         <table className="w-full text-sm">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
-              <th className="p-3">Staff</th>
-              <th>In</th>
-              <th>Out</th>
-              <th>Status</th>
+              <th className="p-3">Ажилтан</th>
+              <th>Ирсэн</th>
+              <th>Явсан</th>
+              <th>Төлөв</th>
             </tr>
           </thead>
           <tbody>
@@ -138,12 +140,12 @@ export default function AttendanceAdminPage() {
                 <td className="p-3">{row.user?.fullName ?? row.userId}</td>
                 <td>{fmt(row.checkIn)}</td>
                 <td>{fmt(row.checkOut)}</td>
-                <td>{row.status}</td>
+                <td>{ATTENDANCE_STATUS_LABEL[row.status] ?? row.status}</td>
               </tr>
             ))}
           </tbody>
         </table>
-        {(board?.recent.length ?? 0) === 0 && <p className="p-3 text-slate-500">No punches today.</p>}
+        {(board?.recent.length ?? 0) === 0 && <p className="p-3 text-slate-500">Өнөөдөр бүртгэл алга.</p>}
       </div>
     </Shell>
   );

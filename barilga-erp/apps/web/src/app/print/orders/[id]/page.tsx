@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api, tugrik } from '@/lib/api';
+import { FeeRows, InvoiceDoc, InvoiceMeta, SellerBlock, paidAndDue } from '@/components/invoice-doc';
 import type { CompanySettings, Order } from '@/lib/types';
 
 type Doc = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
@@ -62,6 +63,7 @@ function PrintOrder() {
   const [order, setOrder] = useState<Order | null>(null);
   const [company, setCompany] = useState<CompanySettings | null>(null);
   const [layouts, setLayouts] = useState<PrintSettings | null>(null);
+  const [invoice, setInvoice] = useState<InvoiceMeta | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -76,6 +78,8 @@ function PrintOrder() {
         setLayouts(p);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ачаалж чадсангүй'));
+    // The invoice number and due date, when one was sent for this order (the module may be off).
+    api<InvoiceMeta | null>(`/invoices/order/${params.id}`).then(setInvoice).catch(() => setInvoice(null));
   }, [params.id]);
 
   useEffect(() => {
@@ -92,7 +96,7 @@ function PrintOrder() {
   const geo = pageGeometry(layout);
   const body = (
     <>
-      {doc === 'invoice' && <Invoice order={order} company={company} />}
+      {doc === 'invoice' && <InvoiceDoc order={order} company={company} invoice={invoice} />}
       {doc === 'receipt' && <Receipt order={order} company={company} />}
       {doc === 'issueNote' && <IssueNote order={order} company={company} />}
       {doc === 'picklist' && <Picklist order={order} company={company} />}
@@ -144,135 +148,6 @@ function PrintOrder() {
         .print-doc .print-small th, .print-doc .print-small td { padding: 2px 4px; font-size: 10px; }
         .print-doc th { background: #f1f5f9; text-align: left; }
       `}</style>
-    </div>
-  );
-}
-
-function SellerBlock({ company }: { company: CompanySettings }) {
-  return (
-    <div className="text-xs leading-5">
-      <p className="text-sm font-bold">{company.name || '—'}</p>
-      {company.regNumber && <p>РД: {company.regNumber}</p>}
-      {company.address && <p>{company.address}</p>}
-      {(company.phone || company.email) && <p>{[company.phone, company.email].filter(Boolean).join(' · ')}</p>}
-    </div>
-  );
-}
-
-function FeeRows({ order, cols }: { order: Order; cols: number }) {
-  const fees: Array<[string, number]> = [
-    ['Хүргэлтийн төлбөр', order.deliveryFeeMnt],
-    ['Буулгалт', order.unloadingFeeMnt],
-    ['Цагийн нэмэгдэл/хөнгөлөлт', order.timeAdjustmentMnt],
-  ];
-  return (
-    <>
-      {fees
-        .filter(([, v]) => v !== 0)
-        .map(([label, v]) => (
-          <tr key={label}>
-            <td colSpan={cols - 1}>{label}</td>
-            <td className="text-right">{tugrik(v)}</td>
-          </tr>
-        ))}
-    </>
-  );
-}
-
-function paidAndDue(order: Order) {
-  const live = (order.payments ?? []).filter((p) => p.status !== 'EXPIRED' && p.status !== 'FAILED');
-  const paid = live.filter((p) => p.status === 'PAID').reduce((s, p) => s + p.amountMnt, 0);
-  return { live, paid, due: Math.max(0, order.totalMnt - paid) };
-}
-
-function Invoice({ order, company }: { order: Order; company: CompanySettings }) {
-  const { paid, due } = paidAndDue(order);
-  return (
-    <div className="space-y-5">
-      <div className="flex items-start justify-between gap-6">
-        <SellerBlock company={company} />
-        <div className="text-right">
-          <h1 className="text-2xl font-bold tracking-wide">НЭХЭМЖЛЭХ</h1>
-          <p className="text-sm">№ {order.orderNumber}</p>
-          <p className="text-xs">Огноо: {dateTime(order.createdAt)}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 text-xs">
-        <div className="rounded border border-slate-400 p-3">
-          <p className="mb-1 font-semibold">Нэхэмжлэгч</p>
-          <p>{company.name || '—'}</p>
-          {company.bankAccounts.map((b) => (
-            <p key={b.accountNumber}>
-              {b.bankName}: <span className="font-mono">{b.accountNumber}</span>
-              {b.accountName ? ` (${b.accountName})` : ''}
-            </p>
-          ))}
-        </div>
-        <div className="rounded border border-slate-400 p-3">
-          <p className="mb-1 font-semibold">Төлөгч</p>
-          <p>{order.customerName}</p>
-          {order.customerRegNumber && <p>РД: {order.customerRegNumber}</p>}
-          <p>Утас: {order.customerPhone}</p>
-          {order.deliveryAddress && <p>Хаяг: {order.deliveryAddress}</p>}
-        </div>
-      </div>
-
-      <table>
-        <thead>
-          <tr>
-            <th className="w-8">№</th>
-            <th>Барааны нэр</th>
-            <th>Код</th>
-            <th>Нэгж</th>
-            <th className="text-right">Тоо</th>
-            <th className="text-right">Нэгж үнэ</th>
-            <th className="text-right">Дүн</th>
-          </tr>
-        </thead>
-        <tbody>
-          {order.items.map((i, idx) => (
-            <tr key={i.id}>
-              <td>{idx + 1}</td>
-              <td>{i.product.nameMn}</td>
-              <td className="font-mono">{i.product.sku}</td>
-              <td>{i.product.unit}</td>
-              <td className="text-right">{qty(i.quantity)}</td>
-              <td className="text-right">{tugrik(i.unitPrice)}</td>
-              <td className="text-right">{tugrik(i.lineTotal)}</td>
-            </tr>
-          ))}
-          <FeeRows order={order} cols={7} />
-          <tr>
-            <td colSpan={6} className="text-right font-bold">
-              Нийт дүн
-            </td>
-            <td className="text-right font-bold">{tugrik(order.totalMnt)}</td>
-          </tr>
-          {paid > 0 && (
-            <tr>
-              <td colSpan={6} className="text-right">
-                Төлсөн
-              </td>
-              <td className="text-right">{tugrik(paid)}</td>
-            </tr>
-          )}
-          <tr>
-            <td colSpan={6} className="text-right font-bold">
-              Төлөх үлдэгдэл
-            </td>
-            <td className="text-right font-bold">{tugrik(due)}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      {company.invoiceNote && <p className="whitespace-pre-line text-xs">{company.invoiceNote}</p>}
-
-      <div className="grid grid-cols-2 gap-10 pt-8 text-xs">
-        <p>Нэхэмжилсэн: ______________________ /{order.createdBy?.fullName ?? order.createdBy?.name ?? ''}/</p>
-        <p>Хүлээн авсан: ______________________</p>
-      </div>
-      <p className="pt-4 text-[10px] text-slate-500">Энэ нэхэмжлэх нь И-баримт биш. Албан ёсны баримтыг И-баримтын системээс авна.</p>
     </div>
   );
 }

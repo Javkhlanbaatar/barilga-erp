@@ -66,7 +66,7 @@ export default function AdminUsersPage() {
       setUsers(staff);
       setWarehouses(wh);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load users';
+      const message = err instanceof Error ? err.message : 'Хэрэглэгчдийг ачаалж чадсангүй';
       flash('error', message);
     } finally {
       setLoading(false);
@@ -110,14 +110,14 @@ export default function AdminUsersPage() {
   }
 
   function validate(): string | null {
-    if (form.fullName.trim().length < 2) return 'Full name is required';
+    if (form.fullName.trim().length < 2) return 'Овог нэрээ оруулна уу';
     if (!USERNAME_RE.test(form.username.trim())) {
-      return 'Username must be 3–32 letters, numbers, dot, dash, or underscore';
+      return 'Нэвтрэх нэр 3–32 тэмдэгт: латин үсэг, тоо, цэг, зураас, доогуур зураас';
     }
-    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return 'Invalid email';
-    if (modal === 'create' && form.password.length < 8) return 'Password must be at least 8 characters';
+    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) return 'И-мэйл буруу байна';
+    if (modal === 'create' && form.password.length < 8) return 'Нууц үг дор хаяж 8 тэмдэгт байна';
     if (modal === 'edit' && form.password && form.password.length < 8) {
-      return 'New password must be at least 8 characters';
+      return 'Шинэ нууц үг дор хаяж 8 тэмдэгт байна';
     }
     return null;
   }
@@ -145,7 +145,7 @@ export default function AdminUsersPage() {
             warehouseId: form.warehouseId || undefined,
           }),
         });
-        flash('ok', 'User created');
+        flash('ok', 'Хэрэглэгч нэмэгдлээ');
       } else if (editing) {
         await api(`/users/${editing.id}`, {
           method: 'PATCH',
@@ -158,12 +158,12 @@ export default function AdminUsersPage() {
             ...(form.password ? { password: form.password } : {}),
           }),
         });
-        flash('ok', form.password ? 'User updated and password reset' : 'User updated');
+        flash('ok', form.password ? 'Хэрэглэгч шинэчлэгдэж, нууц үг солигдлоо' : 'Хэрэглэгч шинэчлэгдлээ');
       }
       setModal(null);
       await load();
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Save failed';
+      const message = err instanceof Error ? err.message : 'Хадгалж чадсангүй';
       setFormError(message);
       flash('error', message);
     } finally {
@@ -176,11 +176,11 @@ export default function AdminUsersPage() {
     setSaving(true);
     try {
       await api(`/users/${deleting.id}`, { method: 'DELETE' });
-      flash('ok', `${deleting.username} deactivated`);
+      flash('ok', `${deleting.username} идэвхгүй боллоо`);
       setDeleting(null);
       await load();
     } catch (err) {
-      flash('error', err instanceof Error ? err.message : 'Deactivate failed');
+      flash('error', err instanceof Error ? err.message : 'Идэвхгүй болгож чадсангүй');
     } finally {
       setSaving(false);
     }
@@ -192,10 +192,10 @@ export default function AdminUsersPage() {
         method: 'PATCH',
         body: JSON.stringify({ isActive: true }),
       });
-      flash('ok', `${row.username} reactivated`);
+      flash('ok', `${row.username} идэвхжлээ`);
       await load();
     } catch (err) {
-      flash('error', err instanceof Error ? err.message : 'Reactivate failed');
+      flash('error', err instanceof Error ? err.message : 'Идэвхжүүлж чадсангүй');
     }
   }
 
@@ -205,16 +205,16 @@ export default function AdminUsersPage() {
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <div>
-          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Admin</p>
-          <h2 className="text-xl font-bold">User management</h2>
-          <p className="text-slate-400 text-sm mt-1">Create staff accounts, assign roles, reset passwords, and deactivate login.</p>
+          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Админ</p>
+          <h2 className="text-xl font-bold">Хэрэглэгчийн удирдлага</h2>
+          <p className="text-slate-400 text-sm mt-1">Ажилтны бүртгэл үүсгэх, эрх олгох, нууц үг солих, нэвтрэх эрхийг идэвхгүй болгох.</p>
         </div>
         <div className="flex gap-2">
           <button className="btn-primary" onClick={openCreate}>
-            Add New User
+            Хэрэглэгч нэмэх
           </button>
           <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
-            Refresh
+            Шинэчлэх
           </button>
         </div>
       </div>
@@ -223,12 +223,12 @@ export default function AdminUsersPage() {
         <table className="w-full text-sm min-w-[720px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
-              <th className="p-3">Full Name</th>
-              <th>Username</th>
-              <th>Role</th>
+              <th className="p-3">Овог нэр</th>
+              <th>Нэвтрэх нэр</th>
+              <th>Эрх</th>
               <th>Агуулах</th>
-              <th>Status</th>
-              <th className="pr-3 text-right">Actions</th>
+              <th>Төлөв</th>
+              <th className="pr-3 text-right">Үйлдэл</th>
             </tr>
           </thead>
           <tbody>
@@ -251,22 +251,22 @@ export default function AdminUsersPage() {
                           : 'border-slate-600 text-slate-400'
                       }`}
                     >
-                      {active ? 'Active' : 'Inactive'}
+                      {active ? 'Идэвхтэй' : 'Идэвхгүй'}
                     </span>
                   </td>
                   <td className="pr-3">
                     <div className="flex justify-end gap-1">
                       <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
-                        Edit
+                        Засах
                       </button>
                       {active && row.id !== me?.id && (
                         <button className="btn-danger text-xs px-3 py-1" onClick={() => setDeleting(row)}>
-                          Deactivate
+                          Идэвхгүй болгох
                         </button>
                       )}
                       {!active && (
                         <button className="btn-ghost text-xs px-3 py-1" onClick={() => void reactivate(row)}>
-                          Reactivate
+                          Идэвхжүүлэх
                         </button>
                       )}
                     </div>
@@ -276,16 +276,16 @@ export default function AdminUsersPage() {
             })}
           </tbody>
         </table>
-        {loading && <p className="p-3 text-slate-500">Loading staff…</p>}
+        {loading && <p className="p-3 text-slate-500">Ажилтнуудыг уншиж байна…</p>}
       </div>
 
       {modal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
           <form onSubmit={save} className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">{modal === 'create' ? 'Add New User' : 'Edit User / Reset Password'}</h3>
+            <h3 className="font-semibold text-lg">{modal === 'create' ? 'Хэрэглэгч нэмэх' : 'Хэрэглэгч засах / нууц үг солих'}</h3>
             {formError && <p className="text-red-400 text-sm">{formError}</p>}
             <label className="block text-xs text-slate-400">
-              Full Name
+              Овог нэр
               <input
                 className="mt-1 w-full"
                 required
@@ -295,7 +295,7 @@ export default function AdminUsersPage() {
               />
             </label>
             <label className="block text-xs text-slate-400">
-              Username
+              Нэвтрэх нэр
               <input
                 className="mt-1 w-full"
                 required
@@ -305,7 +305,7 @@ export default function AdminUsersPage() {
               />
             </label>
             <label className="block text-xs text-slate-400">
-              Email (optional)
+              И-мэйл (заавал биш)
               <input
                 className="mt-1 w-full"
                 type="email"
@@ -314,7 +314,7 @@ export default function AdminUsersPage() {
               />
             </label>
             <label className="block text-xs text-slate-400">
-              {modal === 'create' ? 'Password' : 'New password (leave blank to keep)'}
+              {modal === 'create' ? 'Нууц үг' : 'Шинэ нууц үг (хэвээр үлдээх бол хоосон орхино)'}
               <input
                 className="mt-1 w-full"
                 type="password"
@@ -325,7 +325,7 @@ export default function AdminUsersPage() {
               />
             </label>
             <label className="block text-xs text-slate-400">
-              Role
+              Эрх
               <select
                 className="mt-1 w-full"
                 value={form.role}
@@ -359,10 +359,10 @@ export default function AdminUsersPage() {
             </label>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
-                Cancel
+                Болих
               </button>
               <button className="btn-primary" disabled={saving}>
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
               </button>
             </div>
           </form>
@@ -372,16 +372,16 @@ export default function AdminUsersPage() {
       {deleting && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
           <div className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">Deactivate user</h3>
+            <h3 className="font-semibold text-lg">Хэрэглэгчийг идэвхгүй болгох</h3>
             <p className="text-sm text-slate-300">
-              {deleting.fullName} ({deleting.username}) will not be able to sign in. You can reactivate later.
+              {deleting.fullName} ({deleting.username}) нэвтрэх боломжгүй болно. Дараа нь дахин идэвхжүүлж болно.
             </p>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="btn-ghost" onClick={() => setDeleting(null)}>
-                Cancel
+                Болих
               </button>
               <button className="btn-danger" disabled={saving} onClick={() => void confirmDeactivate()}>
-                {saving ? 'Working…' : 'Deactivate'}
+                {saving ? 'Түр хүлээнэ үү…' : 'Идэвхгүй болгох'}
               </button>
             </div>
           </div>

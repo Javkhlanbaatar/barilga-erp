@@ -102,6 +102,8 @@ export enum CheckoutPaymentMethod {
    * payable at once — no money moves and no debt is created.
    */
   CONTRACT = 'CONTRACT',
+  /** Invoice sent: the buyer will pay by bank transfer; the order waits until staff confirm the money arrived. */
+  INVOICE = 'INVOICE',
 }
 
 /** A customer paying (part of) what they owe on an order released on account. */
