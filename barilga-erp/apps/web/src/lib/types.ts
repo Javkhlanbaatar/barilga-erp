@@ -318,6 +318,7 @@ export type DailyReport = {
   };
   payments: Array<{
     method: 'CASH' | 'QPAY' | 'CARD';
+    grossMnt?: number;
     paidMnt: number;
     pendingMnt: number;
     paidCount: number;

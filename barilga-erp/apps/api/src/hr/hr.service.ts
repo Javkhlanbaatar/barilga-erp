@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { AttendanceStatus, OrderStatus, PaymentStatus, PayrollStatus, Role } from '@prisma/client';
+import { AttendanceStatus, OrderStatus, PaymentStatus, PayrollStatus, Prisma, Role } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
 import { PrismaService } from '../prisma/prisma.service';
@@ -97,26 +97,36 @@ export class HrService {
     this.assertManager(actor);
     const staff = await this.prisma.user.findUnique({ where: { id: dto.userId } });
     if (!staff || !staff.isActive) throw new NotFoundException('Staff member not found');
-    const open = await this.prisma.attendance.findFirst({
-      where: { userId: staff.id, checkOut: null },
-    });
-    if (open) {
-      throw new BadRequestException(`${staff.fullName} is already checked in`);
-    }
     const checkIn = new Date();
     const minutes = minutesInUlaanbaatar(checkIn);
     const status =
       minutes > LATE_AFTER_MINUTES && minutes < SHIFT_END_MINUTES
         ? AttendanceStatus.LATE
         : AttendanceStatus.ON_TIME;
-    const row = await this.prisma.attendance.create({
-      data: {
-        userId: staff.id,
-        checkIn,
-        status,
-        notes: dto.notes?.trim() || `Recorded by ${actor.fullName ?? actor.name}`,
-      },
-    });
+    const alreadyIn = () => new BadRequestException(`${staff.fullName} is already checked in`);
+    // Check and insert in one SERIALIZABLE transaction: a double click sends two requests that would both
+    // see "no open check-in" and both insert. Postgres aborts one of them (P2034), reported as already in.
+    let row;
+    try {
+      row = await this.prisma.$transaction(
+        async (tx) => {
+          const open = await tx.attendance.findFirst({ where: { userId: staff.id, checkOut: null } });
+          if (open) throw alreadyIn();
+          return tx.attendance.create({
+            data: {
+              userId: staff.id,
+              checkIn,
+              status,
+              notes: dto.notes?.trim() || `Recorded by ${actor.fullName ?? actor.name}`,
+            },
+          });
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (err) {
+      if ((err as { code?: string }).code === 'P2034') throw alreadyIn();
+      throw err;
+    }
     this.log.log(
       `Check-in ${staff.fullName} (${staff.id}) status=${status} by ${actor.fullName ?? actor.name} (${actor.id}) at ${checkIn.toISOString()}`,
     );
@@ -206,20 +216,14 @@ export class HrService {
       const baseSalary = BASE_SALARY_MNT[member.role];
       const netSalary = baseSalary + fulfillmentBonus;
 
-      const existing = await this.prisma.payroll.findUnique({
-        where: { userId_periodMonth: { userId: member.id, periodMonth: period } },
-      });
-      let payroll;
-      if (existing?.status === PayrollStatus.PAID) {
-        payroll = existing;
-      } else if (existing) {
-        payroll = await this.prisma.payroll.update({
-          where: { id: existing.id },
-          data: { baseSalary, fulfillmentBonus, netSalary },
-        });
-      } else {
-        payroll = await this.prisma.payroll.create({
-          data: {
+      // Two people opening payroll at once must not crash on the unique (user, month) key, and a row marked
+      // PAID meanwhile must keep the amount that was paid: create if missing, then refresh DRAFT rows only.
+      const key = { userId_periodMonth: { userId: member.id, periodMonth: period } };
+      // skipDuplicates = INSERT ... ON CONFLICT DO NOTHING, atomic in Postgres (Prisma's upsert on a compound
+      // key is a read-then-insert and still races).
+      await this.prisma.payroll.createMany({
+        data: [
+          {
             userId: member.id,
             periodMonth: period,
             baseSalary,
@@ -227,8 +231,14 @@ export class HrService {
             netSalary,
             status: PayrollStatus.DRAFT,
           },
-        });
-      }
+        ],
+        skipDuplicates: true,
+      });
+      await this.prisma.payroll.updateMany({
+        where: { userId: member.id, periodMonth: period, status: PayrollStatus.DRAFT },
+        data: { baseSalary, fulfillmentBonus, netSalary },
+      });
+      const payroll = await this.prisma.payroll.findUniqueOrThrow({ where: key });
       rows.push({
         ...payroll,
         ticketCount,

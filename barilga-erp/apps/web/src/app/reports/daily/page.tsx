@@ -157,7 +157,7 @@ export default function DailyReportPage() {
           </header>
 
           <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-5">
-            <StatCard label="Total revenue" value={tugrik(report.totals.revenueMnt)} hint="Collected PAID splits" />
+            <StatCard label="Total revenue" value={tugrik(report.totals.revenueMnt)} hint="Received in this period, net of refunds" />
             <StatCard label="Cash in drawer" value={tugrik(report.totals.cashMnt)} hint={`${report.payments[0]?.paidCount ?? 0} cash receipts`} />
             <StatCard label="QPay total" value={tugrik(report.totals.qpayMnt)} hint="Paid QPay invoices only" />
             <StatCard label="Card total" value={tugrik(report.totals.cardMnt)} hint="POS terminal" />
@@ -181,7 +181,7 @@ export default function DailyReportPage() {
                     <div className="h-2 rounded bg-steel-800 overflow-hidden print:bg-slate-200">
                       <div
                         className={`h-full ${BAR_COLOR[p.method]} print:bg-black`}
-                        style={{ width: `${(p.paidMnt / maxPaid) * 100}%` }}
+                        style={{ width: `${Math.max(0, p.paidMnt / maxPaid) * 100}%` }}
                       />
                     </div>
                     {p.pendingMnt > 0 && (
@@ -231,7 +231,7 @@ export default function DailyReportPage() {
                 <li>CANCELLED · {report.ordersByStatus.CANCELLED}</li>
               </ul>
               <p className="text-xs text-slate-500 mt-2 print:text-black">
-                Billed orders (excl. cancelled): {report.totals.orderCount}
+                Paid orders: {report.totals.orderCount}
               </p>
             </article>
           </section>

@@ -9,6 +9,9 @@ const UB_TZ = 'Asia/Ulaanbaatar';
 
 export type PaymentMethodTotals = {
   method: PayMethod;
+  /** Money received by this method in the period, before refunds. */
+  grossMnt: number;
+  /** Received minus refunds paid out by this method in the period (can be negative). */
   paidMnt: number;
   pendingMnt: number;
   paidCount: number;
@@ -110,9 +113,18 @@ export class ReportsService {
       createdAt: { gte: startAt, lte: endAt },
       ...(cashierId ? { createdById: cashierId } : {}),
     };
+    // Sales figures (order count, fees, products, E-Barimt) count only orders that were actually paid.
     const billedWhere: Prisma.OrderWhereInput = {
       ...orderWhere,
-      status: { not: OrderStatus.CANCELLED },
+      status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] },
+    };
+    // Money is booked on the day it was received, not the day the order was created (a QPay invoice paid
+    // after midnight belongs to the next day). Rows from before paidAt was recorded fall back to createdAt.
+    const inRange = { gte: startAt, lte: endAt };
+    const paidWhere: Prisma.PaymentWhereInput = {
+      status: PaymentStatus.PAID,
+      OR: [{ paidAt: inRange }, { paidAt: null, createdAt: inRange }],
+      ...(cashierId ? { order: { createdById: cashierId } } : {}),
     };
 
     const refundWhere: Prisma.SalesReturnWhereInput = {
@@ -120,7 +132,7 @@ export class ReportsService {
       ...(cashierId ? { createdById: cashierId } : {}),
     };
 
-    const [cashier, statusGroups, logisticsAgg, paidSplits, pendingSplits, productGroups, ebarimtGroups, ebarimtReceipts, refundGroups] =
+    const [cashier, statusGroups, logisticsAgg, paidSplits, pendingSplits, soldLines, ebarimtGroups, ebarimtReceipts, refundGroups] =
       await Promise.all([
         cashierId
           ? this.prisma.user.findUnique({
@@ -145,19 +157,18 @@ export class ReportsService {
         }),
         this.prisma.payment.groupBy({
           by: ['method'],
-          where: { status: PaymentStatus.PAID, order: billedWhere },
+          where: paidWhere,
           _sum: { amountMnt: true },
           _count: { _all: true },
         }),
         this.prisma.payment.groupBy({
           by: ['method'],
-          where: { status: PaymentStatus.UNPAID, order: billedWhere },
+          where: { status: PaymentStatus.UNPAID, order: { ...orderWhere, status: OrderStatus.PENDING_PAYMENT } },
           _sum: { amountMnt: true },
         }),
-        this.prisma.orderItem.groupBy({
-          by: ['productId'],
+        this.prisma.orderItem.findMany({
           where: { order: billedWhere },
-          _sum: { quantity: true, lineTotal: true },
+          select: { productId: true, quantity: true, lineTotal: true, returnItems: { select: { quantity: true, lineRefund: true } } },
         }),
         this.prisma.order.groupBy({
           by: ['ebarimtStatus'],
@@ -210,9 +221,13 @@ export class ReportsService {
       (method) => {
         const refunded =
           method === PayMethod.CASH ? refunds.cashMnt : method === PayMethod.QPAY ? refunds.qpayMnt : refunds.cardMnt;
+        const grossMnt = paidMap.get(method)?._sum.amountMnt ?? 0;
+        // Net of refunds paid out the same way. Not clamped at zero: a day with more refunds than takings
+        // must show the shortfall, not hide it.
         return {
           method,
-          paidMnt: Math.max(0, (paidMap.get(method)?._sum.amountMnt ?? 0) - refunded),
+          grossMnt,
+          paidMnt: grossMnt - refunded,
           pendingMnt: pendingMap.get(method)?._sum.amountMnt ?? 0,
           paidCount: paidMap.get(method)?._count._all ?? 0,
         };
@@ -225,6 +240,19 @@ export class ReportsService {
     const revenueMnt = cashMnt + qpayMnt + cardMnt;
     const pendingMnt = payments.reduce((sum, p) => sum + p.pendingMnt, 0);
 
+    // Products sold, net of anything already returned.
+    const sold = new Map<string, { quantity: number; amountMnt: number }>();
+    for (const line of soldLines) {
+      const returnedQty = line.returnItems.reduce((s, r) => s + Number(r.quantity), 0);
+      const returnedMnt = line.returnItems.reduce((s, r) => s + r.lineRefund, 0);
+      const row = sold.get(line.productId) ?? { quantity: 0, amountMnt: 0 };
+      row.quantity += Number(line.quantity) - returnedQty;
+      row.amountMnt += line.lineTotal - returnedMnt;
+      sold.set(line.productId, row);
+    }
+    const productGroups = [...sold.entries()]
+      .filter(([, v]) => v.quantity > 0 || v.amountMnt > 0)
+      .map(([productId, v]) => ({ productId, ...v }));
     const productIds = productGroups.map((g) => g.productId);
     const products = productIds.length
       ? await this.prisma.product.findMany({
@@ -241,8 +269,8 @@ export class ReportsService {
           sku: product?.sku ?? '',
           nameMn: product?.nameMn ?? 'Unknown product',
           nameEn: product?.nameEn ?? '',
-          quantity: Number(g._sum.quantity ?? 0),
-          amountMnt: g._sum.lineTotal ?? 0,
+          quantity: Math.round(g.quantity * 1000) / 1000,
+          amountMnt: g.amountMnt,
         };
       })
       .sort((a, b) => b.amountMnt - a.amountMnt)

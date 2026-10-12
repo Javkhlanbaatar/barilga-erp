@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, SourceType, StockMovementType } from '@prisma/client';
-import { productSearchWhere } from '../catalog/product-search';
+import { productSearchFilter } from '../catalog/product-search';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type StockStatus = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'NEGATIVE_STOCK';
@@ -276,7 +276,7 @@ export class InventoryService {
       throw new NotFoundException('Warehouse not found');
     }
     const products = await this.prisma.product.findMany({
-      where: productSearchWhere(q),
+      where: await productSearchFilter(this.prisma, q),
       orderBy: { sku: 'asc' },
       include: { stockBalances: true },
     });

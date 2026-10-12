@@ -28,7 +28,7 @@ import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { InventoryService } from '../inventory/inventory.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
-import { productSearchTerm, productSearchWhere } from './product-search';
+import { productSearchFilter, productSearchTerm } from './product-search';
 
 const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 
@@ -52,8 +52,8 @@ export class ProductsController {
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...CATALOG_READ_ROLES)
-  list(@Query('q') q?: string, @Query('search') search?: string) {
-    const searchWhere = productSearchWhere(productSearchTerm(q, search));
+  async list(@Query('q') q?: string, @Query('search') search?: string) {
+    const searchWhere = await productSearchFilter(this.prisma, productSearchTerm(q, search));
     return this.prisma.product.findMany({
       where: { active: true, ...searchWhere },
       orderBy: { nameEn: 'asc' },
@@ -63,8 +63,8 @@ export class ProductsController {
   @Get('all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...CATALOG_WRITE_ROLES)
-  listAll(@Query('q') q?: string, @Query('search') search?: string) {
-    const searchWhere = productSearchWhere(productSearchTerm(q, search));
+  async listAll(@Query('q') q?: string, @Query('search') search?: string) {
+    const searchWhere = await productSearchFilter(this.prisma, productSearchTerm(q, search));
     return this.prisma.product.findMany({
       where: searchWhere,
       orderBy: { sku: 'asc' },
