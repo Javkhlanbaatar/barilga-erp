@@ -93,7 +93,10 @@ export class PaymentService {
       );
     }
 
+    // 1. All provider calls first. If any QPay invoice cannot be created, nothing has been written yet, so a
+    //    cash/card split can never be left recorded as PAID on an order that is then cancelled.
     let qpayIndex = 0;
+    const rows: Prisma.PaymentUncheckedCreateInput[] = [];
     for (const split of normalized) {
       if (split.method === PayMethod.QPAY) {
         qpayIndex += 1;
@@ -104,28 +107,30 @@ export class PaymentService {
           description: `Barilga ERP ${order.orderNumber} QPay ${split.amount}₮`,
           callbackUrl: this.callbackUrl(),
         });
-        await this.prisma.payment.create({
-          data: this.qpayRowData(order.id, split.amount, invoice),
-        });
+        rows.push(this.qpayRowData(order.id, split.amount, invoice) as Prisma.PaymentUncheckedCreateInput);
         this.log.log(
           `QPay split invoice ${invoice.invoiceId} for ${order.orderNumber} amount=${split.amount}`,
         );
         continue;
       }
-
-      await this.prisma.payment.create({
-        data: {
-          orderId: order.id,
-          method: split.method,
-          provider: split.method,
-          amountMnt: split.amount,
-          status: PaymentStatus.PAID,
-          paidAt: new Date(),
-          nextPollAt: null,
-          qpayPayload: { channel: split.method, immediate: true, cashierRecorded: true },
-        },
+      rows.push({
+        orderId: order.id,
+        method: split.method,
+        provider: split.method,
+        amountMnt: split.amount,
+        status: PaymentStatus.PAID,
+        paidAt: new Date(),
+        nextPollAt: null,
+        qpayPayload: { channel: split.method, immediate: true, cashierRecorded: true },
       });
-      this.log.log(`Cashier recorded ${split.method} ${split.amount}₮ on ${order.orderNumber}`);
+    }
+
+    // 2. Every row in one transaction: either all splits are recorded or none are.
+    await this.prisma.$transaction(async (tx) => {
+      for (const data of rows) await tx.payment.create({ data });
+    });
+    for (const r of rows) {
+      if (r.method !== PayMethod.QPAY) this.log.log(`Cashier recorded ${r.method} ${r.amountMnt}₮ on ${order.orderNumber}`);
     }
 
     await this.syncOrderStatus(order.id);
@@ -368,6 +373,8 @@ export class PaymentService {
         if (paid > 0) {
           throw new ConflictException('A payment was confirmed while cancelling; order left unchanged');
         }
+        // A supplier assigned before payment is not owed anything for a cancelled order.
+        await tx.supplierPayable.updateMany({ where: { orderId, status: 'OPEN' }, data: { status: 'VOID' } });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );

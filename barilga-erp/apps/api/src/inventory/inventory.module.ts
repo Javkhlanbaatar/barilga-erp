@@ -9,6 +9,6 @@ import { WarehousesService } from './warehouses.service';
 @Module({
   controllers: [InventoryController, WarehousesController, TransfersController],
   providers: [InventoryService, WarehousesService, TransfersService],
-  exports: [InventoryService],
+  exports: [InventoryService, TransfersService],
 })
 export class InventoryModule {}

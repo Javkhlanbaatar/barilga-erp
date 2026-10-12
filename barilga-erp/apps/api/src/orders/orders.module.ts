@@ -5,13 +5,14 @@ import { LogisticsModule } from '../logistics/logistics.module';
 import { PaymentModule } from '../payment/payment.module';
 import { ReturnsModule } from '../returns/returns.module';
 import { WarehouseController } from '../warehouse/warehouse.controller';
+import { GatherService } from './gather.service';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 
 @Module({
   imports: [LogisticsModule, PaymentModule, InventoryModule, EbarimtModule, ReturnsModule],
   controllers: [OrdersController, WarehouseController],
-  providers: [OrdersService],
+  providers: [OrdersService, GatherService],
   exports: [OrdersService],
 })
 export class OrdersModule {}
