@@ -11,7 +11,7 @@ import { FakeDb } from './helpers/fake-db';
 
 const cashier: any = { id: 'u-c', role: Role.BORLUULAGCH, name: 'Cashier', warehouseId: 'wh-main' };
 const other: any = { id: 'u-o', role: Role.BORLUULAGCH, name: 'Other', warehouseId: 'wh-main' };
-const manager: any = { id: 'u-m', role: Role.MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-m', role: Role.SUPER_MANAGER, name: 'Manager' };
 
 async function world() {
   const db = new FakeDb();

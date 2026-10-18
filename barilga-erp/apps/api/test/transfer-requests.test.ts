@@ -10,7 +10,7 @@ import { TransfersService } from '../src/inventory/transfers.service';
 import { FakeDb } from './helpers/fake-db';
 
 const D = (n: number | string) => new Prisma.Decimal(n);
-const manager: any = { id: 'u-mgr', role: Role.MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-mgr', role: Role.SUPER_MANAGER, name: 'Manager' };
 const mainStaff: any = { id: 'u-a', role: Role.ACHIGCH_BELTGEGCH, name: 'A', warehouseId: 'wh-main' };
 const shopStaff: any = { id: 'u-b', role: Role.BORLUULAGCH, name: 'B', warehouseId: 'wh-b' };
 

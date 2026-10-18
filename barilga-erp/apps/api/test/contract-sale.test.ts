@@ -12,7 +12,7 @@ import { OrdersService } from '../src/orders/orders.service';
 import { makePaymentWorld } from './helpers/payment-fixtures';
 
 const cashier: any = { id: 'u-c', role: Role.BORLUULAGCH, name: 'Cashier' };
-const manager: any = { id: 'u-m', role: Role.MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-m', role: Role.SUPER_MANAGER, name: 'Manager' };
 
 async function world(kinds: Record<string, unknown> = { sellsToUs: true }) {
   const w = makePaymentWorld();

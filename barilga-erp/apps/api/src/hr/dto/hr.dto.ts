@@ -20,6 +20,7 @@ export class PayrollQueryDto {
 
 export class RoleSalariesDto {
   @IsOptional() @IsInt() @Min(0) @Max(100_000_000) ADMIN?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(100_000_000) SUPER_MANAGER?: number;
   @IsOptional() @IsInt() @Min(0) @Max(100_000_000) MANAGER?: number;
   @IsOptional() @IsInt() @Min(0) @Max(100_000_000) BORLUULAGCH?: number;
   @IsOptional() @IsInt() @Min(0) @Max(100_000_000) ACHIGCH_BELTGEGCH?: number;

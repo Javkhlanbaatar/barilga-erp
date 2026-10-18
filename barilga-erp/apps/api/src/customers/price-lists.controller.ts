@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { OVERSIGHT_ROLES, POS_ROLES } from '../auth/rbac';
+import { OVERSIGHT_ROLES, POS_ROLES, TOP_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
@@ -22,13 +22,13 @@ export class PriceListsController {
   }
 
   @Post()
-  @Roles(...OVERSIGHT_ROLES)
+  @Roles(...TOP_ROLES)
   create(@Body() dto: CreatePriceListDto) {
     return this.lists.create(dto);
   }
 
   @Patch(':id')
-  @Roles(...OVERSIGHT_ROLES)
+  @Roles(...TOP_ROLES)
   update(@Param('id') id: string, @Body() dto: UpdatePriceListDto) {
     return this.lists.update(id, dto);
   }
@@ -40,7 +40,7 @@ export class PriceListsController {
   }
 
   @Put(':id/prices')
-  @Roles(...OVERSIGHT_ROLES)
+  @Roles(...TOP_ROLES)
   setPrices(@Param('id') id: string, @Body() dto: SetPricesDto, @CurrentUser() user: AuthUser) {
     return this.lists.setPrices(id, dto, user.id);
   }

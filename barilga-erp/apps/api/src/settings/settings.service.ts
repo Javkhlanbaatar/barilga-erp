@@ -15,6 +15,10 @@ export type CompanySettings = {
   bankAccounts: Array<{ bankName: string; accountNumber: string; accountName: string }>;
   invoiceNote: string;
   receiptFooter: string;
+  /** Uploaded logo (/uploads/company/…), empty when none. Changed only through the logo upload. */
+  logoUrl: string;
+  /** Show the logo as a faint watermark behind invoices and receipts. */
+  watermark: boolean;
 };
 
 const EMPTY_COMPANY: CompanySettings = {
@@ -26,6 +30,8 @@ const EMPTY_COMPANY: CompanySettings = {
   bankAccounts: [],
   invoiceNote: '',
   receiptFooter: '',
+  logoUrl: '',
+  watermark: true,
 };
 
 const PRINT_KEY = 'PRINT';
@@ -79,6 +85,7 @@ export class SettingsService {
   }
 
   async setCompany(dto: CompanySettingsDto, actorId: string) {
+    const current = await this.company();
     const value: CompanySettings = {
       name: dto.name,
       regNumber: dto.regNumber ?? '',
@@ -92,7 +99,20 @@ export class SettingsService {
       })),
       invoiceNote: dto.invoiceNote ?? '',
       receiptFooter: dto.receiptFooter ?? '',
+      logoUrl: current.logoUrl,
+      watermark: dto.watermark ?? current.watermark,
     };
+    return this.saveCompany(value, actorId);
+  }
+
+  /** Sets (or with null, removes) the logo printed on documents. */
+  async setLogo(logoUrl: string | null, actorId: string) {
+    const { configured: _c, ...current } = await this.company();
+    this.log.log(`Company logo ${logoUrl ? 'uploaded' : 'removed'} by ${actorId}`);
+    return this.saveCompany({ ...current, logoUrl: logoUrl ?? '' }, actorId);
+  }
+
+  private async saveCompany(value: CompanySettings, actorId: string) {
     const json = value as unknown as Prisma.InputJsonValue;
     await this.prisma.appSetting.upsert({
       where: { key: COMPANY_KEY },

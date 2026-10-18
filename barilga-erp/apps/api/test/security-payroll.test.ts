@@ -14,7 +14,7 @@ import { makePaymentWorld } from './helpers/payment-fixtures';
 
 const D = (n: number) => new Prisma.Decimal(n);
 const admin: any = { id: 'u-admin', role: Role.ADMIN, name: 'Admin', fullName: 'Admin' };
-const manager: any = { id: 'u-m', role: Role.MANAGER, name: 'Manager', fullName: 'Manager' };
+const manager: any = { id: 'u-m', role: Role.SUPER_MANAGER, name: 'Manager', fullName: 'Manager' };
 const picker: any = { id: 'u-p', role: Role.ACHIGCH_BELTGEGCH, name: 'Picker', warehouseId: 'wh-main' };
 
 describe('money refunds never exceed money received', () => {
@@ -109,11 +109,13 @@ describe('payroll', () => {
     assert.equal(p.earnedBase, Math.round((2_000_000 * 2) / 22));
   });
 
-  it('a paid month is frozen; only admin sets rates, salaries and pays', async () => {
+  it('a paid month is frozen; admin sets rates; admin or the general manager set salaries and pay', async () => {
     const w = await world();
+    const branch: any = { id: 'u-b', role: Role.MANAGER, name: 'Branch', warehouseId: 'wh-main' };
     const first: any = await w.hr.payroll(manager, '2026-10');
     await assert.rejects(() => w.hr.savePayrollSettings({ ticketBonusMnt: 1 } as any, manager), ForbiddenException);
-    await assert.rejects(() => w.hr.setBaseSalary(w.cashier.id, 5_000_000, manager), ForbiddenException);
+    await assert.rejects(() => w.hr.setBaseSalary(w.cashier.id, 5_000_000, branch), ForbiddenException);
+    await w.hr.setBaseSalary(w.cashier.id, 1_900_000, manager);
     const pRow = row(first, w.picker2.id);
     await w.hr.markPaid(pRow.id, admin);
     await w.hr.setBaseSalary(w.picker2.id, 9_000_000, admin);

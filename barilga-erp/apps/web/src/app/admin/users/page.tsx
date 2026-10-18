@@ -7,7 +7,16 @@ import { api } from '@/lib/api';
 import { AuthUser, ROLE_LABEL, Role, StaffUser, Warehouse } from '@/lib/types';
 import { homeForRole } from '@/lib/rbac';
 
-const ROLES: Role[] = ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'];
+const ROLES: Role[] = ['ADMIN', 'SUPER_MANAGER', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'];
+
+/** What each role may do, shown under the role picker. */
+const ROLE_HELP: Record<Role, string> = {
+  ADMIN: 'Бүх зүйл: хэрэглэгч, модуль, компанийн мэдээлэл, дэлгүүр/агуулахын бүртгэл.',
+  SUPER_MANAGER: 'Бүх дэлгүүр, агуулахыг хянана; үнэ, үнийн жагсаалт, цалин. Хэрэглэгч, модуль, тохиргоо өөрчлөхгүй.',
+  MANAGER: 'Зөвхөн доор сонгосон дэлгүүр/агуулахынхаа захиалга, үлдэгдэл, касс, ирц, тайланг хянана. Үнэ өөрчлөхгүй.',
+  BORLUULAGCH: 'Өөрийн дэлгүүрт зарна, төлбөр авна, буцаалт хийнэ.',
+  ACHIGCH_BELTGEGCH: 'Өөрийн агуулахын тасалбар бэлтгэж олгоно, бараа хүлээн авна.',
+};
 const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
 
 const emptyForm = {
@@ -17,6 +26,7 @@ const emptyForm = {
   password: '',
   role: 'BORLUULAGCH' as Role,
   warehouseId: '',
+  managedWarehouseIds: [] as string[],
 };
 
 type Toast = { kind: 'error' | 'ok'; text: string };
@@ -25,7 +35,9 @@ function roleBadge(role: Role) {
   const cls =
     role === 'ADMIN'
       ? 'border-amber-600 bg-amber-950/60 text-amber-200'
-      : role === 'MANAGER'
+      : role === 'SUPER_MANAGER'
+        ? 'border-orange-600 bg-orange-950/50 text-orange-200'
+        : role === 'MANAGER'
         ? 'border-sky-700 bg-sky-950/50 text-sky-200'
         : role === 'BORLUULAGCH'
           ? 'border-emerald-700 bg-emerald-950/50 text-emerald-200'
@@ -81,7 +93,7 @@ export default function AdminUsersPage() {
     }
     const parsed = JSON.parse(raw) as AuthUser;
     if (parsed.role !== 'ADMIN') {
-      router.replace(parsed.role === 'MANAGER' ? '/admin' : homeForRole(parsed.role));
+      router.replace(homeForRole(parsed.role));
       return;
     }
     setMe(parsed);
@@ -104,6 +116,7 @@ export default function AdminUsersPage() {
       password: '',
       role: row.role,
       warehouseId: row.warehouseId ?? '',
+      managedWarehouseIds: (row.managedWarehouses ?? []).map((w) => w.id),
     });
     setFormError('');
     setModal('edit');
@@ -118,6 +131,9 @@ export default function AdminUsersPage() {
     if (modal === 'create' && form.password.length < 8) return 'Нууц үг дор хаяж 8 тэмдэгт байна';
     if (modal === 'edit' && form.password && form.password.length < 8) {
       return 'Шинэ нууц үг дор хаяж 8 тэмдэгт байна';
+    }
+    if (form.role === 'MANAGER' && !form.warehouseId && !form.managedWarehouseIds.length) {
+      return 'Салбарын менежерт дор хаяж нэг дэлгүүр/агуулах сонгоно уу';
     }
     return null;
   }
@@ -143,6 +159,7 @@ export default function AdminUsersPage() {
             password: form.password,
             role: form.role,
             warehouseId: form.warehouseId || undefined,
+            managedWarehouseIds: form.role === 'MANAGER' ? form.managedWarehouseIds : [],
           }),
         });
         flash('ok', 'Хэрэглэгч нэмэгдлээ');
@@ -155,6 +172,7 @@ export default function AdminUsersPage() {
             email: form.email.trim() || null,
             role: form.role,
             warehouseId: form.warehouseId || null,
+            managedWarehouseIds: form.role === 'MANAGER' ? form.managedWarehouseIds : [],
             ...(form.password ? { password: form.password } : {}),
           }),
         });
@@ -242,7 +260,12 @@ export default function AdminUsersPage() {
                   </td>
                   <td className="font-mono text-xs">{row.username}</td>
                   <td>{roleBadge(row.role)}</td>
-                  <td className="text-xs text-slate-300">{row.warehouse?.name ?? '—'}</td>
+                  <td className="text-xs text-slate-300">
+                    {row.role === 'ADMIN' || row.role === 'SUPER_MANAGER' ? 'Бүгд' : (row.warehouse?.name ?? 'Үндсэн (томилоогүй)')}
+                    {(row.managedWarehouses ?? []).length > 0 && (
+                      <p className="text-[11px] text-sky-300">+ {row.managedWarehouses!.map((w) => w.name).join(', ')}</p>
+                    )}
+                  </td>
                   <td>
                     <span
                       className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
@@ -337,9 +360,10 @@ export default function AdminUsersPage() {
                   </option>
                 ))}
               </select>
+              <span className="mt-1 block text-[11px] text-slate-500">{ROLE_HELP[form.role]}</span>
             </label>
             <label className="block text-xs text-slate-400">
-              Агуулах / дэлгүүр
+              {form.role === 'MANAGER' ? 'Үндсэн дэлгүүр / агуулах' : 'Агуулах / дэлгүүр'}
               <select
                 className="mt-1 w-full"
                 value={form.warehouseId}
@@ -353,10 +377,36 @@ export default function AdminUsersPage() {
                 ))}
               </select>
               <span className="mt-1 block text-[11px] text-slate-500">
-                Борлуулагч болон агуулахын ажилтан зөвхөн өөрийн агуулахын захиалга, үлдэгдлийг харна. Админ,
-                менежер бүгдийг харна.
+                Борлуулагч, агуулахын ажилтан зөвхөн өөрийн дэлгүүр/агуулахыг харна; томилоогүй бол үндсэн дэлгүүрийг.
+                Админ, ерөнхий менежер бүгдийг харна.
               </span>
             </label>
+            {form.role === 'MANAGER' && (
+              <fieldset className="rounded border border-slate-700 p-2 text-xs text-slate-400">
+                <legend className="px-1">Мөн хянах дэлгүүр / агуулах</legend>
+                <div className="grid grid-cols-2 gap-1">
+                  {warehouses
+                    .filter((w) => w.id !== form.warehouseId)
+                    .map((w) => (
+                      <label key={w.id} className="flex items-center gap-2 text-sm text-slate-200">
+                        <input
+                          type="checkbox"
+                          checked={form.managedWarehouseIds.includes(w.id)}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              managedWarehouseIds: e.target.checked
+                                ? [...form.managedWarehouseIds, w.id]
+                                : form.managedWarehouseIds.filter((x) => x !== w.id),
+                            })
+                          }
+                        />
+                        {w.name}
+                      </label>
+                    ))}
+                </div>
+              </fieldset>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
                 Болих

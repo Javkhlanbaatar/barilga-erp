@@ -1,5 +1,6 @@
 'use client';
 
+import { isManager } from '@/lib/rbac';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthUser } from '@/lib/types';
@@ -10,7 +11,7 @@ export default function HrRedirectPage() {
     const raw = localStorage.getItem('barilga_user');
     const role = raw ? (JSON.parse(raw) as AuthUser).role : null;
     router.replace(
-      role === 'ADMIN' || role === 'MANAGER'
+      isManager(role)
         ? '/admin/attendance'
         : role === 'ACHIGCH_BELTGEGCH'
           ? '/warehouse/tickets'

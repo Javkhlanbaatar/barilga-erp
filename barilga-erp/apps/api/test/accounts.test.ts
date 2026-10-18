@@ -12,7 +12,7 @@ import { ReceiptsService } from '../src/inventory/receipts.service';
 import { makePaymentWorld } from './helpers/payment-fixtures';
 
 const D = (n: number) => new Prisma.Decimal(n);
-const manager: any = { id: 'u-m', role: Role.MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-m', role: Role.SUPER_MANAGER, name: 'Manager' };
 const cashier: any = { id: 'u-c', role: Role.BORLUULAGCH, name: 'Cashier' };
 
 async function world() {

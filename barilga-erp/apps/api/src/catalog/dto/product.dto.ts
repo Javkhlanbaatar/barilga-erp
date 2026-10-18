@@ -1,9 +1,41 @@
-import { Transform } from 'class-transformer';
-import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 
 function emptyToNull(value: unknown) {
   if (value === '' || value === undefined) return null;
   return value;
+}
+
+/** One item handed over with every unit sold, e.g. { name: 'Хатаагч', qtyPerUnit: 1, unit: 'ш' }. */
+export class CompanionDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  name!: string;
+
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0.001)
+  @Max(1000)
+  qtyPerUnit!: number;
+
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(16)
+  unit!: string;
 }
 
 export class CreateProductDto {
@@ -48,6 +80,14 @@ export class CreateProductDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  /** Items that go out with this product (e.g. a hardener with resin paint). Empty / null = none. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => CompanionDto)
+  companions?: CompanionDto[] | null;
 }
 
 export class UpdateProductDto {
@@ -97,4 +137,12 @@ export class UpdateProductDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  /** Items that go out with this product (e.g. a hardener with resin paint). Empty / null = none. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => CompanionDto)
+  companions?: CompanionDto[] | null;
 }

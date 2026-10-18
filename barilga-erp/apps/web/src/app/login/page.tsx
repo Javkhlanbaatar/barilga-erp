@@ -58,9 +58,9 @@ export default function LoginPage() {
         </form>
         {process.env.NODE_ENV === 'development' && (
         <ul className="mt-6 text-xs text-slate-400 space-y-1">
-          {(['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] as const).map((role) => (
+          {(['ADMIN', 'SUPER_MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] as const).map((role) => (
             <li key={role}>
-              {ROLE_LABEL[role]} — {role === 'ADMIN' ? 'admin' : role === 'MANAGER' ? 'manager' : role === 'BORLUULAGCH' ? 'cashier' : 'warehouse'} / Barilga123!
+              {ROLE_LABEL[role]} — {role === 'ADMIN' ? 'admin' : role === 'SUPER_MANAGER' ? 'manager' : role === 'BORLUULAGCH' ? 'cashier' : 'warehouse'} / Barilga123!
             </li>
           ))}
         </ul>

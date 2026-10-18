@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
-import { api } from '@/lib/api';
+import { api, apiUpload, mediaUrl } from '@/lib/api';
 import { homeForRole } from '@/lib/rbac';
 import { AuthUser, CompanySettings } from '@/lib/types';
 
@@ -18,6 +18,8 @@ const EMPTY: Omit<CompanySettings, 'configured'> = {
   bankAccounts: [],
   invoiceNote: '',
   receiptFooter: '',
+  logoUrl: '',
+  watermark: true,
 };
 
 export default function AdminSettingsPage() {
@@ -56,6 +58,7 @@ export default function AdminSettingsPage() {
         method: 'PUT',
         body: JSON.stringify({
           ...form,
+          logoUrl: undefined, // changed only by the upload below
           bankAccounts: form.bankAccounts
             .filter((b) => b.bankName.trim() || b.accountNumber.trim())
             .map((b) => ({ ...b, accountName: b.accountName || undefined })),
@@ -68,6 +71,27 @@ export default function AdminSettingsPage() {
       setMessage({ ok: false, text: err instanceof Error ? err.message : 'Хадгалж чадсангүй' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function uploadLogo(file: File | undefined) {
+    if (!file) return;
+    setMessage(null);
+    try {
+      const { configured: _c, ...rest } = await apiUpload<CompanySettings>('/settings/company/logo', file);
+      setForm(rest);
+      setMessage({ ok: true, text: 'Лого хадгалагдлаа. Нэхэмжлэх, баримтын ард усан тэмдэг болж гарна.' });
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Лого оруулж чадсангүй' });
+    }
+  }
+
+  async function removeLogo() {
+    try {
+      const { configured: _c, ...rest } = await api<CompanySettings>('/settings/company/logo', { method: 'DELETE' });
+      setForm(rest);
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Устгаж чадсангүй' });
     }
   }
 
@@ -140,6 +164,31 @@ export default function AdminSettingsPage() {
             Нэхэмжлэхийн доод тэмдэглэл (төлбөрийн нөхцөл г.м.)
             <textarea className="mt-1 w-full" rows={3} value={form.invoiceNote} onChange={(e) => setForm({ ...form, invoiceNote: e.target.value })} />
           </label>
+          <fieldset className="rounded border border-slate-700 p-3 text-xs text-slate-400">
+            <legend className="px-1">Компанийн лого</legend>
+            <div className="flex flex-wrap items-center gap-4">
+              {form.logoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={mediaUrl(form.logoUrl) ?? ''} alt="Лого" className="h-16 w-auto rounded bg-white p-1" />
+              ) : (
+                <span className="text-slate-500">Лого оруулаагүй</span>
+              )}
+              <label className="btn-ghost cursor-pointer text-xs">
+                {form.logoUrl ? 'Солих' : 'Лого оруулах'}
+                <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => void uploadLogo(e.target.files?.[0])} />
+              </label>
+              {form.logoUrl && (
+                <button type="button" className="btn-ghost text-xs" onClick={() => void removeLogo()}>
+                  Устгах
+                </button>
+              )}
+            </div>
+            <label className="mt-2 flex items-center gap-2 text-sm text-slate-200">
+              <input type="checkbox" checked={form.watermark !== false} onChange={(e) => setForm({ ...form, watermark: e.target.checked })} />
+              Нэхэмжлэх, баримтын ард усан тэмдэг (watermark) болгож хэвлэх
+            </label>
+            <p className="mt-1 text-[11px] text-slate-500">Тунгалаг дэвсгэртэй PNG хамгийн гоё харагдана (2MB хүртэл). Тохиргоог «Хадгалах» дарж хадгална.</p>
+          </fieldset>
           <label className="block text-xs text-slate-400">
             Баримтын доод бичиг (буцаалтын нөхцөл г.м.)
             <textarea className="mt-1 w-full" rows={2} value={form.receiptFooter} onChange={(e) => setForm({ ...form, receiptFooter: e.target.value })} />

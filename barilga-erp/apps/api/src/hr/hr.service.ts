@@ -1,7 +1,9 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { AttendanceStatus, OrderStatus, PaymentStatus, PayMethod, PayrollStatus, Prisma, Role } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
+import { isManagerRole, isTopRole, seesAllWarehouses, warehouseWhere } from '../inventory/warehouse-scope';
+import { FeaturesService } from '../features/features.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollAdjustmentDto, PayrollSettingsDto, StaffPunchDto } from './dto/hr.dto';
 
@@ -31,7 +33,7 @@ export type PayrollSettings = {
 };
 
 export const DEFAULT_PAYROLL_SETTINGS: PayrollSettings = {
-  defaultBaseMnt: { ADMIN: 3_500_000, MANAGER: 2_800_000, BORLUULAGCH: 1_800_000, ACHIGCH_BELTGEGCH: 1_600_000 },
+  defaultBaseMnt: { ADMIN: 3_500_000, SUPER_MANAGER: 3_200_000, MANAGER: 2_800_000, BORLUULAGCH: 1_800_000, ACHIGCH_BELTGEGCH: 1_600_000 },
   ticketBonusMnt: 15_000,
   salesCommissionPct: 0.5,
   prorateByAttendance: false,
@@ -84,18 +86,51 @@ function monthBounds(periodMonth: string): { start: Date; end: Date } {
 export class HrService {
   private readonly log = new Logger(HrService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly features?: FeaturesService,
+  ) {}
+
+  /**
+   * With the PAYROLL_FORMULA module off (the default) pay is entered by hand: each person's base salary plus
+   * the bonuses and deductions written for the month. The formula (per-order bonus, commission, insurance,
+   * income tax, role defaults, attendance pro-rating) only applies when the module is switched on.
+   */
+  private async formulaOn() {
+    return this.features ? this.features.isEnabled('PAYROLL_FORMULA') : true;
+  }
 
   assertManager(user: AuthUser) {
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
+    if (!isManagerRole(user.role)) {
       throw new ForbiddenException('Only managers or admin can manage attendance');
     }
+  }
+
+  /**
+   * The staff a manager looks after: everyone for admin and the general manager; for a branch manager the
+   * people of their warehouses, never admin or the general manager.
+   */
+  private async staffScope(user: AuthUser): Promise<Prisma.UserWhereInput> {
+    if (seesAllWarehouses(user)) return {};
+    const def = await this.prisma.warehouse.findFirst({ where: { isDefault: true }, select: { id: true } });
+    return { AND: [warehouseWhere(user, def?.id) as Prisma.UserWhereInput, { role: { notIn: [Role.ADMIN, Role.SUPER_MANAGER] } }] };
+  }
+
+  private async assertStaffInScope(user: AuthUser, staffId: string) {
+    if (seesAllWarehouses(user)) return;
+    const n = await this.prisma.user.count({ where: { AND: [{ id: staffId }, await this.staffScope(user)] } });
+    if (!n) throw new ForbiddenException('Энэ ажилтан өөр салбарынх / This employee belongs to another warehouse');
+  }
+
+  /** Salaries are set and paid by admin or the general manager. */
+  private assertPayroller(user: AuthUser, what: string) {
+    if (!isTopRole(user.role)) throw new ForbiddenException(`Only admin or the general manager can ${what}`);
   }
 
   async board(actor: AuthUser) {
     this.assertManager(actor);
     const staff = await this.prisma.user.findMany({
-      where: { isActive: true, username: { not: WEBSHOP_USERNAME } },
+      where: { AND: [{ isActive: true, username: { not: WEBSHOP_USERNAME } }, await this.staffScope(actor)] },
       orderBy: { fullName: 'asc' },
       select: { id: true, fullName: true, username: true, role: true },
     });
@@ -108,7 +143,7 @@ export class HrService {
     const start = new Date(`${today}T00:00:00.000+08:00`);
     const end = new Date(`${today}T23:59:59.999+08:00`);
     const recent = await this.prisma.attendance.findMany({
-      where: { checkIn: { gte: start, lte: end } },
+      where: { checkIn: { gte: start, lte: end }, userId: { in: staff.map((s) => s.id) } },
       include: { user: { select: { id: true, fullName: true, username: true, role: true } } },
       orderBy: { checkIn: 'desc' },
       take: 80,
@@ -126,6 +161,7 @@ export class HrService {
 
   async checkIn(actor: AuthUser, dto: StaffPunchDto) {
     this.assertManager(actor);
+    await this.assertStaffInScope(actor, dto.userId);
     const staff = await this.prisma.user.findUnique({ where: { id: dto.userId } });
     if (!staff || !staff.isActive) throw new NotFoundException('Staff member not found');
     const checkIn = new Date();
@@ -166,6 +202,7 @@ export class HrService {
 
   async checkOut(actor: AuthUser, dto: StaffPunchDto) {
     this.assertManager(actor);
+    await this.assertStaffInScope(actor, dto.userId);
     const open = await this.prisma.attendance.findFirst({
       where: { userId: dto.userId, checkOut: null },
       orderBy: { checkIn: 'desc' },
@@ -225,7 +262,7 @@ export class HrService {
 
   /** Admin sets one employee's monthly base salary; null goes back to the default for their role. */
   async setBaseSalary(userId: string, baseSalaryMnt: number | null, user: AuthUser) {
-    if (user.role !== Role.ADMIN) throw new ForbiddenException('Only admin can set salaries');
+    this.assertPayroller(user, 'set salaries');
     const staff = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!staff) throw new NotFoundException('Staff member not found');
     await this.prisma.user.update({ where: { id: userId }, data: { baseSalaryMnt } });
@@ -238,6 +275,10 @@ export class HrService {
     this.assertManager(user);
     monthBounds(dto.periodMonth);
     if (!dto.amountMnt) throw new BadRequestException('Дүн 0 байж болохгүй / Amount cannot be 0');
+    await this.assertStaffInScope(user, dto.userId);
+    if (dto.userId === user.id && !isTopRole(user.role)) {
+      throw new ForbiddenException('Өөртөө нэмэгдэл/суутгал бичихгүй / You cannot adjust your own pay');
+    }
     const staff = await this.prisma.user.findUnique({ where: { id: dto.userId } });
     if (!staff) throw new NotFoundException('Staff member not found');
     await this.assertMonthOpen(dto.userId, dto.periodMonth);
@@ -250,6 +291,10 @@ export class HrService {
     this.assertManager(user);
     const row = await this.prisma.payrollAdjustment.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Adjustment not found');
+    await this.assertStaffInScope(user, row.userId);
+    if (row.userId === user.id && !isTopRole(user.role)) {
+      throw new ForbiddenException('Өөртөө нэмэгдэл/суутгал бичихгүй / You cannot adjust your own pay');
+    }
     await this.assertMonthOpen(row.userId, row.periodMonth);
     await this.prisma.payrollAdjustment.delete({ where: { id } });
     return { removed: id };
@@ -275,8 +320,22 @@ export class HrService {
     const period = periodMonth || periodMonthNow();
     const { start, end } = monthBounds(period);
     const settings = await this.payrollSettings();
+    const formula = await this.formulaOn();
+    // Someone who left during the month is still paid for it: deactivated people with attendance or a
+    // payroll row in the month are included.
+    const [leaverAttendance, leaverRows] = await Promise.all([
+      this.prisma.attendance.findMany({ where: { checkIn: { gte: start, lt: end } }, select: { userId: true } }),
+      this.prisma.payroll.findMany({ where: { periodMonth: period }, select: { userId: true } }),
+    ]);
+    const workedThisMonth = [...new Set([...leaverAttendance, ...leaverRows].map((r) => r.userId))];
     const staff = await this.prisma.user.findMany({
-      where: { isActive: true, username: { not: WEBSHOP_USERNAME } },
+      where: {
+        AND: [
+          { username: { not: WEBSHOP_USERNAME } },
+          { OR: [{ isActive: true }, { id: { in: workedThisMonth } }] },
+          await this.staffScope(user),
+        ],
+      },
       orderBy: { fullName: 'asc' },
     });
     const ids = staff.map((m) => m.id);
@@ -296,11 +355,11 @@ export class HrService {
           paidAt: { gte: start, lt: end },
           order: { status: { not: OrderStatus.CANCELLED } },
         },
-        select: { amountMnt: true, order: { select: { createdById: true } } },
+        select: { amountMnt: true, recordedById: true, order: { select: { createdById: true } } },
       }),
       this.prisma.salesReturn.findMany({
         where: { createdAt: { gte: start, lt: end }, refundMethod: { notIn: [PayMethod.CREDIT, PayMethod.OFFSET] } },
-        select: { refundAmount: true, order: { select: { createdById: true } } },
+        select: { refundAmount: true, createdById: true, order: { select: { createdById: true } } },
       }),
       this.prisma.attendance.findMany({ where: { userId: { in: ids }, checkIn: { gte: start, lt: end } }, select: { userId: true, checkIn: true } }),
       this.prisma.payrollAdjustment.findMany({
@@ -311,8 +370,11 @@ export class HrService {
     ]);
     const ticketMap = new Map(tickets.map((t) => [t.preparedById!, t._count._all]));
     const salesBy = new Map<string, number>();
-    for (const p of sales) salesBy.set(p.order.createdById, (salesBy.get(p.order.createdById) ?? 0) + p.amountMnt);
-    for (const r of refunds) salesBy.set(r.order.createdById, (salesBy.get(r.order.createdById) ?? 0) - r.refundAmount);
+    // Credited like the daily report and the cash drawer: to whoever took the money (or handed it back);
+    // older rows without that fall back to whoever made the order.
+    const credit = (id: string, amount: number) => salesBy.set(id, (salesBy.get(id) ?? 0) + amount);
+    for (const p of sales) credit(p.recordedById ?? p.order.createdById, p.amountMnt);
+    for (const r of refunds) credit(r.createdById ?? r.order.createdById, -r.refundAmount);
     const daysBy = new Map<string, Set<string>>();
     for (const a of attendance) {
       const set = daysBy.get(a.userId) ?? new Set<string>();
@@ -323,19 +385,22 @@ export class HrService {
 
     const rows = [];
     for (const member of staff) {
-      const base = member.baseSalaryMnt ?? settings.defaultBaseMnt[member.role] ?? 0;
+      const base = member.baseSalaryMnt ?? (formula ? (settings.defaultBaseMnt[member.role] ?? 0) : 0);
       const workedDays = daysBy.get(member.id)?.size ?? 0;
       const earnedBase =
-        settings.prorateByAttendance && workingDays > 0 ? Math.round((base * Math.min(workedDays, workingDays)) / workingDays) : base;
+        formula && settings.prorateByAttendance && workingDays > 0
+          ? Math.round((base * Math.min(workedDays, workingDays)) / workingDays)
+          : base;
       const ticketCount = ticketMap.get(member.id) ?? 0;
-      const ticketBonus = ticketCount * settings.ticketBonusMnt;
+      const ticketBonus = formula ? ticketCount * settings.ticketBonusMnt : 0;
       const salesAmountMnt = Math.max(0, salesBy.get(member.id) ?? 0);
-      const salesBonus = member.role === Role.BORLUULAGCH ? Math.round((salesAmountMnt * settings.salesCommissionPct) / 100) : 0;
+      const salesBonus =
+        formula && member.role === Role.BORLUULAGCH ? Math.round((salesAmountMnt * settings.salesCommissionPct) / 100) : 0;
       const mine = adjustments.filter((a) => a.userId === member.id);
       const adjustmentsMnt = mine.reduce((s, a) => s + a.amountMnt, 0);
       const grossSalary = earnedBase + ticketBonus + salesBonus + adjustmentsMnt;
-      const socialInsuranceMnt = Math.max(0, Math.round((grossSalary * settings.socialInsurancePct) / 100));
-      const incomeTaxMnt = Math.max(0, Math.round(((grossSalary - socialInsuranceMnt) * settings.incomeTaxPct) / 100));
+      const socialInsuranceMnt = formula ? Math.max(0, Math.round((grossSalary * settings.socialInsurancePct) / 100)) : 0;
+      const incomeTaxMnt = formula ? Math.max(0, Math.round(((grossSalary - socialInsuranceMnt) * settings.incomeTaxPct) / 100)) : 0;
       const calc = {
         baseSalary: base,
         fulfillmentBonus: ticketBonus + salesBonus,
@@ -367,35 +432,48 @@ export class HrService {
       rows.push({
         ...payroll,
         customBase: member.baseSalaryMnt !== null,
+        bonusMnt: mine.filter((a) => a.amountMnt > 0).reduce((s, a) => s + a.amountMnt, 0),
+        deductionMnt: mine.filter((a) => a.amountMnt < 0).reduce((s, a) => s - a.amountMnt, 0),
         adjustments: mine.map((a) => ({ id: a.id, amountMnt: a.amountMnt, reason: a.reason, createdAt: a.createdAt, by: a.createdBy?.fullName ?? '' })),
-        user: { id: member.id, fullName: member.fullName, username: member.username, role: member.role },
+        user: { id: member.id, fullName: member.fullName, username: member.username, role: member.role, isActive: member.isActive },
       });
     }
 
-    const totals = { gross: 0, net: 0, insurance: 0, tax: 0 };
+    const totals = { base: 0, bonus: 0, deduction: 0, gross: 0, net: 0, insurance: 0, tax: 0, paid: 0, unpaid: 0 };
     for (const r of rows) {
+      totals.base += r.earnedBase;
+      totals.bonus += r.bonusMnt + r.ticketBonus + r.salesBonus;
+      totals.deduction += r.deductionMnt;
+      if (r.status === PayrollStatus.PAID) totals.paid += r.netSalary;
+      else totals.unpaid += r.netSalary;
       totals.gross += r.grossSalary;
       totals.net += r.netSalary;
       totals.insurance += r.socialInsuranceMnt;
       totals.tax += r.incomeTaxMnt;
     }
     this.log.log(`Payroll calculated period=${period} staff=${rows.length} by ${user.fullName ?? user.name}`);
-    return { periodMonth: period, timeZone: UB_TZ, settings, workingDays, totals, rows };
+    return { periodMonth: period, timeZone: UB_TZ, formula, settings, workingDays, totals, rows };
   }
 
   async markPaid(id: string, user: AuthUser) {
-    if (user.role !== Role.ADMIN) {
-      throw new ForbiddenException('Only admin can mark payroll as paid');
-    }
-    const row = await this.prisma.payroll.findUnique({ where: { id }, include: { user: true } });
-    if (!row) throw new NotFoundException('Payroll row not found');
-    if (row.status === PayrollStatus.PAID) return row;
-    const updated = await this.prisma.payroll.update({
-      where: { id },
+    this.assertPayroller(user, 'mark payroll as paid');
+    const found = await this.prisma.payroll.findUnique({ where: { id }, include: { user: true } });
+    if (!found) throw new NotFoundException('Payroll row not found');
+    if (found.status === PayrollStatus.PAID) return found;
+    // Bonuses, salary changes or sales may have come in since the page was opened: recalculate the month
+    // first so what is frozen as paid is the current amount, then claim the row only while it is still DRAFT.
+    await this.payroll(user, found.periodMonth);
+    const claimed = await this.prisma.payroll.updateMany({
+      where: { id, status: PayrollStatus.DRAFT },
       data: { status: PayrollStatus.PAID, paidAt: new Date(), paidById: user.id },
+    });
+    const updated = await this.prisma.payroll.findUniqueOrThrow({
+      where: { id },
       include: { user: { select: { id: true, fullName: true, username: true, role: true } } },
     });
-    this.log.log(`Payroll PAID ${row.periodMonth} ${row.user.fullName} amount=${row.netSalary} by ${user.id}`);
+    if (claimed.count === 1) {
+      this.log.log(`Payroll PAID ${updated.periodMonth} ${updated.user.fullName} amount=${updated.netSalary} by ${user.id}`);
+    }
     return updated;
   }
 }

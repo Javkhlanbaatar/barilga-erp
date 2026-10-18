@@ -9,10 +9,18 @@ export class WarehousesService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  list(includeInactive: boolean) {
+  list(includeInactive: boolean, withPeople = false) {
     return this.prisma.warehouse.findMany({
       where: includeInactive ? {} : { isActive: true },
-      orderBy: [{ isDefault: 'desc' }, { code: 'asc' }],
+      orderBy: [{ isDefault: 'desc' }, { kind: 'asc' }, { code: 'asc' }],
+      ...(withPeople
+        ? {
+            include: {
+              users: { where: { isActive: true }, select: { id: true, fullName: true, role: true }, orderBy: { fullName: 'asc' } },
+              managers: { where: { user: { isActive: true } }, select: { user: { select: { id: true, fullName: true, role: true } } } },
+            },
+          }
+        : {}),
     });
   }
 
@@ -24,6 +32,7 @@ export class WarehousesService {
           name: dto.name,
           address: dto.address || null,
           phone: dto.phone || null,
+          kind: dto.kind ?? 'SHOP',
         },
       });
       this.log.log(`Warehouse ${created.code} created`);
@@ -71,6 +80,7 @@ export class WarehousesService {
       ...(dto.address !== undefined ? { address: dto.address || null } : {}),
       ...(dto.phone !== undefined ? { phone: dto.phone || null } : {}),
       ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+      ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
     };
 
     if (dto.isDefault === true && !existing.isDefault) {

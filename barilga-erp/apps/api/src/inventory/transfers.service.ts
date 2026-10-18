@@ -5,7 +5,7 @@ import { createWithUniqueNumber, isUniqueConflictOn, ulaanbaatarYmd } from '../o
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTransferDto, DispatchTransferDto, ReceiveTransferDto } from './dto/transfer.dto';
 import { InventoryService } from './inventory.service';
-import { lockedWarehouseId, seesAllWarehouses } from './warehouse-scope';
+import { assignedWarehouseIds, isManagerRole } from './warehouse-scope';
 
 const TRANSFER_INCLUDE = {
   items: { include: { product: { select: { id: true, sku: true, nameMn: true, unit: true } } } },
@@ -45,10 +45,10 @@ export class TransfersService {
    * have no warehouse assigned are refused: moving stock between shops must always be attributable to one.
    */
   private assertActsFor(user: AuthUser, warehouseId: string, what: string) {
-    if (seesAllWarehouses(user.role)) return;
-    const locked = lockedWarehouseId(user);
-    if (!locked) throw new ForbiddenException(`You must be assigned to a warehouse to ${what}`);
-    if (locked !== warehouseId) throw new ForbiddenException(`Only staff of that warehouse can ${what}`);
+    const assigned = assignedWarehouseIds(user);
+    if (!assigned) return;
+    if (!assigned.length) throw new ForbiddenException(`You must be assigned to a warehouse to ${what}`);
+    if (!assigned.includes(warehouseId)) throw new ForbiddenException(`Only staff of that warehouse can ${what}`);
   }
 
   /** One positive quantity per product. */
@@ -285,11 +285,8 @@ export class TransfersService {
     if (!transfer) throw new NotFoundException('Transfer not found');
 
     if (transfer.status === TransferStatus.REQUESTED) {
-      if (!seesAllWarehouses(user.role)) {
-        const locked = lockedWarehouseId(user);
-        if (!locked || (locked !== transfer.fromWarehouseId && locked !== transfer.toWarehouseId)) {
-          throw new ForbiddenException('Only the two warehouses can refuse or withdraw a request');
-        }
+      if (!this.touches(user, transfer)) {
+        throw new ForbiddenException('Only the two warehouses can refuse or withdraw a request');
       }
       const claimed = await this.prisma.stockTransfer.updateMany({
         where: { id, status: TransferStatus.REQUESTED },
@@ -300,7 +297,9 @@ export class TransfersService {
       return this.get(id, user);
     }
 
-    if (!seesAllWarehouses(user.role)) throw new ForbiddenException('Only managers can cancel a transfer in transit');
+    if (!isManagerRole(user.role) || !this.touches(user, transfer)) {
+      throw new ForbiddenException('Only managers can cancel a transfer in transit');
+    }
     await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.stockTransfer.updateMany({
         where: { id, status: TransferStatus.IN_TRANSIT },
@@ -334,10 +333,7 @@ export class TransfersService {
    * Suggests enough to reach twice the minimum, never more than the source has.
    */
   async suggest(toWarehouseId: string, fromWarehouseId: string, user: AuthUser) {
-    if (!seesAllWarehouses(user.role)) {
-      const locked = lockedWarehouseId(user);
-      if (locked !== toWarehouseId && locked !== fromWarehouseId) throw new ForbiddenException();
-    }
+    if (!this.touches(user, { fromWarehouseId, toWarehouseId })) throw new ForbiddenException();
     const products = await this.prisma.product.findMany({
       where: { active: true, minStockLevel: { gt: 0 } },
       select: { id: true, sku: true, nameMn: true, unit: true, minStockLevel: true },
@@ -361,18 +357,24 @@ export class TransfersService {
 
   /** What is waiting for this user: requests to send from their warehouse, and stock on the way to it. */
   async pending(user: AuthUser) {
-    const locked = lockedWarehouseId(user);
+    const mine = assignedWarehouseIds(user);
     const [toSend, toReceive] = await Promise.all([
-      this.prisma.stockTransfer.count({ where: { status: TransferStatus.REQUESTED, ...(locked ? { fromWarehouseId: locked } : {}) } }),
-      this.prisma.stockTransfer.count({ where: { status: TransferStatus.IN_TRANSIT, ...(locked ? { toWarehouseId: locked } : {}) } }),
+      this.prisma.stockTransfer.count({ where: { status: TransferStatus.REQUESTED, ...(mine ? { fromWarehouseId: { in: mine } } : {}) } }),
+      this.prisma.stockTransfer.count({ where: { status: TransferStatus.IN_TRANSIT, ...(mine ? { toWarehouseId: { in: mine } } : {}) } }),
     ]);
     return { toSend, toReceive, total: toSend + toReceive };
   }
 
   /** Staff assigned to a warehouse see only transfers into or out of it. */
   private scopeWhere(user: AuthUser): Prisma.StockTransferWhereInput {
-    const locked = lockedWarehouseId(user);
-    return locked ? { OR: [{ fromWarehouseId: locked }, { toWarehouseId: locked }] } : {};
+    const mine = assignedWarehouseIds(user);
+    return mine ? { OR: [{ fromWarehouseId: { in: mine } }, { toWarehouseId: { in: mine } }] } : {};
+  }
+
+  /** Is the user staff (or a manager) of either end of the transfer? */
+  private touches(user: AuthUser, t: { fromWarehouseId: string; toWarehouseId: string }) {
+    const mine = assignedWarehouseIds(user);
+    return !mine || mine.includes(t.fromWarehouseId) || mine.includes(t.toWarehouseId);
   }
 
   list(user: AuthUser, filter: { status?: string; warehouseId?: string; limit?: number } = {}) {

@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { Prisma, Role, StockMovementType, TransferStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
-import { lockedWarehouseId, seesAllWarehouses } from '../inventory/warehouse-scope';
+import { assignedWarehouseIds, isManagerRole } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseDayBound, UB_TZ, ymdInUlaanbaatar } from './report-dates';
 
@@ -54,17 +54,17 @@ export class WarehouseReportService {
   constructor(private readonly prisma: PrismaService) {}
 
   async report(query: { warehouseId?: string; startDate?: string; endDate?: string }, user: AuthUser) {
-    if (!seesAllWarehouses(user.role) && user.role !== Role.ACHIGCH_BELTGEGCH) {
+    if (!isManagerRole(user.role) && user.role !== Role.ACHIGCH_BELTGEGCH) {
       throw new ForbiddenException('Only managers, admin or warehouse staff can view the warehouse report');
     }
-    const locked = lockedWarehouseId(user);
-    if (!seesAllWarehouses(user.role) && !locked) {
+    const mine = assignedWarehouseIds(user);
+    if (mine && !mine.length) {
       throw new ForbiddenException('You must be assigned to a warehouse to view its report');
     }
-    if (locked && query.warehouseId && query.warehouseId !== locked) {
+    if (mine && query.warehouseId && !mine.includes(query.warehouseId)) {
       throw new ForbiddenException('You can only view your own warehouse');
     }
-    const warehouseId = locked ?? query.warehouseId ?? null;
+    const warehouseId = query.warehouseId ?? mine?.[0] ?? null;
 
     const startDate = query.startDate ?? ymdInUlaanbaatar();
     const endDate = query.endDate ?? startDate;

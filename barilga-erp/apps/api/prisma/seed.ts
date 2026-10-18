@@ -8,7 +8,7 @@ async function main() {
 
   const users: Array<{ username: string; email: string; fullName: string; role: Role }> = [
     { username: 'admin', email: 'admin@barilga.mn', fullName: 'Системийн админ', role: Role.ADMIN },
-    { username: 'manager', email: 'manager@barilga.mn', fullName: 'Гантулга', role: Role.MANAGER },
+    { username: 'manager', email: 'manager@barilga.mn', fullName: 'Гантулга', role: Role.SUPER_MANAGER },
     { username: 'cashier', email: 'cashier@barilga.mn', fullName: 'Оюунчимэг', role: Role.BORLUULAGCH },
     { username: 'warehouse', email: 'warehouse@barilga.mn', fullName: 'Төмөрбаатар', role: Role.ACHIGCH_BELTGEGCH },
   ];
@@ -16,8 +16,8 @@ async function main() {
   for (const u of users) {
     await prisma.user.upsert({
       where: { username: u.username },
-      // Re-seeding never resets a password or re-activates someone an admin switched off.
-      update: { email: u.email, fullName: u.fullName, role: u.role },
+      // Re-seeding never resets a password, a role, or re-activates someone an admin switched off.
+      update: { email: u.email, fullName: u.fullName },
       create: { ...u, passwordHash },
     });
   }

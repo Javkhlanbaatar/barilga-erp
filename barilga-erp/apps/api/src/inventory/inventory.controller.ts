@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, ForbiddenException, Get, Param, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -6,7 +6,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { OVERSIGHT_ROLES } from '../auth/rbac';
 import { InventoryService } from './inventory.service';
-import { lockedWarehouseId } from './warehouse-scope';
+import { allowedWarehouseIds } from './warehouse-scope';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -22,7 +22,11 @@ export class InventoryController {
     @Query('search') search?: string,
     @Query('warehouseId') warehouseId?: string,
   ) {
-    return this.inventory.listStock(q ?? search, { warehouseId: lockedWarehouseId(user) ?? (warehouseId || null) });
+    const allowed = allowedWarehouseIds(user);
+    if (allowed && warehouseId && !allowed.includes(warehouseId)) throw new ForbiddenException('You can only view your own warehouses');
+    // One warehouse: its own numbers. A branch manager over several sees the total of theirs unless they pick one.
+    const own = allowed?.length === 1 ? allowed[0] : null;
+    return this.inventory.listStock(q ?? search, { warehouseId: own ?? (warehouseId || null), allowed });
   }
 
   /**

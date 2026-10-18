@@ -1,5 +1,6 @@
 'use client';
 
+import { isManager } from '@/lib/rbac';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ReportsNav } from '@/components/reports-nav';
@@ -38,7 +39,7 @@ export default function DailyReportPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const canPickCashier = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const canPickCashier = isManager(user?.role);
 
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');

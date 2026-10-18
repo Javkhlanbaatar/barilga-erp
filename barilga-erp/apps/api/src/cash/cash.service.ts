@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CashMovementKind, CashSessionStatus, PaymentStatus, PayMethod, Prisma, Role } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
+import { canAccessWarehouse, isManagerRole, seesAllWarehouses, warehouseWhere } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 
 type SessionRow = Prisma.CashSessionGetPayload<{ include: { movements: true; user: { select: { id: true; fullName: true } } } }>;
@@ -106,7 +107,16 @@ export class CashService {
       ? await this.prisma.cashSession.findUnique({ where: { id: sessionId }, include: CashService.INCLUDE })
       : await this.prisma.cashSession.findFirst({ where: { userId: user.id, status: CashSessionStatus.OPEN }, include: CashService.INCLUDE });
     if (!s) throw new NotFoundException('Нээлттэй касс алга / No open drawer');
-    if (s.userId !== user.id && user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ForbiddenException();
+    if (s.userId !== user.id) {
+      if (!isManagerRole(user.role)) throw new ForbiddenException();
+      if (!seesAllWarehouses(user)) {
+        const [owner, def] = await Promise.all([
+          this.prisma.user.findUnique({ where: { id: s.userId }, select: { warehouseId: true } }),
+          this.prisma.warehouse.findFirst({ where: { isDefault: true }, select: { id: true } }),
+        ]);
+        if (!canAccessWarehouse(user, owner?.warehouseId, def?.id)) throw new ForbiddenException('This drawer belongs to another warehouse');
+      }
+    }
     if (s.status !== CashSessionStatus.OPEN) throw new ConflictException('Касс аль хэдийн хаагдсан / Already closed');
     const closedAt = new Date();
     const { expectedCashMnt } = await this.summary({ ...s, closedAt });
@@ -131,13 +141,17 @@ export class CashService {
 
   /** Managers: every drawer in a date range, with its totals and difference. */
   async list(user: AuthUser, filter: { from?: string; to?: string; userId?: string }) {
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ForbiddenException();
+    if (!isManagerRole(user.role)) throw new ForbiddenException();
+    // A branch manager sees the drawers of the people working in their warehouses.
+    const def = seesAllWarehouses(user) ? null : await this.prisma.warehouse.findFirst({ where: { isDefault: true }, select: { id: true } });
+    const people = seesAllWarehouses(user) ? {} : { user: warehouseWhere(user, def?.id) as Prisma.UserWhereInput };
     const day = (d: string | undefined, end: boolean) =>
       d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(`${d}T${end ? '23:59:59.999' : '00:00:00.000'}+08:00`) : undefined;
     const gte = day(filter.from, false);
     const lte = day(filter.to, true);
     const rows = await this.prisma.cashSession.findMany({
       where: {
+        ...people,
         ...(filter.userId ? { userId: filter.userId } : {}),
         ...(gte || lte ? { openedAt: { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) } } : {}),
       },

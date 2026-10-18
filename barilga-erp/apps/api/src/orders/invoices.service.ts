@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto';
 import { AuthUser } from '../auth/current-user.decorator';
 import { FeaturesService } from '../features/features.service';
 import { InventoryService } from '../inventory/inventory.service';
-import { assertWarehouseAccess, lockedWarehouseId } from '../inventory/warehouse-scope';
+import { assertWarehouseAccess, isManagerRole, orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { CreateInvoiceDto } from './dto/invoice.dto';
@@ -81,7 +81,7 @@ export class InvoicesService {
   }
 
   private async assertAccess(user: AuthUser, warehouseId: string | null) {
-    if (!lockedWarehouseId(user)) return;
+    if (seesAllWarehouses(user)) return;
     const fallback = warehouseId ? undefined : await this.inventory.defaultWarehouseId();
     assertWarehouseAccess(user, warehouseId, fallback);
   }
@@ -162,7 +162,7 @@ export class InvoicesService {
 
   async cancel(id: string, user: AuthUser) {
     await this.assertOn();
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ForbiddenException();
+    if (!isManagerRole(user.role)) throw new ForbiddenException();
     const row = await this.prisma.invoice.findUnique({ where: { id }, include: INVOICE_INCLUDE });
     if (!row) throw new NotFoundException('Invoice not found');
     await this.assertAccess(user, row.order.warehouseId);
@@ -178,11 +178,7 @@ export class InvoicesService {
   async list(user: AuthUser, filter: { state?: string; customerId?: string; q?: string }) {
     await this.assertOn();
     const where: Prisma.InvoiceWhereInput = {};
-    const locked = lockedWarehouseId(user);
-    if (locked) {
-      const isDefault = locked === (await this.inventory.defaultWarehouseId());
-      where.order = isDefault ? { OR: [{ warehouseId: locked }, { warehouseId: null }] } : { warehouseId: locked };
-    }
+    if (!seesAllWarehouses(user)) where.order = orderWarehouseWhere(user, await this.inventory.defaultWarehouseId());
     if (filter.customerId) where.customerId = filter.customerId;
     const rows = await this.prisma.invoice.findMany({ where, include: INVOICE_INCLUDE, orderBy: { createdAt: 'desc' }, take: 500 });
     const q = filter.q?.trim().toLowerCase();

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Role } from '@prisma/client';
+import { roleAllowed } from './rbac';
 import { ROLES_KEY } from './roles.decorator';
 
 @Injectable()
@@ -28,7 +29,7 @@ export class RolesGuard implements CanActivate {
     if (!user?.role) {
       throw new UnauthorizedException('Missing authenticated user');
     }
-    if (!required.includes(user.role)) {
+    if (!roleAllowed(user.role, required)) {
       this.log.warn(
         `RBAC deny ${user.email ?? user.id} role=${user.role} need=${required.join('|')} ${req.method} ${req.url}`,
       );

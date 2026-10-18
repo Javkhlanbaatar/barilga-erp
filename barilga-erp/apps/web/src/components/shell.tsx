@@ -1,5 +1,6 @@
 'use client';
 
+import { hasRole } from '@/lib/rbac';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -20,7 +21,7 @@ const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; featu
   { href: '/inventory/receipts', label: 'Бараа орлого', roles: ['ADMIN', 'MANAGER', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_RECEIPTS' },
   { href: '/inventory/transfers', label: 'Шилжүүлэг', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_TRANSFERS' },
   { href: '/customers', label: 'Харилцагчид', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'CUSTOMERS' },
-  { href: '/admin/price-lists', label: 'Үнийн жагсаалт', roles: ['ADMIN', 'MANAGER'], feature: 'PRICE_LISTS' },
+  { href: '/admin/price-lists', label: 'Үнийн жагсаалт', roles: ['ADMIN', 'SUPER_MANAGER'], feature: 'PRICE_LISTS' },
   { href: '/admin/warehouses', label: 'Дэлгүүр / агуулах', roles: ['ADMIN'] },
   { href: '/admin/users', label: 'Хэрэглэгчид', roles: ['ADMIN'] },
   { href: '/admin/features', label: 'Модулиуд', roles: ['ADMIN'] },
@@ -67,7 +68,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   if (!user) return <div className="p-8 text-slate-400">Уншиж байна…</div>;
 
-  const visible = NAV.filter((n) => n.roles.includes(user.role) && (!n.feature || features.enabled(n.feature)));
+  const visible = NAV.filter((n) => hasRole(user.role, n.roles) && (!n.feature || features.enabled(n.feature)));
   // The most specific matching link is active (so /inventory/transfers does not also light up /inventory).
   const activeHref = visible
     .filter((n) => pathname === n.href || (n.href !== '/admin' && pathname.startsWith(`${n.href}/`)))

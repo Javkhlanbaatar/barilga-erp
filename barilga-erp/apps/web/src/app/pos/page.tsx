@@ -9,8 +9,8 @@ import { api, tugrik } from '@/lib/api';
 import { CustomerPicker } from '@/components/customer-picker';
 import { ProductImage } from '@/components/product-image';
 import { useFeatures } from '@/lib/features';
-import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
-import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
+import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, companionLines, productMatchesQuery, productStockStatus } from '@/lib/types';
+import { POS_ROLES, TOP_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
 type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT' | 'INVOICE';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
@@ -157,7 +157,8 @@ export default function CheckoutPOS() {
     }
     const mine = (raw ? (JSON.parse(raw) as AuthUser).warehouseId : null) ?? null;
     setMyWarehouseId(mine);
-    setWarehouseLocked(!!mine && role !== 'ADMIN' && role !== 'MANAGER');
+    // Staff sell from their own shop; the general manager and admin may pick any (a branch manager picks among theirs; the API checks).
+    setWarehouseLocked(!!mine && !hasRole(role, TOP_ROLES) && role !== 'MANAGER');
     api<Warehouse[]>('/inventory/warehouses')
       .then(setWarehouses)
       .catch(() => undefined);
@@ -602,6 +603,9 @@ export default function CheckoutPOS() {
                   )}
                 </div>
                 <h3 className="font-semibold text-sm">{p.nameMn}</h3>
+                {(p.companions ?? []).length > 0 && (
+                  <p className="text-[11px] text-amber-300">+ {p.companions!.map((c) => c.name).join(', ')} дагалдана</p>
+                )}
                 {p.description && <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{p.description}</p>}
                 <p className="text-amber-400 font-bold mt-2">
                   {tugrik(p.priceMnt)} / {p.unit}
@@ -624,6 +628,9 @@ export default function CheckoutPOS() {
               <div className="flex items-center gap-2 text-sm">
                 <span className="flex-1">
                   {l.product.nameMn}
+                  {companionLines(l.product.companions, l.quantity).map((c) => (
+                    <span key={c} className="block text-[11px] text-amber-300">+ {c}</span>
+                  ))}
                   {linePrice.get(l.product.id) && linePrice.get(l.product.id)!.unitPrice !== l.product.priceMnt && (
                     <span className="block text-[11px] text-emerald-300">
                       {tugrik(linePrice.get(l.product.id)!.unitPrice)} <span className="line-through text-slate-500">{tugrik(l.product.priceMnt)}</span>

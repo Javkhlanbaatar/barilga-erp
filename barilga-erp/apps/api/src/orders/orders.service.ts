@@ -16,7 +16,7 @@ import { isFallbackPicker, isHiredTransport, isPosActor, isTransportActor, isWar
 import { EbarimtService } from '../ebarimt/ebarimt.service';
 import { FeaturesService } from '../features/features.service';
 import { InventoryService } from '../inventory/inventory.service';
-import { assertWarehouseAccess, lockedWarehouseId } from '../inventory/warehouse-scope';
+import { assertWarehouseAccess, canAccessWarehouse, homeWarehouseId, isManagerRole, orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
 import { LogisticsService } from '../logistics/logistics.service';
 import { isZeroFeeMethod } from '../logistics/logistics.engine';
 import { PaymentService } from '../payment/payment.service';
@@ -137,14 +137,14 @@ export class OrdersService {
 
   /**
    * Which warehouse an order takes its stock from: the one asked for, else the user's own, else the default.
-   * Staff locked to a warehouse can only sell from it.
+   * Staff and branch managers can only sell from their own warehouses.
    */
   private async resolveOrderWarehouse(requested: string | undefined, user: AuthUser) {
-    const locked = lockedWarehouseId(user);
-    if (locked && requested && requested !== locked) {
+    const id = await this.inventory.resolveWarehouseId(this.prisma, requested ?? homeWarehouseId(user));
+    if (!canAccessWarehouse(user, id)) {
       throw new ForbiddenException('You can only create orders for your own warehouse');
     }
-    return this.inventory.resolveWarehouseId(this.prisma, requested ?? user.warehouseId ?? null);
+    return id;
   }
 
   async resolveZoneId(zoneId: string | undefined, method: QuoteOrderDto['deliveryMethod']) {
@@ -184,17 +184,15 @@ export class OrdersService {
    * Orders from before warehouses existed (warehouseId null) belong to the default warehouse.
    */
   private async assertOrderAccess(user: AuthUser, warehouseId: string | null) {
-    if (!lockedWarehouseId(user)) return;
+    if (seesAllWarehouses(user)) return;
     const fallback = warehouseId ? undefined : await this.inventory.defaultWarehouseId();
     assertWarehouseAccess(user, warehouseId, fallback);
   }
 
-  /** List filter for a locked user's own warehouse (including pre-warehouse orders when it is the default). */
+  /** List filter for the user's own warehouses (including pre-warehouse orders when the default is one). */
   private async orderScope(user: AuthUser): Promise<Prisma.OrderWhereInput> {
-    const locked = lockedWarehouseId(user);
-    if (!locked) return {};
-    const isDefault = locked === (await this.inventory.defaultWarehouseId());
-    return isDefault ? { OR: [{ warehouseId: locked }, { warehouseId: null }] } : { warehouseId: locked };
+    if (seesAllWarehouses(user)) return {};
+    return orderWarehouseWhere(user, await this.inventory.defaultWarehouseId());
   }
 
   /** A linked customer must exist and be active, and the customer module must be switched on. */
@@ -905,7 +903,7 @@ export class OrdersService {
   }
 
   async assignSupplier(orderId: string, itemId: string, dto: AssignSupplierDto, user: AuthUser) {
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
+    if (!isManagerRole(user.role)) {
       throw new ForbiddenException('Only managers or admin can assign an external supplier');
     }
     const supplierName = dto.supplierName.trim();
@@ -1036,7 +1034,7 @@ export class OrdersService {
   }
 
   async issueEbarimt(orderId: string, user: AuthUser) {
-    if (user.role !== Role.BORLUULAGCH && user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
+    if (user.role !== Role.BORLUULAGCH && !isManagerRole(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can issue E-Barimt');
     }
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });

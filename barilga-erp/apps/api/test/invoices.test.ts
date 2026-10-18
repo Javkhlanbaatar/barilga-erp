@@ -10,7 +10,7 @@ import { InvoicesService } from '../src/orders/invoices.service';
 import { makePaymentWorld } from './helpers/payment-fixtures';
 
 const cashier: any = { id: 'u-c', role: Role.BORLUULAGCH, name: 'Cashier' };
-const manager: any = { id: 'u-m', role: Role.MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-m', role: Role.SUPER_MANAGER, name: 'Manager' };
 
 async function world() {
   const w = makePaymentWorld({ NODE_ENV: 'development', ORDER_PAYMENT_TTL_MINUTES: '30' });

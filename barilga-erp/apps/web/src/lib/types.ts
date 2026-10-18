@@ -1,5 +1,5 @@
 import { matchesSearch } from './translit';
-export type Role = 'ADMIN' | 'MANAGER' | 'BORLUULAGCH' | 'ACHIGCH_BELTGEGCH';
+export type Role = 'ADMIN' | 'SUPER_MANAGER' | 'MANAGER' | 'BORLUULAGCH' | 'ACHIGCH_BELTGEGCH';
 
 export type AuthUser = {
   id: string;
@@ -13,6 +13,9 @@ export type AuthUser = {
   warehouseId?: string | null;
 };
 
+export type WarehouseKind = 'SHOP' | 'WAREHOUSE';
+export const WAREHOUSE_KIND_LABEL: Record<WarehouseKind, string> = { SHOP: 'Дэлгүүр', WAREHOUSE: 'Агуулах' };
+
 export type Warehouse = {
   id: string;
   code: string;
@@ -21,6 +24,10 @@ export type Warehouse = {
   phone?: string | null;
   isActive: boolean;
   isDefault: boolean;
+  kind?: WarehouseKind;
+  /** Admin listing only: who works here and which branch managers oversee it. */
+  users?: Array<{ id: string; fullName: string; role: Role }>;
+  managers?: Array<{ user: { id: string; fullName: string; role: Role } }>;
 };
 
 export type StaffUser = {
@@ -35,6 +42,8 @@ export type StaffUser = {
   active?: boolean;
   warehouseId?: string | null;
   warehouse?: { id: string; code: string; name: string } | null;
+  /** Branch manager: further warehouses they oversee. */
+  managedWarehouses?: Array<{ id: string; code: string; name: string }>;
   createdAt: string;
   updatedAt?: string;
 };
@@ -76,7 +85,19 @@ export type Product = {
   description?: string | null;
   category?: string;
   active?: boolean;
+  /** Items handed over with every unit (e.g. a hardener with resin paint). */
+  companions?: Companion[] | null;
 };
+
+export type Companion = { name: string; qtyPerUnit: number; unit: string };
+
+/** "Хатаагч × 2 ш" lines for a quantity of a product with companions. */
+export function companionLines(companions: Companion[] | null | undefined, quantity: number) {
+  return (companions ?? []).map((c) => {
+    const n = Math.round(c.qtyPerUnit * quantity * 1000) / 1000;
+    return `${c.name} × ${n.toLocaleString('mn-MN', { maximumFractionDigits: 3 })} ${c.unit}`;
+  });
+}
 
 export function productMatchesQuery(
   p: { sku?: string; nameMn?: string; nameEn?: string; description?: string | null },
@@ -416,6 +437,8 @@ export type PayrollRow = {
   salesAmountMnt: number;
   salesBonus: number;
   adjustmentsMnt: number;
+  bonusMnt: number;
+  deductionMnt: number;
   grossSalary: number;
   socialInsuranceMnt: number;
   incomeTaxMnt: number;
@@ -423,21 +446,24 @@ export type PayrollRow = {
   status: 'DRAFT' | 'PAID';
   paidAt: string | null;
   adjustments: Array<{ id: string; amountMnt: number; reason: string; createdAt: string; by: string }>;
-  user: { id: string; fullName: string; username: string; role: Role };
+  user: { id: string; fullName: string; username: string; role: Role; isActive?: boolean };
 };
 
 export type PayrollReport = {
   periodMonth: string;
   timeZone: string;
+  /** PAYROLL_FORMULA module: false = pay is base salary + bonuses − deductions entered by hand. */
+  formula: boolean;
   settings: PayrollSettings;
   workingDays: number;
-  totals: { gross: number; net: number; insurance: number; tax: number };
+  totals: { base: number; bonus: number; deduction: number; gross: number; net: number; insurance: number; tax: number; paid: number; unpaid: number };
   rows: PayrollRow[];
 };
 
 export const ROLE_LABEL: Record<Role, string> = {
   ADMIN: 'Админ',
-  MANAGER: 'Менежер',
+  SUPER_MANAGER: 'Ерөнхий менежер',
+  MANAGER: 'Салбарын менежер',
   BORLUULAGCH: 'Кассчин',
   ACHIGCH_BELTGEGCH: 'Агуулах',
 };
@@ -537,6 +563,7 @@ export type FeatureKey =
   | 'PRICE_LISTS'
   | 'PARTNER_ACCOUNTS'
   | 'HR'
+  | 'PAYROLL_FORMULA'
   | 'CASH_SESSIONS'
   | 'INVOICES'
   | 'EBARIMT'
@@ -547,6 +574,8 @@ export type FeatureSwitch = {
   nameMn: string;
   enabled: boolean;
   isDefault: boolean;
+  /** Not used by this business for now: always off and hidden from the module page. */
+  dormant?: boolean;
   updatedAt: string | null;
 };
 
@@ -560,6 +589,10 @@ export type CompanySettings = {
   bankAccounts: Array<{ bankName: string; accountNumber: string; accountName: string }>;
   invoiceNote: string;
   receiptFooter: string;
+  /** Uploaded logo path (/uploads/company/…), '' when none. */
+  logoUrl?: string;
+  /** Print the logo faintly behind invoices and receipts. */
+  watermark?: boolean;
   configured: boolean;
 };
 

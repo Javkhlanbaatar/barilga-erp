@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, Logger } from '@ne
 import { EbarimtStatus, OrderStatus, PayMethod, PaymentStatus, Prisma, Role } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
+import { isManagerRole, orderWarehouseWhere, seesAllWarehouses, warehouseWhere } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { DailyQueryDto } from './dto/daily-query.dto';
 import { parseDayBound, UB_TZ, ymdInUlaanbaatar } from './report-dates';
@@ -75,6 +76,10 @@ export class ReportsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  private async defaultWarehouseId() {
+    return (await this.prisma.warehouse.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null;
+  }
+
   async daily(query: DailyQueryDto, user: AuthUser): Promise<DailyReport> {
     const startDate = query.startDate ?? ymdInUlaanbaatar();
     const endDate = query.endDate ?? startDate;
@@ -90,13 +95,17 @@ export class ReportsService {
         throw new ForbiddenException('Cashiers can only view their own daily summary');
       }
       cashierId = user.id;
-    } else if (user.role === Role.ADMIN || user.role === Role.MANAGER) {
+    } else if (isManagerRole(user.role)) {
       cashierId = query.cashierId;
     } else {
       throw new ForbiddenException('Role is not allowed to view sales reports');
     }
 
+    // A branch manager's figures cover their own warehouses only.
+    const scope: Prisma.OrderWhereInput =
+      user.role === Role.BORLUULAGCH || seesAllWarehouses(user) ? {} : orderWarehouseWhere(user, await this.defaultWarehouseId());
     const orderWhere: Prisma.OrderWhereInput = {
+      AND: [scope],
       createdAt: { gte: startAt, lte: endAt },
       ...(cashierId ? { createdById: cashierId } : {}),
     };
@@ -111,6 +120,7 @@ export class ReportsService {
     const paidWhere: Prisma.PaymentWhereInput = {
       status: PaymentStatus.PAID,
       OR: [{ paidAt: inRange }, { paidAt: null, createdAt: inRange }],
+      order: scope,
       // A cashier's money is what they recorded; rows from before that was stored (and QPay paid by the
       // customer) fall back to whoever made the order.
       ...(cashierId ? { AND: [{ OR: [{ recordedById: cashierId }, { recordedById: null, order: { createdById: cashierId } }] }] } : {}),
@@ -118,6 +128,7 @@ export class ReportsService {
 
     const refundWhere: Prisma.SalesReturnWhereInput = {
       createdAt: { gte: startAt, lte: endAt },
+      order: scope,
       ...(cashierId ? { createdById: cashierId } : {}),
     };
 
@@ -329,11 +340,12 @@ export class ReportsService {
   }
 
   async listCashiers(user: AuthUser) {
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
+    if (!isManagerRole(user.role)) {
       throw new ForbiddenException('Only ADMIN and MANAGER can list cashiers');
     }
+    const scope = seesAllWarehouses(user) ? {} : (warehouseWhere(user, await this.defaultWarehouseId()) as Prisma.UserWhereInput);
     const rows = await this.prisma.user.findMany({
-      where: { role: Role.BORLUULAGCH, isActive: true, username: { not: WEBSHOP_USERNAME } },
+      where: { AND: [{ role: Role.BORLUULAGCH, isActive: true, username: { not: WEBSHOP_USERNAME } }, scope] },
       select: { id: true, fullName: true, username: true, email: true },
       orderBy: { fullName: 'asc' },
     });

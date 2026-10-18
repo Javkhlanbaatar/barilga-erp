@@ -94,7 +94,29 @@ export class PriceListsService {
     if (found !== ids.length) throw new BadRequestException('Product not found');
 
     await this.prisma.$transaction(async (tx) => {
+      // Every change is kept for the admin's edits report (a list price can sell below cost).
+      const before = new Map(
+        (await tx.priceListItem.findMany({ where: { priceListId: id, productId: { in: ids } } })).map((i) => [i.productId, i.priceMnt]),
+      );
+      const products = new Map(
+        (await tx.product.findMany({ where: { id: { in: ids } }, select: { id: true, sku: true, lastCostMnt: true } })).map((p) => [p.id, p]),
+      );
       for (const p of dto.prices) {
+        const old = before.get(p.productId) ?? null;
+        if (old === p.priceMnt) continue;
+        const prod = products.get(p.productId);
+        const belowCost = p.priceMnt !== null && prod?.lastCostMnt != null && p.priceMnt < prod.lastCostMnt;
+        await tx.editAudit.create({
+          data: {
+            entityType: 'PRICE_LIST_PRICE',
+            entityId: p.productId,
+            summary: `${list.name} · ${prod?.sku ?? p.productId}: ${old ?? 'жагсаалтгүй'} → ${p.priceMnt ?? 'хассан'}${belowCost ? ' (өртгөөс доош)' : ''}`,
+            before: { priceMnt: old },
+            after: { priceMnt: p.priceMnt },
+            reason: 'Үнийн жагсаалт өөрчилсөн',
+            actorId,
+          },
+        });
         if (p.priceMnt === null) {
           await tx.priceListItem.deleteMany({ where: { priceListId: id, productId: p.productId } });
         } else {

@@ -16,7 +16,7 @@ import { makePaymentWorld } from './helpers/payment-fixtures';
 
 const D = (n: number) => new Prisma.Decimal(n);
 const cashier: any = { id: 'u-c', role: Role.BORLUULAGCH, name: 'Cashier', email: 'c' };
-const manager: any = { id: 'u-m', role: Role.MANAGER, name: 'Manager', email: 'm' };
+const manager: any = { id: 'u-m', role: Role.SUPER_MANAGER, name: 'Manager', email: 'm' };
 
 async function creditOrder(total = 100_000, splits?: Array<{ method: string; amount: number }>) {
   const w = makePaymentWorld();

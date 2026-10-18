@@ -25,7 +25,7 @@ export default function AdminFeaturesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRows(await api<FeatureSwitch[]>('/features'));
+      setRows((await api<FeatureSwitch[]>('/features')).filter((r) => !r.dormant));
     } catch (err) {
       flash('error', err instanceof Error ? err.message : 'Ачаалж чадсангүй');
     } finally {

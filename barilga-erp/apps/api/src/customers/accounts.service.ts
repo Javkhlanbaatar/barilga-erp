@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { AccountEntryKind, OrderStatus, PaymentStatus, PayMethod, Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { PaymentService } from '../payment/payment.service';
-import { lockedWarehouseId } from '../inventory/warehouse-scope';
+import { orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
 import { partnerPayable } from './partner-payable';
 import { assertCashDrawerOpen } from '../cash/cash-drawer';
 import { PrismaService } from '../prisma/prisma.service';
@@ -65,10 +65,9 @@ export class AccountsService {
 
   /** A cashier locked to one warehouse only takes payments for that warehouse's orders. */
   private async scopeFor(user: AuthUser): Promise<Prisma.OrderWhereInput> {
-    const locked = lockedWarehouseId(user);
-    if (!locked) return {};
+    if (seesAllWarehouses(user)) return {};
     const def = await this.prisma.warehouse.findFirst({ where: { isDefault: true }, select: { id: true } });
-    return def?.id === locked ? { OR: [{ warehouseId: locked }, { warehouseId: null }] } : { warehouseId: locked };
+    return orderWarehouseWhere(user, def?.id);
   }
 
   async balance(customerId: string) {

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { api } from '@/lib/api';
-import type { Order } from '@/lib/types';
+import { companionLines, type Order } from '@/lib/types';
 
 type Item = Order['items'][number];
 
@@ -79,6 +79,11 @@ export function PickList({ order, onChange }: { order: Order; onChange?: (items:
               <span className={`flex-1 text-sm ${i.pickedAt ? 'text-slate-400 line-through' : 'text-white'}`}>
                 <span className="font-mono text-[11px] text-slate-500">{i.product.sku}</span> {i.product.nameMn}
                 {i.sourceType === 'EXTERNAL_SUPPLIER' && <span className="ml-1 text-[11px] text-amber-300">(нийлүүлэгчээс)</span>}
+                      {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
+                        <span key={c} className="ml-2 inline-block rounded border border-amber-600 bg-amber-950/50 px-1.5 text-[11px] font-semibold text-amber-200">
+                          + {c}
+                        </span>
+                      ))}
               </span>
               <span className="text-sm font-semibold whitespace-nowrap">
                 {qty(i.quantity)} {i.product.unit}

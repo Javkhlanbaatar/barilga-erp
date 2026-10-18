@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsOptional, IsString, MaxLength, MinLength, ValidateNested } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
@@ -76,4 +76,9 @@ export class CompanySettingsDto {
   @IsString()
   @MaxLength(400)
   receiptFooter?: string;
+
+  /** Print the company logo faintly behind invoices and receipts (needs an uploaded logo). */
+  @IsOptional()
+  @IsBoolean()
+  watermark?: boolean;
 }

@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
-import { OVERSIGHT_ROLES } from '../auth/rbac';
+import { OVERSIGHT_ROLES, TOP_ROLES } from '../auth/rbac';
 import { BaseSalaryDto, PayrollAdjustmentDto, PayrollQueryDto, PayrollSettingsDto, StaffPunchDto } from './dto/hr.dto';
 import { HrService } from './hr.service';
 
@@ -52,7 +52,7 @@ export class HrController {
   }
 
   @Put('payroll/salary/:userId')
-  @Roles(Role.ADMIN)
+  @Roles(...TOP_ROLES)
   setBaseSalary(@Param('userId') userId: string, @Body() dto: BaseSalaryDto, @CurrentUser() user: AuthUser) {
     return this.hr.setBaseSalary(userId, dto.baseSalaryMnt ?? null, user);
   }
@@ -70,7 +70,7 @@ export class HrController {
   }
 
   @Patch('payroll/:id/pay')
-  @Roles(Role.ADMIN)
+  @Roles(...TOP_ROLES)
   markPaid(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.hr.markPaid(id, user);
   }

@@ -21,6 +21,7 @@ const publicUser = {
   isActive: true,
   warehouseId: true,
   warehouse: { select: { id: true, code: true, name: true } },
+  managedWarehouses: { select: { warehouse: { select: { id: true, code: true, name: true } } } },
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -35,11 +36,13 @@ function toStaff(row: {
   isActive: boolean;
   warehouseId: string | null;
   warehouse: { id: string; code: string; name: string } | null;
+  managedWarehouses: Array<{ warehouse: { id: string; code: string; name: string } }>;
   createdAt: Date;
   updatedAt: Date;
 }) {
   return {
     ...row,
+    managedWarehouses: row.managedWarehouses.map((m) => m.warehouse),
     name: row.fullName,
     active: row.isActive,
   };
@@ -67,6 +70,7 @@ export class UsersService {
     const email = dto.email?.trim().toLowerCase() || null;
     const passwordHash = await bcrypt.hash(dto.password, 12);
     const warehouseId = await this.checkWarehouse(dto.warehouseId);
+    const managed = await this.checkManaged(dto.role, warehouseId, dto.managedWarehouseIds ?? []);
     try {
       const row = await this.prisma.user.create({
         data: {
@@ -78,6 +82,7 @@ export class UsersService {
           role: dto.role,
           isActive: true,
           warehouseId,
+          managedWarehouses: { create: managed.map((warehouseId) => ({ warehouseId })) },
         },
         select: publicUser,
       });
@@ -101,6 +106,13 @@ export class UsersService {
 
     const passwordHash = dto.password ? await bcrypt.hash(dto.password, 12) : undefined;
     const warehouseId = dto.warehouseId === undefined ? undefined : await this.checkWarehouse(dto.warehouseId);
+    const role = dto.role ?? user.role;
+    const current = await this.prisma.userWarehouseAccess.findMany({ where: { userId: id }, select: { warehouseId: true } });
+    const managed = await this.checkManaged(
+      role,
+      warehouseId === undefined ? user.warehouseId : warehouseId,
+      dto.managedWarehouseIds ?? current.map((c) => c.warehouseId),
+    );
     try {
       const row = await this.prisma.user.update({
         where: { id },
@@ -113,6 +125,8 @@ export class UsersService {
           ...(dto.role ? { role: dto.role } : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
           ...(passwordHash ? { passwordHash } : {}),
+          // Replaced as a whole; anyone who is not a branch manager keeps none.
+          managedWarehouses: { deleteMany: {}, create: managed.map((warehouseId) => ({ warehouseId })) },
         },
         select: publicUser,
       });
@@ -129,6 +143,20 @@ export class UsersService {
     const w = await this.prisma.warehouse.findUnique({ where: { id } });
     if (!w || !w.isActive) throw new BadRequestException('Warehouse not found or not active');
     return w.id;
+  }
+
+  /**
+   * A branch manager must look after at least one warehouse (home or assigned), or they would see nothing.
+   * Other roles keep no extra warehouses: staff work in their home one, admin and general manager see all.
+   */
+  private async checkManaged(role: Role, home: string | null, ids: string[]): Promise<string[]> {
+    if (role !== Role.MANAGER) return [];
+    const unique = [...new Set(ids.filter((x) => x && x !== home))];
+    for (const id of unique) await this.checkWarehouse(id);
+    if (!home && !unique.length) {
+      throw new BadRequestException('Салбарын менежерт дор хаяж нэг дэлгүүр/агуулах ононо уу / Assign a branch manager at least one warehouse');
+    }
+    return unique;
   }
 
   async setActive(id: string, isActive: boolean, actorId: string) {

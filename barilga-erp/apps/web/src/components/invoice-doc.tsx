@@ -1,6 +1,6 @@
 'use client';
 
-import { tugrik } from '@/lib/api';
+import { mediaUrl, tugrik } from '@/lib/api';
 import type { CompanySettings } from '@/lib/types';
 
 /** The order fields an invoice needs — both the staff order and the buyer's public view provide them. */
@@ -35,9 +35,34 @@ export const dateTime = (iso?: string | null) =>
 const dateOnly = (iso: string) =>
   new Intl.DateTimeFormat('mn-MN', { timeZone: 'Asia/Ulaanbaatar', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
 
+/**
+ * The company logo printed faintly across a document (admin: Компанийн мэдээлэл → лого). Drawn above the
+ * content with very low opacity so table backgrounds cannot hide it; it never catches clicks. The parent
+ * must be positioned (relative).
+ */
+export function Watermark({ company }: { company: Pick<CompanySettings, 'logoUrl' | 'watermark'> }) {
+  const url = company.watermark === false ? null : mediaUrl(company.logoUrl);
+  if (!url) return null;
+  return (
+    <div aria-hidden className="watermark pointer-events-none absolute inset-0 z-10 flex items-center justify-center overflow-hidden">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="" className="w-[60%] max-w-[420px] -rotate-12 object-contain opacity-[0.08]" style={{ printColorAdjust: 'exact', WebkitPrintColorAdjust: 'exact' }} />
+    </div>
+  );
+}
+
+/** Small logo at the top of documents, when one was uploaded. */
+export function LogoMark({ company, className = 'h-12' }: { company: Pick<CompanySettings, 'logoUrl'>; className?: string }) {
+  const url = mediaUrl(company.logoUrl);
+  if (!url) return null;
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt="" className={`${className} w-auto object-contain`} />;
+}
+
 export function SellerBlock({ company }: { company: CompanySettings }) {
   return (
     <div className="text-xs leading-5">
+      <LogoMark company={company} className="mb-1 h-10" />
       <p className="text-sm font-bold">{company.name || '—'}</p>
       {company.regNumber && <p>РД: {company.regNumber}</p>}
       {company.address && <p>{company.address}</p>}
@@ -75,7 +100,8 @@ export function paidAndDue<P extends { status: string; amountMnt: number }>(orde
 export function InvoiceDoc({ order, company, invoice }: { order: InvoiceDocOrder; company: CompanySettings; invoice?: InvoiceMeta | null }) {
   const { paid, due } = paidAndDue(order);
   return (
-    <div className="space-y-5">
+    <div className="relative space-y-5">
+      <Watermark company={company} />
       <div className="flex items-start justify-between gap-6">
         <SellerBlock company={company} />
         <div className="text-right">

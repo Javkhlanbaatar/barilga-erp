@@ -1,6 +1,6 @@
 import { Role } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength, ValidateIf } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsEnum, IsOptional, IsString, Matches, MinLength, ValidateIf } from 'class-validator';
 
 const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
 
@@ -40,6 +40,12 @@ export class CreateUserDto {
   @Transform(({ value }) => emptyToUndef(value))
   @IsString()
   warehouseId?: string;
+
+  /** Branch manager only: further warehouses they oversee, besides their home one. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  managedWarehouseIds?: string[];
 }
 
 export class UpdateUserDto {
@@ -73,6 +79,12 @@ export class UpdateUserDto {
   @ValidateIf((_o, v) => v !== null)
   @IsString()
   warehouseId?: string | null;
+
+  /** Branch manager only: further warehouses they oversee, besides their home one. */
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  managedWarehouseIds?: string[];
 
   @IsOptional()
   @Transform(({ obj, value }) => (value === undefined ? obj.active : value))

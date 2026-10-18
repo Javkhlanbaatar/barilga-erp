@@ -13,7 +13,7 @@ import {
   productMatchesQuery,
   productStockStatus,
 } from '@/lib/types';
-import { OVERSIGHT_ROLES, hasRole } from '@/lib/rbac';
+import { OVERSIGHT_ROLES, TOP_ROLES, hasRole } from '@/lib/rbac';
 
 const STATUS_LABEL: Record<StockStatus, string> = {
   IN_STOCK: 'Байгаа',
@@ -63,6 +63,7 @@ const emptyForm = {
   imageUrl: '',
   description: '',
   active: true,
+  companions: [] as Array<{ name: string; qtyPerUnit: string; unit: string }>,
 };
 
 type Toast = { kind: 'error' | 'ok'; text: string };
@@ -105,6 +106,8 @@ export default function InventoryPage() {
   const [openingWarehouse, setOpeningWarehouse] = useState('');
 
   const canManage = hasRole(user?.role, OVERSIGHT_ROLES);
+  // The catalog and prices are shared by every shop: only admin and the general manager change them.
+  const canEditCatalog = hasRole(user?.role, TOP_ROLES);
   const warehouses = report?.warehouses ?? [];
   const severalWarehouses = warehouses.length > 1;
   // Staff assigned to a warehouse only ever see that one (the server enforces it too).
@@ -122,7 +125,7 @@ export default function InventoryPage() {
       setReport(await api<StockReport>(`/inventory/stock${warehouseId ? `?warehouseId=${warehouseId}` : ''}`));
       const raw = localStorage.getItem('barilga_user');
       const role = raw ? (JSON.parse(raw) as AuthUser).role : null;
-      if (hasRole(role, OVERSIGHT_ROLES)) {
+      if (hasRole(role, TOP_ROLES)) {
         setCatalog(await api<Product[]>('/products/all'));
       }
     } catch (err) {
@@ -210,6 +213,7 @@ export default function InventoryPage() {
       imageUrl: row.imageUrl ?? '',
       description: row.description ?? '',
       active: row.active !== false,
+      companions: (row.companions ?? []).map((c) => ({ name: c.name, qtyPerUnit: String(c.qtyPerUnit), unit: c.unit })),
     });
     setFile(null);
     setModal('edit');
@@ -231,6 +235,9 @@ export default function InventoryPage() {
         imageUrl: form.imageUrl || null,
         description: form.description.trim() || null,
         category: form.category.trim() || 'General',
+        companions: form.companions
+          .filter((c) => c.name.trim() && Number(c.qtyPerUnit) > 0)
+          .map((c) => ({ name: c.name.trim(), qtyPerUnit: Number(c.qtyPerUnit), unit: c.unit.trim() || 'ш' })),
       };
       let product: Product;
       if (modal === 'create') {
@@ -282,7 +289,7 @@ export default function InventoryPage() {
   const lowItems = report?.items.filter((i) => i.lowStock && i.status !== 'NEGATIVE_STOCK') ?? [];
   type Row = Product & { stockStatus: StockStatus; warehouses?: NonNullable<StockReport['items'][number]['warehouses']> };
   const reportById = new Map((report?.items ?? []).map((i) => [i.id, i]));
-  const allRows: Row[] = canManage
+  const allRows: Row[] = canEditCatalog
     ? catalog.map((p) => {
         // The quantity shown is the selected warehouse, or the total, exactly as the server reports it.
         const stock = reportById.get(p.id);
@@ -315,7 +322,7 @@ export default function InventoryPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {canManage && (
+          {canEditCatalog && (
             <button className="btn-primary" onClick={openCreate}>
               Бараа нэмэх
             </button>
@@ -468,16 +475,18 @@ export default function InventoryPage() {
                 {canManage && (
                   <td className="pr-3">
                     <div className="flex justify-end gap-1">
-                      <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
-                        Засах
-                      </button>
+                      {canEditCatalog && (
+                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
+                          Засах
+                        </button>
+                      )}
                       <button className="btn-ghost text-xs px-3 py-1" onClick={() => openAdjust(row)}>
                         Тохируулах
                       </button>
                       <button className="btn-ghost text-xs px-3 py-1" onClick={() => void openLedger(row)}>
                         Түүх
                       </button>
-                      {row.active !== false && (
+                      {canEditCatalog && row.active !== false && (
                         <button className="btn-danger text-xs px-3 py-1" onClick={() => setDeleting(row)}>
                           Идэвхгүй болгох
                         </button>
@@ -566,6 +575,45 @@ export default function InventoryPage() {
                 Нэр (англи)
                 <input className="mt-1 w-full" required value={form.nameEn} onChange={(e) => setForm({ ...form, nameEn: e.target.value })} />
               </label>
+              <fieldset className="col-span-2 rounded border border-slate-700 p-2 text-xs text-slate-400">
+                <legend className="px-1">Дагалдах бараа (жишээ: давирхайн будагт хатаагч)</legend>
+                <p className="mb-2 text-[11px] text-slate-500">
+                  Нэг ширхэг/нэгж зарах бүрд хамт олгох зүйл. Тасалбар, бэлтгэх хуудас, баримт дээр «+ Хатаагч × 2 ш» гэж гарна.
+                </p>
+                {form.companions.map((c, idx) => (
+                  <div key={idx} className="mb-1 flex gap-1">
+                    <input
+                      className="flex-1"
+                      placeholder="Нэр (Хатаагч)"
+                      value={c.name}
+                      onChange={(e) => setForm({ ...form, companions: form.companions.map((x, j) => (j === idx ? { ...x, name: e.target.value } : x)) })}
+                    />
+                    <input
+                      className="w-20"
+                      inputMode="decimal"
+                      placeholder="1 нэгжид"
+                      value={c.qtyPerUnit}
+                      onChange={(e) => setForm({ ...form, companions: form.companions.map((x, j) => (j === idx ? { ...x, qtyPerUnit: e.target.value } : x)) })}
+                    />
+                    <input
+                      className="w-16"
+                      placeholder="ш"
+                      value={c.unit}
+                      onChange={(e) => setForm({ ...form, companions: form.companions.map((x, j) => (j === idx ? { ...x, unit: e.target.value } : x)) })}
+                    />
+                    <button type="button" className="btn-ghost px-2 text-xs" onClick={() => setForm({ ...form, companions: form.companions.filter((_, j) => j !== idx) })}>
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  onClick={() => setForm({ ...form, companions: [...form.companions, { name: '', qtyPerUnit: '1', unit: 'ш' }] })}
+                >
+                  + Дагалдах бараа нэмэх
+                </button>
+              </fieldset>
               <label className="text-xs text-slate-400 col-span-2">
                 Тайлбар (заавал биш)
                 <textarea

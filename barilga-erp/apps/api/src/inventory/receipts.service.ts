@@ -5,7 +5,7 @@ import { createWithUniqueNumber, isUniqueConflictOn, ulaanbaatarYmd } from '../o
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReceiptDto } from './dto/receipt.dto';
 import { InventoryService } from './inventory.service';
-import { lockedWarehouseId, seesAllWarehouses } from './warehouse-scope';
+import { assignedWarehouseIds, isManagerRole, warehouseWhere } from './warehouse-scope';
 
 const RECEIPT_INCLUDE = {
   warehouse: { select: { id: true, code: true, name: true } },
@@ -30,14 +30,14 @@ export class ReceiptsService {
   ) {}
 
   async create(dto: CreateReceiptDto, user: AuthUser) {
-    if (!seesAllWarehouses(user.role)) {
-      const locked = lockedWarehouseId(user);
-      if (!locked) throw new ForbiddenException('You must be assigned to a warehouse to receive goods');
-      if (locked !== dto.warehouseId) throw new ForbiddenException('You can only receive goods into your own warehouse');
+    const assigned = assignedWarehouseIds(user);
+    if (assigned) {
+      if (!assigned.length) throw new ForbiddenException('You must be assigned to a warehouse to receive goods');
+      if (!assigned.includes(dto.warehouseId)) throw new ForbiddenException('You can only receive goods into your own warehouse');
     }
     // A cost or a supplier partner creates money we owe (a PURCHASE line on the partner account): managers
     // decide that. Warehouse staff record what arrived; a manager adds the cost later (`үнэ засах`).
-    if (!seesAllWarehouses(user.role) && (dto.supplierCustomerId || dto.items.some((i) => i.unitCostMnt != null))) {
+    if (!isManagerRole(user.role) && (dto.supplierCustomerId || dto.items.some((i) => i.unitCostMnt != null))) {
       throw new ForbiddenException('Өртөг, нийлүүлэгч харилцагчийг зөвхөн менежер оруулна / Only managers enter costs and supplier partners');
     }
     const lines = new Map<string, { quantity: Prisma.Decimal; unitCostMnt: number | null }>();
@@ -136,7 +136,7 @@ export class ReceiptsService {
    * is the newest priced receipt of the product — its last cost follow; before/after/reason go to the edit log.
    */
   async editItemCost(receiptId: string, itemId: string, unitCostMnt: number | null, reason: string, user: AuthUser) {
-    if (!seesAllWarehouses(user.role)) throw new ForbiddenException('Only a manager or admin can change purchase prices');
+    if (!isManagerRole(user.role)) throw new ForbiddenException('Only a manager or admin can change purchase prices');
     await this.prisma.$transaction(async (tx) => {
       const item = await tx.stockReceiptItem.findFirst({ where: { id: itemId, receiptId }, include: { receipt: true } });
       if (!item) throw new NotFoundException('Receipt line not found');
@@ -188,8 +188,7 @@ export class ReceiptsService {
   }
 
   private scope(user: AuthUser): Prisma.StockReceiptWhereInput {
-    const locked = lockedWarehouseId(user);
-    return locked ? { warehouseId: locked } : {};
+    return warehouseWhere(user) as Prisma.StockReceiptWhereInput;
   }
 
   list(user: AuthUser, filter: { warehouseId?: string; limit?: number } = {}) {

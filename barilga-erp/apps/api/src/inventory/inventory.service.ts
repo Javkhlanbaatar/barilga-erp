@@ -289,9 +289,9 @@ export class InventoryService {
 
   // ───────── reads ─────────
 
-  async listStock(q?: string, scope: { warehouseId?: string | null } = {}) {
+  async listStock(q?: string, scope: { warehouseId?: string | null; allowed?: string[] | null } = {}) {
     const warehouses = await this.prisma.warehouse.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...(scope.allowed ? { id: { in: scope.allowed } } : {}) },
       orderBy: [{ isDefault: 'desc' }, { code: 'asc' }],
     });
     if (scope.warehouseId && !warehouses.some((w) => w.id === scope.warehouseId)) {
@@ -309,7 +309,9 @@ export class InventoryService {
       });
       const selected = scope.warehouseId
         ? (perWarehouse.find((w) => w.warehouseId === scope.warehouseId)?.quantity ?? 0)
-        : p.stockBalances.reduce((s, b) => s + Number(b.quantity), 0);
+        : scope.allowed
+          ? perWarehouse.reduce((s, w) => s + w.quantity, 0)
+          : p.stockBalances.reduce((s, b) => s + Number(b.quantity), 0);
       return { ...this.toStockItem({ ...p, stockQty: selected }), warehouses: perWarehouse };
     });
     return {
@@ -327,12 +329,12 @@ export class InventoryService {
   }
 
   /** Ledger for one product (optionally one warehouse), newest first. */
-  async listMovements(filter: { productId?: string; warehouseId?: string; limit?: number }) {
+  async listMovements(filter: { productId?: string; warehouseId?: string; allowed?: string[] | null; limit?: number }) {
     const take = Math.min(Math.max(filter.limit ?? 100, 1), 500);
     return this.prisma.stockMovement.findMany({
       where: {
         ...(filter.productId ? { productId: filter.productId } : {}),
-        ...(filter.warehouseId ? { warehouseId: filter.warehouseId } : {}),
+        ...(filter.warehouseId ? { warehouseId: filter.warehouseId } : filter.allowed ? { warehouseId: { in: filter.allowed } } : {}),
       },
       orderBy: { createdAt: 'desc' },
       take,

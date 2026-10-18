@@ -13,7 +13,7 @@ import { OrdersService } from '../src/orders/orders.service';
 import { FakeDb } from './helpers/fake-db';
 
 const D = (n: number) => new Prisma.Decimal(n);
-const manager: any = { id: 'u-mgr', role: Role.MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-mgr', role: Role.SUPER_MANAGER, name: 'Manager' };
 const loader: any = { id: 'u-load', role: Role.ACHIGCH_BELTGEGCH, name: 'Loader', warehouseId: 'wh-main' };
 
 describe('gather plan (pure)', () => {

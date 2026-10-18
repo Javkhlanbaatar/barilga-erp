@@ -4,14 +4,14 @@ import { describe, it } from 'node:test';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
 import { InventoryService } from '../src/inventory/inventory.service';
-import { assertWarehouseAccess, lockedWarehouseId } from '../src/inventory/warehouse-scope';
+import { allowedWarehouseIds, assertWarehouseAccess, orderWarehouseWhere } from '../src/inventory/warehouse-scope';
 import { OrdersService } from '../src/orders/orders.service';
 import { makePaymentWorld } from './helpers/payment-fixtures';
 
 const D = (n: number | string) => new Prisma.Decimal(n);
 const loader: any = { id: 'u-load', email: 'w@x', username: 'wh', role: Role.ACHIGCH_BELTGEGCH, name: 'Loader', fullName: 'Loader' };
 const cashier: any = { id: 'u-cash', email: 'c@x', username: 'c', role: Role.BORLUULAGCH, name: 'Cashier', fullName: 'Cashier' };
-const manager: any = { id: 'u-mgr', email: 'm@x', username: 'm', role: Role.MANAGER, name: 'Manager', fullName: 'Manager' };
+const manager: any = { id: 'u-mgr', email: 'm@x', username: 'm', role: Role.SUPER_MANAGER, name: 'Manager', fullName: 'Manager' };
 
 function world() {
   const w = makePaymentWorld();
@@ -186,18 +186,30 @@ describe('manual stock adjustment', () => {
 describe('staff are limited to their own warehouse', () => {
   const locked = (role: Role, warehouseId: string | null) => ({ role, warehouseId });
 
-  it('only non-oversight staff with an assignment are locked', () => {
-    assert.equal(lockedWarehouseId(locked(Role.BORLUULAGCH, 'wh-b')), 'wh-b');
-    assert.equal(lockedWarehouseId(locked(Role.ACHIGCH_BELTGEGCH, 'wh-b')), 'wh-b');
-    assert.equal(lockedWarehouseId(locked(Role.MANAGER, 'wh-b')), null);
-    assert.equal(lockedWarehouseId(locked(Role.ADMIN, 'wh-b')), null);
-    assert.equal(lockedWarehouseId(locked(Role.BORLUULAGCH, null)), null, 'unassigned staff behave as before warehouses existed');
+  it('staff and branch managers are limited; admin and the general manager see every warehouse', () => {
+    assert.deepEqual(allowedWarehouseIds(locked(Role.BORLUULAGCH, 'wh-b')), ['wh-b']);
+    assert.deepEqual(allowedWarehouseIds(locked(Role.ACHIGCH_BELTGEGCH, 'wh-b')), ['wh-b']);
+    assert.deepEqual(allowedWarehouseIds(locked(Role.MANAGER, 'wh-b')), ['wh-b']);
+    assert.deepEqual(allowedWarehouseIds({ role: Role.MANAGER, warehouseId: 'wh-b', warehouseIds: ['wh-b', 'wh-c'] }), ['wh-b', 'wh-c']);
+    assert.equal(allowedWarehouseIds(locked(Role.SUPER_MANAGER, 'wh-b')), null);
+    assert.equal(allowedWarehouseIds(locked(Role.ADMIN, 'wh-b')), null);
+  });
+
+  it('a branch manager over two shops reaches both, not a third; old orders follow the default shop', () => {
+    const mgr = { role: Role.MANAGER, warehouseId: 'wh-b', warehouseIds: ['wh-b', 'wh-c'] };
+    assert.doesNotThrow(() => assertWarehouseAccess(mgr, 'wh-c'));
+    assert.throws(() => assertWarehouseAccess(mgr, 'wh-main'), ForbiddenException);
+    assert.throws(() => assertWarehouseAccess(mgr, null, 'wh-main'), ForbiddenException);
+    assert.deepEqual(orderWarehouseWhere(mgr, 'wh-main'), { warehouseId: { in: ['wh-b', 'wh-c'] } });
+    assert.deepEqual(orderWarehouseWhere({ ...mgr, warehouseIds: ['wh-main'] }, 'wh-main'), {
+      OR: [{ warehouseId: { in: ['wh-main'] } }, { warehouseId: null }],
+    });
   });
 
   it('another warehouse\'s order is refused', () => {
     assert.throws(() => assertWarehouseAccess(locked(Role.BORLUULAGCH, 'wh-b'), 'wh-main'), ForbiddenException);
     assert.doesNotThrow(() => assertWarehouseAccess(locked(Role.BORLUULAGCH, 'wh-b'), 'wh-b'));
-    assert.doesNotThrow(() => assertWarehouseAccess(locked(Role.MANAGER, null), 'wh-b'));
+    assert.doesNotThrow(() => assertWarehouseAccess(locked(Role.SUPER_MANAGER, null), 'wh-b'));
   });
 
   it('a loader of warehouse B cannot complete warehouse A\'s order, and stock is not touched', async () => {

@@ -4,7 +4,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
 import { assertCashDrawerOpen } from '../cash/cash-drawer';
 import { InventoryService } from '../inventory/inventory.service';
-import { assertWarehouseAccess } from '../inventory/warehouse-scope';
+import { assertWarehouseAccess, isManagerRole } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReturnDto } from './dto/create-return.dto';
 
@@ -24,7 +24,7 @@ export class ReturnsService {
   ) {}
 
   async create(orderId: string, dto: CreateReturnDto, user: AuthUser) {
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER && user.role !== Role.BORLUULAGCH) {
+    if (user.role !== Role.BORLUULAGCH && !isManagerRole(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can process returns');
     }
     // Cash handed back comes out of someone's drawer.
@@ -209,8 +209,9 @@ export class ReturnsService {
         reason: dto.reason.trim(),
         refundAmount,
         refundMethod: dto.refundMethod,
-        // Lowering a debt hands nothing back, so there is no payout left to do.
-        ...(dto.refundMethod === PayMethod.CREDIT ? { refundStatus: RefundStatus.PAID_OUT } : {}),
+        // Lowering a debt hands nothing back, and cash leaves the drawer right here (the drawer count already
+        // subtracts it), so both are done. Card, QPay and transfer refunds wait for the bank payout.
+        ...(dto.refundMethod === PayMethod.CREDIT || dto.refundMethod === PayMethod.CASH ? { refundStatus: RefundStatus.PAID_OUT } : {}),
         createdById: user.id,
         ebarimtStatus: 'PENDING',
         items: {

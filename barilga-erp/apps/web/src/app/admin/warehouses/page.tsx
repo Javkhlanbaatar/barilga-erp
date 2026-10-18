@@ -5,11 +5,11 @@ import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api } from '@/lib/api';
 import { homeForRole } from '@/lib/rbac';
-import { AuthUser, Warehouse } from '@/lib/types';
+import { AuthUser, ROLE_LABEL, WAREHOUSE_KIND_LABEL, Warehouse, WarehouseKind } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
 
-const emptyForm = { code: '', name: '', address: '', phone: '' };
+const emptyForm = { code: '', name: '', address: '', phone: '', kind: 'SHOP' as WarehouseKind };
 
 export default function AdminWarehousesPage() {
   const router = useRouter();
@@ -61,7 +61,7 @@ export default function AdminWarehousesPage() {
 
   function openEdit(row: Warehouse) {
     setEditing(row);
-    setForm({ code: row.code, name: row.name, address: row.address ?? '', phone: row.phone ?? '' });
+    setForm({ code: row.code, name: row.name, address: row.address ?? '', phone: row.phone ?? '', kind: row.kind ?? 'SHOP' });
     setFormError('');
     setModal('edit');
   }
@@ -79,13 +79,14 @@ export default function AdminWarehousesPage() {
             name: form.name.trim(),
             address: form.address.trim() || undefined,
             phone: form.phone.trim() || undefined,
+            kind: form.kind,
           }),
         });
         flash('ok', 'Агуулах үүслээ');
       } else if (editing) {
         await api(`/inventory/warehouses/${editing.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name: form.name.trim(), address: form.address.trim(), phone: form.phone.trim() }),
+          body: JSON.stringify({ name: form.name.trim(), address: form.address.trim(), phone: form.phone.trim(), kind: form.kind }),
         });
         flash('ok', 'Хадгалагдлаа');
       }
@@ -134,8 +135,9 @@ export default function AdminWarehousesPage() {
             <tr>
               <th className="p-3">Код</th>
               <th>Нэр</th>
-              <th>Хаяг</th>
-              <th>Утас</th>
+              <th>Төрөл</th>
+              <th>Хаяг / утас</th>
+              <th>Ажилтан / хариуцсан менежер</th>
               <th>Төлөв</th>
               <th className="pr-3 text-right">Үйлдэл</th>
             </tr>
@@ -145,8 +147,26 @@ export default function AdminWarehousesPage() {
               <tr key={row.id} className={`border-t border-slate-800 ${row.isActive ? '' : 'opacity-60'}`}>
                 <td className="p-3 font-mono text-xs">{row.code}</td>
                 <td className="font-medium">{row.name}</td>
-                <td className="text-slate-300">{row.address || '—'}</td>
-                <td className="text-slate-300">{row.phone || '—'}</td>
+                <td className="text-xs">{WAREHOUSE_KIND_LABEL[row.kind ?? 'SHOP']}</td>
+                <td className="text-slate-300 text-xs">
+                  {row.address || '—'}
+                  {row.phone && <p className="text-slate-500">{row.phone}</p>}
+                </td>
+                <td className="text-xs">
+                  {(row.users ?? []).map((u) => (
+                    <p key={u.id}>
+                      {u.fullName} <span className="text-slate-500">· {ROLE_LABEL[u.role]}</span>
+                    </p>
+                  ))}
+                  {(row.managers ?? []).map((m) => (
+                    <p key={m.user.id} className="text-sky-300">
+                      {m.user.fullName} <span className="text-slate-500">· хянадаг</span>
+                    </p>
+                  ))}
+                  {!(row.users ?? []).length && !(row.managers ?? []).length && (
+                    <span className="text-slate-500">{row.isDefault ? 'Томилоогүй ажилтнууд энд ажиллана' : 'Хүн томилоогүй'}</span>
+                  )}
+                </td>
                 <td>
                   <div className="flex flex-wrap gap-1">
                     {row.isDefault && (
@@ -228,6 +248,16 @@ export default function AdminWarehousesPage() {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
+            </label>
+            <label className="block text-xs text-slate-400">
+              Төрөл
+              <select className="mt-1 w-full" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as WarehouseKind })}>
+                <option value="SHOP">Дэлгүүр — касс дээр зардаг</option>
+                <option value="WAREHOUSE">Агуулах — хадгалж, дэлгүүр рүү шилжүүлдэг</option>
+              </select>
+              <span className="mt-1 block text-[11px] text-slate-500">
+                Аль аль нь үлдэгдэл хадгална. Ажилтнаа «Хэрэглэгчид» хэсэгт энэ дэлгүүр/агуулахад томилно.
+              </span>
             </label>
             <label className="block text-xs text-slate-400">
               Хаяг

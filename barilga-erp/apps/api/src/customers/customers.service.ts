@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { CustomerType, OrderStatus, PaymentStatus, PayMethod, Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
-import { seesAllWarehouses } from '../inventory/warehouse-scope';
+import { isManagerRole } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCustomerDto, UpdateCustomerDto } from './dto/customer.dto';
 import { searchKey } from '../common/translit';
@@ -81,7 +81,7 @@ export class CustomersService {
     const changes = Object.entries(next).some(([k, v]) => !current || current[k as keyof typeof current] !== v);
     const defaultsOnly =
       !current && (next.creditAllowed ?? false) === false && (next.sellsToUs ?? false) === false && !next.barterContract && (next.buysFromUs ?? true);
-    if (changes && !defaultsOnly && !seesAllWarehouses(user.role)) {
+    if (changes && !defaultsOnly && !isManagerRole(user.role)) {
       throw new ForbiddenException('Only a manager or admin can change what a partner is (credit, supplier, barter)');
     }
     return next;
@@ -93,7 +93,7 @@ export class CustomersService {
    */
   private async checkPriceList(priceListId: string | null | undefined, user: AuthUser, current: string | null = null) {
     if (priceListId === undefined || (priceListId || null) === current) return undefined;
-    if (!seesAllWarehouses(user.role)) {
+    if (!isManagerRole(user.role)) {
       throw new ForbiddenException('Only a manager or admin can set a customer price list');
     }
     if (!priceListId) return null;
@@ -197,7 +197,7 @@ export class CustomersService {
   async update(id: string, dto: UpdateCustomerDto, user: AuthUser) {
     const existing = await this.prisma.customer.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Customer not found');
-    if (dto.isActive !== undefined && dto.isActive !== existing.isActive && !seesAllWarehouses(user.role)) {
+    if (dto.isActive !== undefined && dto.isActive !== existing.isActive && !isManagerRole(user.role)) {
       throw new ForbiddenException('Only a manager or admin can activate or deactivate a customer');
     }
     const regNumber =

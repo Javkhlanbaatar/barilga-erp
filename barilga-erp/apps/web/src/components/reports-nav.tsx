@@ -1,5 +1,6 @@
 'use client';
 
+import { hasRole } from '@/lib/rbac';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -58,7 +59,7 @@ export function useAvailableReports() {
     const raw = localStorage.getItem('barilga_user');
     if (raw) setRole((JSON.parse(raw) as { role: Role }).role);
   }, []);
-  return REPORTS.filter((r) => role && r.roles.includes(role) && (!r.feature || features.enabled(r.feature)));
+  return REPORTS.filter((r) => role && hasRole(role, r.roles) && (!r.feature || features.enabled(r.feature)));
 }
 
 /** Tabs across the top of every report page. */

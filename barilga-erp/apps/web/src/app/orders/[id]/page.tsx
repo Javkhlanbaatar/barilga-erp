@@ -8,8 +8,8 @@ import { InvoicePanel } from '@/components/invoice-panel';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
-import { AuthUser, DELIVERY_LABEL, ORDER_STATUS_LABEL, ebarimtStatusLabel, isHiredTransport, Order, PaymentSplit, VEHICLE_LABEL } from '@/lib/types';
-import { POS_ROLES, TRANSPORT_ROLES, hasRole } from '@/lib/rbac';
+import { AuthUser, DELIVERY_LABEL, ORDER_STATUS_LABEL, companionLines, ebarimtStatusLabel, isHiredTransport, Order, PaymentSplit, VEHICLE_LABEL } from '@/lib/types';
+import { POS_ROLES, TRANSPORT_ROLES, hasRole, isManager } from '@/lib/rbac';
 
 function channel(p: PaymentSplit) {
   return p.method ?? p.provider ?? 'QPAY';
@@ -46,14 +46,14 @@ export default function OrderDetailPage() {
   const [supplierName, setSupplierName] = useState('');
   const [supplierReason, setSupplierReason] = useState('');
   const features = useFeatures();
-  const canDispatch = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const canDispatch = isManager(user?.role);
   const canTransport = hasRole(user?.role, TRANSPORT_ROLES);
   const canOverrideFees = user?.role === 'BORLUULAGCH';
   // The mock "mark paid" button exists only for local development: it is compiled out of production
   // builds and additionally depends on the server saying simulation is enabled (dev + QPay mock).
   const [simulateEnabled, setSimulateEnabled] = useState(false);
   const canSimulatePaid =
-    process.env.NODE_ENV !== 'production' && simulateEnabled && (user?.role === 'ADMIN' || user?.role === 'MANAGER');
+    process.env.NODE_ENV !== 'production' && simulateEnabled && isManager(user?.role);
   const canCancelRole = hasRole(user?.role, POS_ROLES);
   const isCashier = user?.role === 'BORLUULAGCH';
 
@@ -101,9 +101,9 @@ export default function OrderDetailPage() {
     order.status === 'PENDING_PAYMENT'
       ? (order.payments ?? []).filter((p) => p.status === 'UNPAID' && (p.method === 'QPAY' || p.method === 'TRANSFER')).reduce((s, p) => s + p.amountMnt, 0)
       : 0;
-  const canTakePayment = user?.role === 'ADMIN' || user?.role === 'MANAGER' || user?.role === 'BORLUULAGCH';
+  const canTakePayment = hasRole(user?.role, POS_ROLES);
   const canReturn =
-    (user?.role === 'ADMIN' || user?.role === 'MANAGER' || user?.role === 'BORLUULAGCH') &&
+    hasRole(user?.role, POS_ROLES) &&
     (order.status === 'COMPLETED' || order.status === 'READY_FOR_LOADING');
 
   function openReturn() {
@@ -403,6 +403,9 @@ export default function OrderDetailPage() {
                 <li key={item.id} className="flex justify-between gap-2 border-b border-slate-800 pb-2">
                   <div>
                     <p>{item.product.nameMn}</p>
+                    {companionLines(item.product.companions, Number(item.quantity)).map((c) => (
+                      <p key={c} className="text-xs text-amber-300">+ дагалдах: {c}</p>
+                    ))}
                     <p className="text-xs text-slate-500">
                       {Number(item.quantity)} × {tugrik(item.unitPrice)}
                       {item.sourceType === 'EXTERNAL_SUPPLIER' ? ` · Гаднаас (${item.supplierName ?? 'өөр дэлгүүр'})` : ''}

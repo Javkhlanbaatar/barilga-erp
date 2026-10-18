@@ -19,7 +19,7 @@ import { SettingsService } from '../src/settings/settings.service';
 import { FakeDb } from './helpers/fake-db';
 
 const D = (n: number) => new Prisma.Decimal(n);
-const manager: any = { id: 'u-mgr', role: Role.MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-mgr', role: Role.SUPER_MANAGER, name: 'Manager' };
 const pickerA: any = { id: 'u-pa', role: Role.ACHIGCH_BELTGEGCH, name: 'Picker A', warehouseId: 'wh-main' };
 const pickerB: any = { id: 'u-pb', role: Role.ACHIGCH_BELTGEGCH, name: 'Picker B', warehouseId: 'wh-main' };
 const otherShop: any = { id: 'u-x', role: Role.ACHIGCH_BELTGEGCH, name: 'Other', warehouseId: 'wh-b' };
@@ -157,13 +157,20 @@ describe('module switches', () => {
 
   it('unloading is off by default and a quote asking for it is refused before any pricing', async () => {
     const db = new FakeDb();
-    const features = new FeaturesService(db as any);
-    await features.set('DELIVERY', true, 'u-admin');
+    // DELIVERY is dormant for this business; a stub stands in for a deployment that revives it.
+    const features: any = { isEnabled: async (k: string) => k === 'DELIVERY', assertEnabled: async () => undefined };
     const logistics = new LogisticsService(db as any, features);
     await assert.rejects(
       () => logistics.quote({ zoneId: 'z', method: 'OUR_DELIVERY', time: 'STANDARD', unloadingRequested: true, specs: {} as any }),
       /Unloading service is switched off/,
     );
+  });
+
+  it('dormant modules stay off and cannot be switched on', async () => {
+    const features = new FeaturesService(new FakeDb() as any);
+    await assert.rejects(() => features.set('DELIVERY', true, 'u-admin'), /not used/);
+    assert.equal(await features.isEnabled('ONLINE_SHOP'), false);
+    assert.equal(await features.isEnabled('PAYROLL_FORMULA'), false);
   });
 
   it('each new module is enforced on the server', () => {

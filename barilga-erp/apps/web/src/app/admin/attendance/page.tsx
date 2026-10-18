@@ -1,5 +1,6 @@
 'use client';
 
+import { isManager } from '@/lib/rbac';
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
@@ -32,7 +33,7 @@ export default function AttendanceAdminPage() {
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');
     const role = raw ? (JSON.parse(raw) as AuthUser).role : null;
-    if (role !== 'ADMIN' && role !== 'MANAGER') {
+    if (!isManager(role)) {
       router.replace(role === 'ACHIGCH_BELTGEGCH' ? '/warehouse/tickets' : '/pos');
       return;
     }

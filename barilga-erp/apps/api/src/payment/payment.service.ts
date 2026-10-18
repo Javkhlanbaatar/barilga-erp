@@ -402,6 +402,20 @@ export class PaymentService {
    * late-payment check like any expired invoice.
    */
   async payRemaining(orderId: string, method: 'CASH' | 'CARD' | 'TRANSFER', actorId: string) {
+    // Ask QPay first, as cancelling does: the customer may have just paid the invoice, and taking the same
+    // amount again in cash would charge them twice.
+    const qpayOpen = await this.prisma.payment.findMany({ where: { orderId, status: PaymentStatus.UNPAID, method: PayMethod.QPAY } });
+    for (const payment of qpayOpen) {
+      let outcome: VerifyOutcome;
+      try {
+        outcome = await this.verifyAndSettle(payment, 'pay-remaining-guard');
+      } catch {
+        throw new ServiceUnavailableException('QPay-ийн төлөвийг шалгаж чадсангүй, дахин оролдоно уу / Cannot confirm QPay status right now');
+      }
+      if (outcome === 'paid') {
+        throw new ConflictException('QPay-ээр дөнгөж төлөгдсөн байна — дахин мөнгө авах хэрэггүй / The QPay invoice was just paid');
+      }
+    }
     const result = await this.prisma.$transaction(
       async (tx) => {
         const order = await tx.order.findUnique({ where: { id: orderId } });

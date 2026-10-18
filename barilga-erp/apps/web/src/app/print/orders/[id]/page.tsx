@@ -3,8 +3,8 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api, tugrik } from '@/lib/api';
-import { FeeRows, InvoiceDoc, InvoiceMeta, SellerBlock, paidAndDue } from '@/components/invoice-doc';
-import type { CompanySettings, Order } from '@/lib/types';
+import { FeeRows, InvoiceDoc, InvoiceMeta, LogoMark, SellerBlock, Watermark, paidAndDue } from '@/components/invoice-doc';
+import { companionLines, type CompanySettings, type Order } from '@/lib/types';
 
 type Doc = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
 type Layout = { paper: 'A4' | 'A5' | '80MM'; orientation: 'portrait' | 'landscape'; copies: number };
@@ -155,7 +155,11 @@ function PrintOrder() {
 function Receipt({ order, company }: { order: Order; company: CompanySettings }) {
   const { live, paid, due } = paidAndDue(order);
   return (
-    <div className="font-mono text-[12px] leading-5">
+    <div className="relative font-mono text-[12px] leading-5">
+      <Watermark company={company} />
+      <div className="flex justify-center">
+        <LogoMark company={company} className="h-10" />
+      </div>
       <p className="text-center text-sm font-bold">{company.name || 'Борлуулалтын баримт'}</p>
       {company.regNumber && <p className="text-center">РД: {company.regNumber}</p>}
       {company.phone && <p className="text-center">{company.phone}</p>}
@@ -168,6 +172,9 @@ function Receipt({ order, company }: { order: Order; company: CompanySettings })
       {order.items.map((i) => (
         <div key={i.id}>
           <p>{i.product.nameMn}</p>
+          {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
+            <p key={c} className="pl-2">+ {c}</p>
+          ))}
           <p className="flex justify-between">
             <span>
               {qty(i.quantity)} × {tugrik(i.unitPrice)}
@@ -279,6 +286,9 @@ function Picklist({ order, company }: { order: Order; company: CompanySettings }
               <td>
                 {i.product.nameMn}
                 {i.sourceType === 'EXTERNAL_SUPPLIER' ? ' (нийлүүлэгчээс)' : ''}
+                {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
+                  <p key={c} className="font-semibold">+ дагалдах: {c}</p>
+                ))}
               </td>
               <td className="text-right text-base font-bold">{qty(i.quantity)}</td>
               <td>{i.product.unit}</td>
@@ -300,7 +310,8 @@ function Picklist({ order, company }: { order: Order; company: CompanySettings }
 function IssueNote({ order, company }: { order: Order; company: CompanySettings }) {
   const goods = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
   return (
-    <div className="space-y-3">
+    <div className="relative space-y-3">
+      <Watermark company={company} />
       <div className="flex items-start justify-between gap-4">
         <SellerBlock company={company} />
         <div className="text-right">
@@ -341,7 +352,12 @@ function IssueNote({ order, company }: { order: Order; company: CompanySettings 
           {order.items.map((i, idx) => (
             <tr key={i.id}>
               <td>{idx + 1}</td>
-              <td>{i.product.nameMn}</td>
+              <td>
+                {i.product.nameMn}
+                {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
+                  <p key={c} className="text-[10px]">+ дагалдах: {c}</p>
+                ))}
+              </td>
               <td className="font-mono">{i.product.sku}</td>
               <td>{i.product.unit}</td>
               <td className="text-right font-semibold">{qty(i.quantity)}</td>

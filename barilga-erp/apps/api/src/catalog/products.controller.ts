@@ -26,6 +26,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { InventoryService } from '../inventory/inventory.service';
+import { isManagerRole } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { productSearchFilter, productSearchTerm } from './product-search';
@@ -40,6 +41,12 @@ function productUploadDir() {
 
 function isUniqueViolation(err: unknown) {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+}
+
+/** Stored as a plain JSON list; an empty list is stored as nothing. */
+function companionsValue(list: CreateProductDto['companions']): Prisma.InputJsonValue | undefined {
+  if (!list?.length) return undefined;
+  return list.map((c) => ({ name: c.name, qtyPerUnit: c.qtyPerUnit, unit: c.unit || 'ш' }));
 }
 
 @Controller('products')
@@ -59,7 +66,7 @@ export class ProductsController {
       orderBy: { nameEn: 'asc' },
     });
     // What we paid suppliers is for managers; the till and the warehouse see selling prices only.
-    if (user.role === Role.ADMIN || user.role === Role.MANAGER) return rows;
+    if (isManagerRole(user.role)) return rows;
     return rows.map(({ lastCostMnt: _cost, ...rest }) => rest);
   }
 
@@ -78,7 +85,7 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...CATALOG_WRITE_ROLES)
   async create(@Body() dto: CreateProductDto, @CurrentUser() user: AuthUser) {
-    const { stockQty, warehouseId, ...rest } = dto;
+    const { stockQty, warehouseId, companions, ...rest } = dto;
     try {
       // The product starts at 0; any starting quantity is booked as an OPENING movement in one warehouse
       // so the ledger and the balances always agree.
@@ -87,6 +94,7 @@ export class ProductsController {
           data: {
             ...rest,
             stockQty: 0,
+            companions: companionsValue(companions) ?? Prisma.DbNull,
             category: dto.category?.trim() || 'General',
             imageUrl: dto.imageUrl || null,
             description: dto.description?.trim() || null,
@@ -154,7 +162,7 @@ export class ProductsController {
   async update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: AuthUser) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Product not found');
-    const { stockQty, ...rest } = dto;
+    const { stockQty, companions, ...rest } = dto;
     // The form always sends the quantity back; only a real change is a stock adjustment.
     const wantsStockChange = stockQty !== undefined && Number(existing.stockQty) !== stockQty;
     try {
@@ -181,10 +189,27 @@ export class ProductsController {
             actorId: user.id,
           });
         }
+        // Selling price changes are kept for the admin's edits report.
+        if (dto.priceMnt !== undefined && dto.priceMnt !== existing.priceMnt) {
+          await tx.editAudit.create({
+            data: {
+              entityType: 'PRODUCT_PRICE',
+              entityId: id,
+              summary: `${existing.sku} ${existing.nameMn}: үнэ ${existing.priceMnt} → ${dto.priceMnt}${
+                existing.lastCostMnt != null && dto.priceMnt < existing.lastCostMnt ? ` (өртөг ${existing.lastCostMnt}-аас доош)` : ''
+              }`,
+              before: { priceMnt: existing.priceMnt },
+              after: { priceMnt: dto.priceMnt },
+              reason: 'Барааны үнэ өөрчилсөн',
+              actorId: user.id,
+            },
+          });
+        }
         return tx.product.update({
           where: { id },
           data: {
             ...rest,
+            ...(companions !== undefined ? { companions: companionsValue(companions) ?? Prisma.DbNull } : {}),
             ...(dto.category !== undefined ? { category: dto.category.trim() || 'General' } : {}),
             ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl || null } : {}),
             ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),

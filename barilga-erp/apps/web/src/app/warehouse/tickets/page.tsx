@@ -7,8 +7,8 @@ import { PickList, unpickedCount } from '@/components/pick-list';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
-import { TRANSPORT_ROLES, hasRole } from '@/lib/rbac';
-import { AuthUser, DELIVERY_LABEL, isHiredTransport, Order, VEHICLE_LABEL } from '@/lib/types';
+import { FULFILLMENT_ROLES, TRANSPORT_ROLES, hasRole } from '@/lib/rbac';
+import { AuthUser, DELIVERY_LABEL, companionLines, isHiredTransport, Order, VEHICLE_LABEL } from '@/lib/types';
 
 /** queue = paid, nobody started · preparing = someone pressed «Би бэлдье» · done = completed recently. */
 type TicketTab = 'queue' | 'preparing' | 'done';
@@ -101,7 +101,7 @@ export default function WarehouseTicketsPage() {
       return;
     }
     const parsed = JSON.parse(raw) as AuthUser;
-    if (!['ACHIGCH_BELTGEGCH', 'ADMIN', 'MANAGER', 'BORLUULAGCH'].includes(parsed.role)) {
+    if (!hasRole(parsed.role, FULFILLMENT_ROLES)) {
       router.replace('/pos');
       return;
     }
@@ -274,6 +274,11 @@ export default function WarehouseTicketsPage() {
                   {o.items.map((i) => (
                     <li key={i.id}>
                       {i.product.nameMn} × {Number(i.quantity)} {i.product.unit}
+                      {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
+                        <span key={c} className="ml-2 inline-block rounded border border-amber-600 bg-amber-950/50 px-1.5 text-[11px] font-semibold text-amber-200">
+                          + {c}
+                        </span>
+                      ))}
                     </li>
                   ))}
                 </ul>
