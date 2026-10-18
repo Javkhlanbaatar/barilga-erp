@@ -149,7 +149,7 @@ export function Signatures({ t, fallback, signer }: { t?: DocTemplate; fallback?
   const names = tpl?.signatures ?? fallback ?? [];
   if (!design && (!names.length || !shown(tpl, 'signatures')) && !tpl?.stamp) return null;
   return (
-    <div className="flex items-end justify-between gap-6 pt-8 text-xs">
+    <div className="doc-keep flex items-end justify-between gap-6 pt-8 text-xs">
       <div className="flex-1">
         <Part k="signatures" label="Гарын үсэг" t={t}>
           <div className="grid gap-6" style={{ gridTemplateColumns: `repeat(${Math.max(1, names.length + (design ? 1 : 0))}, minmax(0, 1fr))` }}>

@@ -22,10 +22,11 @@ const DOCS: Array<[Doc, string]> = [
 
 /** Printable width (mm) inside the page margins, and the CSS @page size, per paper layout. */
 function pageGeometry(l: Layout) {
-  if (l.paper === '80MM') return { width: 72, page: '80mm auto', margin: '3mm', small: true };
+  // height = printable height inside the margins (0 = continuous roll), used to estimate the page count.
+  if (l.paper === '80MM') return { width: 72, height: 0, page: '80mm auto', margin: '3mm', small: true };
   const landscape = l.orientation === 'landscape';
-  if (l.paper === 'A5') return { width: landscape ? 190 : 128, page: `A5 ${l.orientation}`, margin: '10mm', small: true };
-  return { width: landscape ? 273 : 186, page: `A4 ${l.orientation}`, margin: '12mm', small: false };
+  if (l.paper === 'A5') return { width: landscape ? 190 : 128, height: landscape ? 128 : 190, page: `A5 ${l.orientation}`, margin: '10mm', small: true };
+  return { width: landscape ? 273 : 186, height: landscape ? 186 : 273, page: `A4 ${l.orientation}`, margin: '12mm', small: false };
 }
 
 
@@ -93,6 +94,19 @@ function PrintOrder() {
     }
   }, [order, company, layouts, search]);
 
+  // How many sheets one copy takes (the browser moves rows that do not fit onto the next page).
+  const [pages, setPages] = useState(0);
+  useEffect(() => {
+    if (!order || !layouts) return;
+    const h = window.setTimeout(() => {
+      const el = document.querySelector('.print-copy') as HTMLElement | null;
+      const g = pageGeometry(layouts[doc]);
+      if (!el || !g.height) return setPages(0);
+      setPages(Math.max(1, Math.ceil(el.scrollHeight / (g.height * 3.78))));
+    }, 400);
+    return () => window.clearTimeout(h);
+  }, [order, layouts, doc, templates, invoice]);
+
   if (error) return <p className="p-6 text-red-600">{error}</p>;
   if (!order || !company || !layouts) return <p className="p-6 text-slate-500">Уншиж байна…</p>;
 
@@ -140,7 +154,8 @@ function PrintOrder() {
         )}
         <span className="text-slate-500">
           {layout.paper === '80MM' ? '80мм' : `${layout.paper} ${layout.orientation === 'landscape' ? 'хэвтээ' : 'босоо'}`} ·{' '}
-          {layout.copies} хувь
+          {layout.copies} хувь · {order.items.length} бараа
+          {pages > 0 ? ` · ≈ ${pages} хуудас${pages > 1 ? ' (бараа дараагийн хуудсанд үргэлжилнэ)' : ''}` : ''}
         </span>
         {!company.configured && (
           <span className="ml-auto text-amber-700">Компанийн мэдээлэл тохируулаагүй байна (Админ → Компанийн мэдээлэл).</span>
@@ -163,8 +178,14 @@ function PrintOrder() {
           aside, nav { display: none !important; }
           body { background: #fff !important; }
           .print-copy { padding: 0 !important; }
-          @page { size: ${geo.page}; margin: ${geo.margin}; }
+          @page { size: ${geo.page}; margin: ${geo.margin}; @bottom-right { content: 'Хуудас ' counter(page) ' / ' counter(pages); font-size: 9px; color: #555; } }
         }
+        /* Long documents: rows never split, the column headings repeat on every page, and the totals and
+           signatures stay together instead of being cut across two sheets. */
+        .print-doc thead { display: table-header-group; }
+        .print-doc tfoot { display: table-footer-group; }
+        .print-doc tr, .print-doc td, .print-doc th { break-inside: avoid; page-break-inside: avoid; }
+        .print-doc .doc-keep { break-inside: avoid; page-break-inside: avoid; }
         .print-doc table { border-collapse: collapse; width: 100%; }
         .print-doc th, .print-doc td { border: 1px solid #333; padding: 4px 6px; font-size: 12px; }
         .print-doc .print-small th, .print-doc .print-small td { padding: 2px 4px; font-size: 10px; }
