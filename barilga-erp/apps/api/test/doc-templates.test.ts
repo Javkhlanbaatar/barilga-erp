@@ -21,3 +21,20 @@ describe('document templates', () => {
     assert.deepEqual(after.issueNote, first.issueNote, 'other documents untouched');
   });
 });
+
+describe('changes are kept in the edits report', () => {
+  it('a template change and a company change each write one readable row', async () => {
+    const db = new FakeDb();
+    const svc = new SettingsService(db as any);
+    await svc.setDocuments({ issueNote: { showPrices: false } } as any, 'u-gm');
+    await svc.setDocuments({ issueNote: { showPrices: false } } as any, 'u-gm'); // no change → no row
+    await svc.setCompany({ name: 'Барилга ХХК', regNumber: '1234567' } as any, 'u-admin');
+    const rows = db.editAudit.rows;
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].entityType, 'DOC_TEMPLATE');
+    assert.match(rows[0].summary, /Зарлагын баримт \(үнэ харуулах\)/);
+    assert.equal(rows[1].entityType, 'SETTINGS');
+    assert.match(rows[1].summary, /нэр, РД/);
+    assert.equal(rows[1].actorId, 'u-admin');
+  });
+});

@@ -18,7 +18,7 @@ import { extname, join } from 'path';
 import { Role } from '@prisma/client';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { CATALOG_READ_ROLES } from '../auth/rbac';
+import { CATALOG_READ_ROLES, TOP_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CompanySettingsDto } from './company.dto';
@@ -105,8 +105,9 @@ export class SettingsController {
     return this.settings.documents();
   }
 
+  /** Wording of printed documents: admin and the general manager (Ерөнхий менежер). */
   @Put('documents')
-  @Roles(Role.ADMIN)
+  @Roles(...TOP_ROLES)
   setDocuments(@Body() dto: DocTemplatesDto, @CurrentUser() user: AuthUser) {
     return this.settings.setDocuments(dto, user.id);
   }

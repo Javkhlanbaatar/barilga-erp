@@ -27,6 +27,7 @@ const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; featu
   { href: '/admin/users', label: 'Хэрэглэгчид', roles: ['ADMIN'] },
   { href: '/admin/features', label: 'Модулиуд', roles: ['ADMIN'] },
   { href: '/admin/settings', label: 'Компанийн мэдээлэл', roles: ['ADMIN'] },
+  { href: '/admin/documents', label: 'Баримтын загвар', roles: ['ADMIN', 'SUPER_MANAGER'] },
   { href: '/admin', label: 'Хяналт самбар', roles: ['ADMIN', 'MANAGER'] },
   { href: '/devices', label: 'Төхөөрөмж шалгах', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
 ];

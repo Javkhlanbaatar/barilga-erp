@@ -19,8 +19,8 @@ export class UsersController {
   }
 
   @Post()
-  create(@Body() dto: CreateUserDto) {
-    return this.users.create(dto);
+  create(@Body() dto: CreateUserDto, @CurrentUser() actor: { id: string }) {
+    return this.users.create(dto, actor.id);
   }
 
   @Patch(':id/status')

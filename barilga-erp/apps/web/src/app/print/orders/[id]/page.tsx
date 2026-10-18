@@ -4,7 +4,8 @@ import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api, tugrik } from '@/lib/api';
 import { Blank, BlankRows, DocNote, FeeRows, InvoiceDoc, InvoiceMeta, LogoMark, SellerBlock, Signatures, Watermark, paidAndDue } from '@/components/invoice-doc';
-import { companionLines, type CompanySettings, type DocTemplate, type Order } from '@/lib/types';
+import { TOP_ROLES, hasRole } from '@/lib/rbac';
+import { companionLines, type AuthUser, type CompanySettings, type DocTemplate, type Order } from '@/lib/types';
 
 type Doc = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
 type Layout = { paper: 'A4' | 'A5' | '80MM'; orientation: 'portrait' | 'landscape'; copies: number };
@@ -69,7 +70,19 @@ function PrintOrder() {
   // ?edit=1: the page can be typed on before printing (one-off changes, nothing is saved) and does not print
   // by itself. ?blank=1: the buyer's details and a few extra rows are left empty to fill in by hand.
   const [editing, setEditing] = useState(search.get('edit') === '1');
-  const blank = search.get('blank') === '1';
+  // Changing the wording (one-off edits, blank copies) is for admin and the general manager.
+  const [canCustomize, setCanCustomize] = useState(false);
+  useEffect(() => {
+    try {
+      const me = JSON.parse(localStorage.getItem('barilga_user') ?? 'null') as AuthUser | null;
+      const allowed = hasRole(me?.role, TOP_ROLES);
+      setCanCustomize(allowed);
+      if (!allowed) setEditing(false);
+    } catch {
+      setEditing(false);
+    }
+  }, []);
+  const blank = search.get('blank') === '1' && canCustomize;
 
   useEffect(() => {
     Promise.all([
@@ -127,6 +140,7 @@ function PrintOrder() {
             {label}
           </a>
         ))}
+        {canCustomize && (
         <button
           className={`rounded px-3 py-1 ${editing ? 'bg-amber-500 text-black' : 'border border-slate-300 bg-white'}`}
           onClick={() => setEditing((v) => !v)}
@@ -134,9 +148,12 @@ function PrintOrder() {
         >
           ✎ {editing ? 'Засаж байна — дуусгах' : 'Засаад хэвлэх'}
         </button>
+        )}
+        {canCustomize && (
         <a className="rounded border border-slate-300 bg-white px-3 py-1" href={`?doc=${doc}${blank ? '' : '&blank=1'}&edit=1`}>
           {blank ? 'Энгийн хувилбар' : 'Хоосон талбартай'}
         </a>
+        )}
         <span className="text-slate-500">
           {layout.paper === '80MM' ? '80мм' : `${layout.paper} ${layout.orientation === 'landscape' ? 'хэвтээ' : 'босоо'}`} ·{' '}
           {layout.copies} хувь

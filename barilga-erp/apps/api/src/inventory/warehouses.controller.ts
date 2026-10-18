@@ -27,14 +27,14 @@ export class WarehousesController {
 
   @Post('warehouses')
   @Roles(Role.ADMIN)
-  create(@Body() dto: CreateWarehouseDto) {
-    return this.warehouses.create(dto);
+  create(@Body() dto: CreateWarehouseDto, @CurrentUser() user: AuthUser) {
+    return this.warehouses.create(dto, user.id);
   }
 
   @Patch('warehouses/:id')
   @Roles(Role.ADMIN)
-  update(@Param('id') id: string, @Body() dto: UpdateWarehouseDto) {
-    return this.warehouses.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateWarehouseDto, @CurrentUser() user: AuthUser) {
+    return this.warehouses.update(id, dto, user.id);
   }
 
   /** Manual stock correction (counted quantity or +/- delta) with a mandatory reason, written to the ledger. */

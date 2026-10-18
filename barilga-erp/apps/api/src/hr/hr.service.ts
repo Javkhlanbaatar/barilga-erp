@@ -4,6 +4,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
 import { isManagerRole, isTopRole, seesAllWarehouses, warehouseWhere } from '../inventory/warehouse-scope';
 import { FeaturesService } from '../features/features.service';
+import { audit } from '../common/audit';
 import { PrismaService } from '../prisma/prisma.service';
 import { PayrollAdjustmentDto, PayrollSettingsDto, StaffPunchDto } from './dto/hr.dto';
 
@@ -267,6 +268,14 @@ export class HrService {
     if (!staff) throw new NotFoundException('Staff member not found');
     await this.prisma.user.update({ where: { id: userId }, data: { baseSalaryMnt } });
     this.log.log(`Base salary of ${staff.fullName} set to ${baseSalaryMnt ?? 'role default'} by ${user.id}`);
+    await audit(this.prisma, {
+      entityType: 'SALARY',
+      entityId: userId,
+      summary: `${staff.fullName}: үндсэн цалин`,
+      before: { amountMnt: staff.baseSalaryMnt },
+      after: { amountMnt: baseSalaryMnt },
+      actorId: user.id,
+    });
     return { userId, baseSalaryMnt };
   }
 
@@ -282,9 +291,19 @@ export class HrService {
     const staff = await this.prisma.user.findUnique({ where: { id: dto.userId } });
     if (!staff) throw new NotFoundException('Staff member not found');
     await this.assertMonthOpen(dto.userId, dto.periodMonth);
-    return this.prisma.payrollAdjustment.create({
+    const row = await this.prisma.payrollAdjustment.create({
       data: { userId: dto.userId, periodMonth: dto.periodMonth, amountMnt: dto.amountMnt, reason: dto.reason.trim(), createdById: user.id },
     });
+    await audit(this.prisma, {
+      entityType: 'SALARY',
+      entityId: dto.userId,
+      summary: `${staff.fullName} ${dto.periodMonth}: ${dto.amountMnt > 0 ? 'урамшуулал' : 'суутгал'} нэмсэн`,
+      before: { amountMnt: null },
+      after: { amountMnt: dto.amountMnt },
+      reason: dto.reason.trim(),
+      actorId: user.id,
+    });
+    return row;
   }
 
   async removeAdjustment(id: string, user: AuthUser) {
@@ -297,6 +316,15 @@ export class HrService {
     }
     await this.assertMonthOpen(row.userId, row.periodMonth);
     await this.prisma.payrollAdjustment.delete({ where: { id } });
+    await audit(this.prisma, {
+      entityType: 'SALARY',
+      entityId: row.userId,
+      summary: `${row.periodMonth}: ${row.amountMnt > 0 ? 'урамшуулал' : 'суутгал'} устгасан`,
+      before: { amountMnt: row.amountMnt },
+      after: { amountMnt: null },
+      reason: row.reason,
+      actorId: user.id,
+    });
     return { removed: id };
   }
 

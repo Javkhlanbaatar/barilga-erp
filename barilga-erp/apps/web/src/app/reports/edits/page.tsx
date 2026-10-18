@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ReportsNav } from '@/components/reports-nav';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
-import { homeForRole } from '@/lib/rbac';
+import { TOP_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 import { AuthUser } from '@/lib/types';
 
 type Edit = {
@@ -23,9 +23,26 @@ type Edit = {
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date());
 const monthAgo = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(Date.now() - 30 * 86_400_000));
 
-/** Shows the money figure that changed (unit cost or account amount) as "old → new". */
+/** What kind of thing changed. */
+const TYPE_LABEL: Record<string, string> = {
+  RECEIPT_ITEM: 'Худалдан авсан үнэ',
+  ACCOUNT_ENTRY: 'Харилцагчийн тооцоо',
+  PRODUCT_PRICE: 'Барааны үнэ',
+  PRICE_LIST_PRICE: 'Үнийн жагсаалт',
+  SALARY: 'Цалин',
+  USER: 'Хэрэглэгч, эрх',
+  SETTINGS: 'Тохиргоо',
+  DOC_TEMPLATE: 'Баримтын загвар',
+  MODULE: 'Модуль',
+  WAREHOUSE: 'Дэлгүүр / агуулах',
+};
+
+const MONEY_KEYS = ['unitCostMnt', 'amountMnt', 'priceMnt'];
+
+/** Money changes as "old → new"; other changes are described in the summary. */
 function change(e: Edit) {
-  const key = 'unitCostMnt' in e.before || 'unitCostMnt' in e.after ? 'unitCostMnt' : 'amountMnt';
+  const key = MONEY_KEYS.find((k) => k in e.before || k in e.after);
+  if (!key) return '';
   const fmt = (v: unknown) => (v === null || v === undefined ? '—' : tugrik(Number(v)));
   const desc = e.before.description !== e.after.description && e.after.description ? ` · «${String(e.after.description)}»` : '';
   return `${fmt(e.before[key])} → ${fmt(e.after[key])}${desc}`;
@@ -57,7 +74,7 @@ export default function EditsReportPage() {
       return;
     }
     const me = JSON.parse(raw) as AuthUser;
-    if (me.role !== 'ADMIN') {
+    if (!hasRole(me.role, TOP_ROLES)) {
       router.replace(homeForRole(me.role));
       return;
     }
@@ -92,6 +109,7 @@ export default function EditsReportPage() {
             <tr>
               <th className="p-2">Хэзээ</th>
               <th>Хэн</th>
+              <th>Төрөл</th>
               <th>Юу</th>
               <th>Өөрчлөлт</th>
               <th className="pr-2">Шалтгаан</th>
@@ -102,6 +120,7 @@ export default function EditsReportPage() {
               <tr key={e.id} className="border-t border-slate-800 align-top">
                 <td className="p-2 text-xs text-slate-300 whitespace-nowrap">{new Date(e.at).toLocaleString('mn-MN')}</td>
                 <td className="text-xs">{e.actor}</td>
+                <td className="text-xs text-slate-400 whitespace-nowrap">{TYPE_LABEL[e.entityType] ?? e.entityType}</td>
                 <td className="text-xs">{e.summary}</td>
                 <td className="text-xs font-semibold whitespace-nowrap">{change(e)}</td>
                 <td className="text-xs pr-2">{e.reason}</td>

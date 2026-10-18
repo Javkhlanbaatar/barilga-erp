@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { audit, changedKeys, fieldNames } from '../common/audit';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanySettingsDto } from './company.dto';
 import { DEFAULT_TEMPLATE, DocTemplate, DocTemplatesDto } from './doc-template.dto';
@@ -37,6 +38,7 @@ const EMPTY_COMPANY: CompanySettings = {
 
 const PRINT_KEY = 'PRINT';
 const DOCS_KEY = 'DOC_TEMPLATES';
+const DOC_NAMES: Record<PrintDoc, string> = { invoice: 'Нэхэмжлэх', receipt: 'Баримт', issueNote: 'Зарлагын баримт', picklist: 'Бэлтгэх хуудас' };
 
 export type PrintSettings = Record<PrintDoc, { paper: PaperSize; orientation: Orientation; copies: number }>;
 
@@ -76,7 +78,16 @@ export class SettingsService {
       const next = dto[doc];
       if (next) merged[doc] = { paper: next.paper, orientation: next.orientation, copies: next.copies };
     }
+    const before = await this.print();
     const json = merged as unknown as Prisma.InputJsonValue;
+    await audit(this.prisma, {
+      entityType: 'SETTINGS',
+      entityId: PRINT_KEY,
+      summary: `Хэвлэх тохиргоо: ${fieldNames(changedKeys(before, merged)) || 'өөрчлөлтгүй'}`,
+      before,
+      after: merged,
+      actorId,
+    });
     await this.prisma.appSetting.upsert({
       where: { key: PRINT_KEY },
       create: { key: PRINT_KEY, value: json, updatedById: actorId },
@@ -115,6 +126,18 @@ export class SettingsService {
   }
 
   private async saveCompany(value: CompanySettings, actorId: string) {
+    const { configured: _c, ...before } = await this.company();
+    const keys = changedKeys(before, value);
+    if (keys.length) {
+      await audit(this.prisma, {
+        entityType: 'SETTINGS',
+        entityId: COMPANY_KEY,
+        summary: `Компанийн мэдээлэл: ${fieldNames(keys)}`,
+        before: Object.fromEntries(keys.map((k) => [k, before[k as keyof CompanySettings]])),
+        after: Object.fromEntries(keys.map((k) => [k, value[k as keyof CompanySettings]])),
+        actorId,
+      });
+    }
     const json = value as unknown as Prisma.InputJsonValue;
     await this.prisma.appSetting.upsert({
       where: { key: COMPANY_KEY },
@@ -133,6 +156,7 @@ export class SettingsService {
   }
 
   async setDocuments(dto: DocTemplatesDto, actorId: string) {
+    const before = await this.documents();
     const merged = await this.documents();
     for (const d of PRINT_DOCS) {
       const next = dto[d];
@@ -142,6 +166,17 @@ export class SettingsService {
         ...Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)),
         ...(next.signatures ? { signatures: next.signatures.map((x) => x.trim()).filter(Boolean) } : {}),
       } as DocTemplate;
+    }
+    const changed = PRINT_DOCS.filter((d) => changedKeys(before[d], merged[d]).length);
+    if (changed.length) {
+      await audit(this.prisma, {
+        entityType: 'DOC_TEMPLATE',
+        entityId: DOCS_KEY,
+        summary: `Баримтын загвар: ${changed.map((d) => `${DOC_NAMES[d]} (${fieldNames(changedKeys(before[d], merged[d]))})`).join('; ')}`,
+        before: Object.fromEntries(changed.map((d) => [d, before[d]])),
+        after: Object.fromEntries(changed.map((d) => [d, merged[d]])),
+        actorId,
+      });
     }
     const json = merged as unknown as Prisma.InputJsonValue;
     await this.prisma.appSetting.upsert({

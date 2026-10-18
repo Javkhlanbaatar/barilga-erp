@@ -16,6 +16,12 @@ export const REPORTS: Array<{ href: string; label: string; hint: string; roles: 
     roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'],
   },
   {
+    href: '/reports/returns',
+    label: 'Буцаалт',
+    hint: 'Буцаасан бараа, шалтгаан, буцаасан мөнгө, хэн хийсэн',
+    roles: ['ADMIN', 'MANAGER'],
+  },
+  {
     href: '/reports/refunds',
     label: 'Буцаах мөнгө',
     hint: 'Буцаалтын мөнгийг харилцагчийн данс руу шилжүүлэх жагсаалт',
@@ -52,8 +58,8 @@ export const REPORTS: Array<{ href: string; label: string; hint: string; roles: 
   {
     href: '/reports/edits',
     label: 'Засварын түүх',
-    hint: 'Худалдан авсан үнэ, тооцооны мөрийг хэн, хэзээ, яагаад өөрчилсөн',
-    roles: ['ADMIN'],
+    hint: 'Үнэ, тооцоо, цалин, эрх, тохиргоо, баримтын загварыг хэн, хэзээ өөрчилсөн',
+    roles: ['ADMIN', 'SUPER_MANAGER'],
   },
 ];
 

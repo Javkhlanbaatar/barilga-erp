@@ -224,8 +224,9 @@ export class InvoicesService {
       await this.prisma.invoice.updateMany({ where: { id: row.id, viewedAt: null }, data: { viewedAt: new Date() } });
     }
     const o = row.order;
-    const company = await this.settings.company();
+    const [company, documents] = await Promise.all([this.settings.company(), this.settings.documents()]);
     return {
+      template: documents.invoice,
       invoiceNumber: row.invoiceNumber,
       dueDate: row.dueDate,
       note: row.note,

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { InvoiceDoc, InvoiceDocOrder } from '@/components/invoice-doc';
 import { publicApi, tugrik } from '@/lib/api';
-import type { CompanySettings, InvoiceState } from '@/lib/types';
+import type { CompanySettings, DocTemplate, InvoiceState } from '@/lib/types';
 
 type PublicInvoice = {
   invoiceNumber: string;
@@ -15,6 +15,7 @@ type PublicInvoice = {
   owedMnt: number;
   state: InvoiceState;
   company: CompanySettings;
+  template?: DocTemplate;
   order: InvoiceDocOrder;
 };
 
@@ -50,7 +51,7 @@ export default function PublicInvoicePage() {
         </span>
       </div>
       <section className="mx-auto max-w-[190mm] px-4 py-6">
-        <InvoiceDoc order={inv.order} company={inv.company} invoice={inv} />
+        <InvoiceDoc order={inv.order} company={inv.company} invoice={inv} template={inv.template} />
       </section>
       <style>{`
         @media print {

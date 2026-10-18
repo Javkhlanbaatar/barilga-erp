@@ -9,6 +9,7 @@ import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { DailyQueryDto } from './dto/daily-query.dto';
 import { WarehouseReportQueryDto } from './dto/warehouse-query.dto';
 import { EditsReportService } from './edits-report.service';
+import { ReturnsReportService } from './returns-report.service';
 import { FulfillmentReportService } from './fulfillment-report.service';
 import { ReportsService } from './reports.service';
 import { WarehouseReportService } from './warehouse-report.service';
@@ -21,6 +22,7 @@ export class ReportsController {
     private readonly warehouseReport: WarehouseReportService,
     private readonly fulfillmentReport: FulfillmentReportService,
     private readonly editsReport: EditsReportService,
+    private readonly returnsReport: ReturnsReportService,
   ) {}
 
   @Get('daily')
@@ -51,9 +53,16 @@ export class ReportsController {
     return this.fulfillmentReport.report(query);
   }
 
-  /** Later edits of money figures, for the admin. */
+  /** Returns in a date range: goods, reasons, refunds and whether they were paid out. */
+  @Get('returns')
+  @Roles(Role.ADMIN, Role.MANAGER)
+  returns(@Query() query: WarehouseReportQueryDto, @CurrentUser() user: AuthUser) {
+    return this.returnsReport.report(query, user);
+  }
+
+  /** Later edits of money figures, settings, users and salaries: admin and the general manager. */
   @Get('edits')
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.SUPER_MANAGER)
   edits(@Query() query: WarehouseReportQueryDto) {
     return this.editsReport.report(query);
   }

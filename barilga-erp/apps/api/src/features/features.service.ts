@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { audit } from '../common/audit';
 import { PrismaService } from '../prisma/prisma.service';
 import { FEATURES, FeatureKey, isDormant, isFeatureKey } from './feature-flags';
 
@@ -47,6 +48,13 @@ export class FeaturesService {
       update: { enabled, updatedById: actorId },
     });
     this.log.log(`Module ${key} switched ${enabled ? 'on' : 'off'} by ${actorId}`);
+    await audit(this.prisma, {
+      entityType: 'MODULE',
+      entityId: key,
+      summary: `Модуль «${FEATURES[key].nameMn}» ${enabled ? 'асаалаа' : 'унтраалаа'}`,
+      after: { enabled },
+      actorId,
+    });
     return (await this.list()).find((f) => f.key === key);
   }
 }

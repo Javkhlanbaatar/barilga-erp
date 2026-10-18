@@ -8,6 +8,7 @@ import {
 import { Prisma, Role } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
+import { audit } from '../common/audit';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/upsert-user.dto';
 
@@ -65,7 +66,7 @@ export class UsersService {
     return rows.map(toStaff);
   }
 
-  async create(dto: CreateUserDto) {
+  async create(dto: CreateUserDto, actorId?: string) {
     const username = dto.username.trim().toLowerCase();
     const email = dto.email?.trim().toLowerCase() || null;
     const passwordHash = await bcrypt.hash(dto.password, 12);
@@ -86,6 +87,15 @@ export class UsersService {
         },
         select: publicUser,
       });
+      if (actorId) {
+        await audit(this.prisma, {
+          entityType: 'USER',
+          entityId: row.id,
+          summary: `Шинэ хэрэглэгч ${row.fullName} (${row.username}): ${row.role}${row.warehouse ? `, ${row.warehouse.name}` : ''}`,
+          after: { role: row.role, warehouseId: row.warehouseId },
+          actorId,
+        });
+      }
       return toStaff(row);
     } catch (err) {
       if (isUnique(err)) throw new ConflictException('Username or email already in use');
@@ -130,6 +140,26 @@ export class UsersService {
         },
         select: publicUser,
       });
+      // Who may do what: role, active, warehouses and password resets are kept in the edits report.
+      const changes: string[] = [];
+      if (row.role !== user.role) changes.push(`эрх ${user.role} → ${row.role}`);
+      if (row.isActive !== user.isActive) changes.push(row.isActive ? 'идэвхжүүлсэн' : 'идэвхгүй болгосон');
+      if (row.warehouseId !== user.warehouseId) changes.push(`агуулах → ${row.warehouse?.name ?? 'томилоогүй'}`);
+      const managedNow = row.managedWarehouses.map((m) => m.warehouse.id).sort().join();
+      if (managedNow !== current.map((c) => c.warehouseId).sort().join()) {
+        changes.push(`хянах агуулах → ${row.managedWarehouses.map((m) => m.warehouse.name).join(', ') || 'байхгүй'}`);
+      }
+      if (passwordHash) changes.push('нууц үг солив');
+      if (changes.length) {
+        await audit(this.prisma, {
+          entityType: 'USER',
+          entityId: id,
+          summary: `${row.fullName} (${row.username}): ${changes.join('; ')}`,
+          before: { role: user.role, isActive: user.isActive, warehouseId: user.warehouseId },
+          after: { role: row.role, isActive: row.isActive, warehouseId: row.warehouseId },
+          actorId,
+        });
+      }
       return toStaff(row);
     } catch (err) {
       if (isUnique(err)) throw new ConflictException('Username or email already in use');
