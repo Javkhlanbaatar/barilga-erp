@@ -11,6 +11,7 @@ import { HealthController } from './health.controller';
 import { HrModule } from './hr/hr.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { LogisticsModule } from './logistics/logistics.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { OrdersModule } from './orders/orders.module';
 import { PublicModule } from './public/public.module';
 import { PaymentModule } from './payment/payment.module';
@@ -40,6 +41,7 @@ import { UsersModule } from './users/users.module';
     ReportsModule,
     HrModule,
     CashModule,
+    NotificationsModule,
     SettingsModule,
   ],
   controllers: [HealthController],

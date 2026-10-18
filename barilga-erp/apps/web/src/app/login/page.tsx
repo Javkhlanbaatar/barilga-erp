@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
 import { AuthUser, ROLE_LABEL } from '@/lib/types';
@@ -11,6 +11,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('expired')) setError('Нэвтрэх хугацаа дууссан тул дахин нэвтэрнэ үү.');
+  }, []);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -25,7 +29,7 @@ export default function LoginPage() {
       localStorage.setItem('barilga_user', JSON.stringify(res.user));
       router.push(res.user.role === 'ACHIGCH_BELTGEGCH' ? '/warehouse/tickets' : '/pos');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError(err instanceof Error ? err.message : 'Нэвтэрч чадсангүй');
     } finally {
       setBusy(false);
     }

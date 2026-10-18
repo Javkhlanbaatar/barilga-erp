@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { CashierSummary } from '@/components/cashier-summary';
 import { api } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
+import { NotificationBell, useAlerts } from '@/components/notification-bell';
 import { AuthUser, FeatureKey, ROLE_LABEL } from '@/lib/types';
 
 const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; feature?: FeatureKey }> = [
@@ -54,6 +55,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, pathname]);
 
+  const alerts = useAlerts(Boolean(user), pathname);
+
   useEffect(() => setMenuOpen(false), [pathname]);
 
   useEffect(() => {
@@ -79,6 +82,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
       {/* Phone / tablet: a top bar with a menu button instead of the fixed sidebar. */}
       <div className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-800 bg-steel-900 px-4 py-2 md:hidden print:hidden">
         <span className="font-bold">Барилга Хангамж</span>
+        <span className="ml-auto mr-2">
+          <NotificationBell feed={alerts} align="right" />
+        </span>
         <button className="btn-ghost text-sm" onClick={() => setMenuOpen((o) => !o)} aria-label="Цэс">
           ☰ Цэс{transfersWaiting > 0 ? ` (${transfersWaiting})` : ''}
         </button>
@@ -88,9 +94,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
           menuOpen ? 'fixed inset-0 top-[49px] z-30 flex overflow-auto' : 'hidden'
         } md:static md:flex md:min-h-screen`}
       >
-        <div className="mb-8">
-          <p className="text-amber-brand text-[10px] tracking-[0.25em] uppercase">Barilga ERP</p>
-          <h1 className="font-bold text-lg">Барилга Хангамж</h1>
+        <div className="mb-8 flex items-start justify-between gap-2">
+          <div>
+            <p className="text-amber-brand text-[10px] tracking-[0.25em] uppercase">Barilga ERP</p>
+            <h1 className="font-bold text-lg">Барилга Хангамж</h1>
+          </div>
+          <span className="hidden md:block">
+            <NotificationBell feed={alerts} />
+          </span>
         </div>
         <nav className="space-y-1 flex-1">
           {visible.map((n) => (

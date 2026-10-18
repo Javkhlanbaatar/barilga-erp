@@ -1,3 +1,5 @@
+import { errorMessage } from './errors';
+
 /**
  * The API lives on port 4000 of the same machine that served this page, unless NEXT_PUBLIC_API_URL says
  * otherwise — so the app also works when opened as 127.0.0.1 or from another computer on the shop network.
@@ -16,6 +18,29 @@ async function call(url: string, init: RequestInit) {
   } catch {
     throw new Error(OFFLINE);
   }
+}
+
+/**
+ * Reads a response: JSON on success; on failure a Mongolian message (see errors.ts). A 401 on a signed-in
+ * call means the session ended: the stored login is cleared and the person is sent to the login page.
+ */
+async function read<T>(res: Response, path: string): Promise<T> {
+  const text = await res.text();
+  let data: { message?: unknown } | null = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    // an HTML error page from a proxy, etc.
+  }
+  if (!res.ok) {
+    if (res.status === 401 && !path.startsWith('/auth/') && typeof window !== 'undefined' && getToken()) {
+      localStorage.removeItem('barilga_token');
+      localStorage.removeItem('barilga_user');
+      window.location.assign('/login?expired=1');
+    }
+    throw new Error(errorMessage(res.status, data?.message));
+  }
+  return data as T;
 }
 
 export function apiOrigin() {
@@ -45,17 +70,7 @@ export async function publicApi<T>(path: string, init: RequestInit = {}): Promis
     ...(init.headers as Record<string, string> | undefined),
   };
   const res = await call(`${API}${path}`, { ...init, headers });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!res.ok) {
-    const message = data?.message
-      ? Array.isArray(data.message)
-        ? data.message.join(', ')
-        : data.message
-      : res.statusText;
-    throw new Error(message);
-  }
-  return data as T;
+  return read<T>(res, path);
 }
 
 export function orderTrackingUrl(token?: string | null) {
@@ -71,17 +86,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await call(`${API}${path}`, { ...init, headers });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!res.ok) {
-    const message = data?.message
-      ? Array.isArray(data.message)
-        ? data.message.join(', ')
-        : data.message
-      : res.statusText;
-    throw new Error(message);
-  }
-  return data as T;
+  return read<T>(res, path);
 }
 
 export async function apiUpload<T>(path: string, file: File, field = 'file'): Promise<T> {
@@ -93,17 +98,7 @@ export async function apiUpload<T>(path: string, file: File, field = 'file'): Pr
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body,
   });
-  const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
-  if (!res.ok) {
-    const message = data?.message
-      ? Array.isArray(data.message)
-        ? data.message.join(', ')
-        : data.message
-      : res.statusText;
-    throw new Error(message);
-  }
-  return data as T;
+  return read<T>(res, path);
 }
 
 export function tugrik(n: number) {
