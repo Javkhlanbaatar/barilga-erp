@@ -805,12 +805,16 @@ model AppSetting {
 
 /// A named set of per-product prices (e.g. өртгийн үнэ, бартерын үнэ). A product missing from the list sells at retail.
 model PriceList {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  notes     String?
-  isActive  Boolean  @default(true) @map("active")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String    @id @default(uuid())
+  name       String    @unique
+  notes      String?
+  isActive   Boolean   @default(true) @map("active")
+  /// Printed on the sheet: the prices hold until this day (optional).
+  validUntil DateTime? @map("valid_until") @db.Date
+  /// Secret for the customer's read-only link (/price/<token>); null = not shared.
+  shareToken String?   @unique @map("share_token")
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   items     PriceListItem[]
   customers Customer[]

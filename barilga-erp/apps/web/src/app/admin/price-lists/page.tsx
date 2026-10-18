@@ -5,7 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
-import { hasRole, homeForRole, OVERSIGHT_ROLES } from '@/lib/rbac';
+import { hasRole, homeForRole, OVERSIGHT_ROLES, TOP_ROLES } from '@/lib/rbac';
 import { AuthUser, PriceList } from '@/lib/types';
 
 type Row = {
@@ -18,7 +18,16 @@ type Row = {
   lastCostMnt: number | null;
   listPriceMnt: number | null;
 };
-type Detail = { id: string; name: string; notes: string | null; isActive: boolean; products: Row[] };
+type Detail = {
+  id: string;
+  name: string;
+  notes: string | null;
+  isActive: boolean;
+  validUntil: string | null;
+  shared: boolean;
+  publicPath: string | null;
+  products: Row[];
+};
 
 /**
  * Price lists (өртгийн үнэ, бартерын үнэ, бөөний үнэ ...): a price per product. A customer on a list buys
@@ -35,6 +44,10 @@ export default function PriceListsPage() {
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [canEdit, setCanEdit] = useState(false);
+  const [pct, setPct] = useState('10');
+  const [sendOpen, setSendOpen] = useState(false);
+  const [email, setEmail] = useState('');
 
   const loadLists = useCallback(async () => {
     const rows = await api<PriceList[]>('/price-lists?all=true');
@@ -60,6 +73,7 @@ export default function PriceListsPage() {
       return;
     }
     setReady(true);
+    setCanEdit(hasRole(me.role, TOP_ROLES));
     void loadLists()
       .then((rows) => rows[0] && setSelected(rows[0].id))
       .catch((err) => setMessage({ ok: false, text: err instanceof Error ? err.message : 'Ачаалж чадсангүй' }));
@@ -137,6 +151,64 @@ export default function PriceListsPage() {
     setDraft(next);
   }
 
+  /** Fills the visible rows with retail minus a percentage (only empty ones, or all with `overwrite`). */
+  function fillFromRetail(overwrite: boolean) {
+    const p = Number(pct);
+    if (!Number.isFinite(p) || p < 0 || p >= 100) return setMessage({ ok: false, text: 'Хувь 0–99 байна' });
+    const next = { ...draft };
+    for (const r of rows) {
+      if (!overwrite && (next[r.productId] ?? '').trim()) continue;
+      next[r.productId] = String(Math.round((r.retailMnt * (100 - p)) / 100));
+    }
+    setDraft(next);
+  }
+
+  async function setValidUntil(value: string) {
+    if (!detail) return;
+    try {
+      await api(`/price-lists/${detail.id}`, { method: 'PATCH', body: JSON.stringify({ validUntil: value || null }) });
+      await loadDetail(detail.id);
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Хадгалж чадсангүй' });
+    }
+  }
+
+  const shareUrl = detail?.publicPath ? `${typeof window === 'undefined' ? '' : window.location.origin}${detail.publicPath}` : '';
+
+  async function makeLink() {
+    if (!detail) return;
+    try {
+      await api(`/price-lists/${detail.id}/share`, { method: 'POST', body: '{}' });
+      await loadDetail(detail.id);
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Холбоос үүсгэж чадсангүй' });
+    }
+  }
+
+  async function revokeLink() {
+    if (!detail || !window.confirm('Холбоосыг хаах уу? Өмнө илгээсэн холбоос ажиллахаа болино.')) return;
+    await api(`/price-lists/${detail.id}/share`, { method: 'DELETE' });
+    await loadDetail(detail.id);
+  }
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(`${detail?.name} үнийн жагсаалт: ${shareUrl}`);
+      setMessage({ ok: true, text: 'Холбоос хуулагдлаа — Viber, Messenger, SMS-ээр илгээнэ үү' });
+    } catch {
+      window.prompt('Холбоосыг хуулна уу:', shareUrl);
+    }
+  }
+
+  function emailLink() {
+    if (!detail) return;
+    const subject = `Үнийн жагсаалт — ${detail.name}`;
+    const body = `Сайн байна уу,\n\nТаны үнийн жагсаалт:\n${shareUrl}\n\nХолбоосоор нээж хэвлэх, Excel-ээр татах боломжтой.${
+      detail.validUntil ? `\nҮнэ ${detail.validUntil} хүртэл хүчинтэй.` : ''
+    }`;
+    window.location.href = `mailto:${encodeURIComponent(email.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }
+
   return (
     <Shell>
       <div className="mb-4">
@@ -162,7 +234,10 @@ export default function PriceListsPage() {
             </button>
           ))}
         </div>
-        <form onSubmit={createList} className="flex gap-1 ml-auto">
+        <a className="btn-ghost text-sm ml-auto" href="/print/price-list?id=retail" target="_blank" rel="noreferrer">
+          Жижиглэн үнийн жагсаалт хэвлэх
+        </a>
+        <form onSubmit={createList} className="flex gap-1">
           <input className="w-48" placeholder="Шинэ жагсаалтын нэр" value={newName} onChange={(e) => setNewName(e.target.value)} />
           <button className="btn-primary text-sm" disabled={busy || newName.trim().length < 2}>
             Нэмэх
@@ -181,6 +256,16 @@ export default function PriceListsPage() {
             <button className="btn-ghost text-xs px-3 py-1" onClick={fillFromCost}>
               Хоосныг өртгөөр бөглөх
             </button>
+            <span className="flex items-center gap-1 text-xs text-slate-400">
+              Жижиглэнгээс −
+              <input className="w-14 text-right" inputMode="decimal" value={pct} onChange={(e) => setPct(e.target.value)} />%
+              <button className="btn-ghost text-xs px-2 py-1" onClick={() => fillFromRetail(false)} title="Зөвхөн хоосон мөрийг">
+                хоосныг
+              </button>
+              <button className="btn-ghost text-xs px-2 py-1" onClick={() => fillFromRetail(true)} title="Харагдаж буй бүх мөрийг дарж бичнэ">
+                бүгдийг
+              </button>
+            </span>
             <button className="btn-ghost text-xs px-3 py-1" onClick={() => void toggleActive()}>
               {detail.isActive ? 'Идэвхгүй болгох' : 'Идэвхжүүлэх'}
             </button>
@@ -188,6 +273,58 @@ export default function PriceListsPage() {
               {busy ? 'Хадгалж байна…' : `Хадгалах${changes.length ? ` (${changes.length})` : ''}`}
             </button>
           </div>
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 p-3 text-xs">
+            <span className="text-slate-400">Хэвлэх / илгээх:</span>
+            <a className="btn-ghost text-xs px-3 py-1" href={`/print/price-list?id=${detail.id}`} target="_blank" rel="noreferrer">
+              Хэвлэх (жагсаалтын бараа)
+            </a>
+            <a className="btn-ghost text-xs px-3 py-1" href={`/print/price-list?id=${detail.id}&all=1`} target="_blank" rel="noreferrer">
+              Хэвлэх (бүх бараа)
+            </a>
+            {canEdit && (
+              <button className="btn-primary text-xs px-3 py-1" onClick={() => setSendOpen((v) => !v)}>
+                Харилцагч руу илгээх
+              </button>
+            )}
+            <label className="ml-auto flex items-center gap-1 text-slate-400">
+              Хүчинтэй хугацаа
+              <input type="date" disabled={!canEdit} value={detail.validUntil ?? ''} onChange={(e) => void setValidUntil(e.target.value)} />
+            </label>
+          </div>
+          {sendOpen && canEdit && (
+            <div className="space-y-2 border-b border-slate-800 bg-steel-900/60 p-3 text-xs">
+              {!detail.shared ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-slate-300">Харилцагч нэвтрэхгүйгээр нээж, хэвлэж, Excel татах холбоос үүсгэнэ. Өртөг харагдахгүй.</span>
+                  <button className="btn-primary text-xs px-3 py-1" disabled={!detail.isActive} onClick={() => void makeLink()}>
+                    Холбоос үүсгэх
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input className="flex-1 min-w-[260px] font-mono" readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
+                    <button className="btn-ghost text-xs px-3 py-1" onClick={() => void copyLink()}>
+                      Хуулах (Viber / SMS)
+                    </button>
+                    <a className="btn-ghost text-xs px-3 py-1" href={detail.publicPath ?? '#'} target="_blank" rel="noreferrer">
+                      Нээж харах
+                    </a>
+                    <button className="btn-ghost text-xs px-3 py-1 text-red-300" onClick={() => void revokeLink()}>
+                      Холбоосыг хаах
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input className="w-64" type="email" placeholder="харилцагчийн и-мэйл" value={email} onChange={(e) => setEmail(e.target.value)} />
+                    <button className="btn-ghost text-xs px-3 py-1" disabled={!email.includes('@')} onClick={emailLink}>
+                      И-мэйлээр илгээх
+                    </button>
+                    <span className="text-slate-500">Үнэ өөрчлөхөд холбоос дээр шууд шинэчлэгдэнэ.</span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <table className="w-full text-sm min-w-[720px]">
             <thead className="text-left text-xs text-slate-400">
               <tr>

@@ -131,7 +131,10 @@ class Table {
       out.items = child.rows.filter((r: Row) => r[owned.fk] === row.id).map((r: Row) => ({ ...r }));
     }
     // Other to-many lists by parent table: relation name → [child table, foreign key].
-    const TO_MANY: Record<string, Record<string, [string, string]>> = { cashSession: { movements: ['cashMovement', 'sessionId'] } };
+    const TO_MANY: Record<string, Record<string, [string, string]>> = {
+      cashSession: { movements: ['cashMovement', 'sessionId'] },
+      priceList: { items: ['priceListItem', 'priceListId'] },
+    };
     for (const [rel, [table, fk]] of Object.entries(TO_MANY[this.name] ?? {})) {
       if (include?.[rel]) out[rel] = ((this.db as any)[table] as Table).rows.filter((r: Row) => r[fk] === row.id).map((r: Row) => ({ ...r }));
     }

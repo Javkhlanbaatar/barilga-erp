@@ -10,6 +10,7 @@ import {
   Max,
   MaxLength,
   Min,
+  Matches,
   MinLength,
   ValidateIf,
   ValidateNested,
@@ -48,6 +49,12 @@ export class UpdatePriceListDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /** YYYY-MM-DD printed as "valid until"; null clears it. */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'validUntil must be YYYY-MM-DD' })
+  validUntil?: string | null;
 }
 
 export class ListPriceDto {

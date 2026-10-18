@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreatePriceListDto, SetPricesDto, UpdatePriceListDto } from './dto/price-list.dto';
 
@@ -49,6 +50,7 @@ export class PriceListsService {
           ...(dto.name !== undefined ? { name: dto.name } : {}),
           ...(dto.notes !== undefined ? { notes: dto.notes || null } : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+          ...(dto.validUntil !== undefined ? { validUntil: dto.validUntil ? new Date(`${dto.validUntil}T00:00:00Z`) : null } : {}),
         },
       });
     } catch (err) {
@@ -71,6 +73,9 @@ export class PriceListsService {
       name: list.name,
       notes: list.notes,
       isActive: list.isActive,
+      validUntil: list.validUntil ? list.validUntil.toISOString().slice(0, 10) : null,
+      shared: Boolean(list.shareToken),
+      publicPath: list.shareToken ? `/price/${list.shareToken}` : null,
       products: products.map((p) => ({
         productId: p.id,
         sku: p.sku,
@@ -82,6 +87,87 @@ export class PriceListsService {
         listPriceMnt: byProduct.get(p.id) ?? null,
       })),
     };
+  }
+
+  /**
+   * What the customer sees on a printed or shared price list: the product, its unit and the price they pay.
+   * Costs are never included. `all` adds every other active product at retail, marked as such.
+   */
+  async sheet(id: string, all = false) {
+    const list = await this.prisma.priceList.findUnique({ where: { id }, include: { items: true } });
+    if (!list) throw new NotFoundException('Price list not found');
+    return this.buildSheet(list, all);
+  }
+
+  /** The retail price list (жижиглэн үнэ): every active product at its shelf price. */
+  async retailSheet() {
+    const products = await this.prisma.product.findMany({
+      where: { active: true },
+      orderBy: [{ category: 'asc' }, { nameMn: 'asc' }],
+      select: { sku: true, nameMn: true, unit: true, category: true, priceMnt: true },
+    });
+    return {
+      name: 'Жижиглэн үнийн жагсаалт',
+      notes: null,
+      validUntil: null,
+      generatedAt: new Date().toISOString(),
+      items: products.map((p) => ({ sku: p.sku, nameMn: p.nameMn, unit: p.unit, category: p.category, priceMnt: p.priceMnt, retailMnt: p.priceMnt, listed: true })),
+    };
+  }
+
+  private async buildSheet(
+    list: { name: string; notes: string | null; validUntil: Date | null; items: Array<{ productId: string; priceMnt: number }> },
+    all: boolean,
+  ) {
+    const byProduct = new Map(list.items.map((i) => [i.productId, i.priceMnt]));
+    const products = await this.prisma.product.findMany({
+      where: { active: true, ...(all ? {} : { id: { in: [...byProduct.keys()] } }) },
+      orderBy: [{ category: 'asc' }, { nameMn: 'asc' }],
+      select: { id: true, sku: true, nameMn: true, unit: true, category: true, priceMnt: true },
+    });
+    return {
+      name: list.name,
+      notes: list.notes,
+      validUntil: list.validUntil ? list.validUntil.toISOString().slice(0, 10) : null,
+      generatedAt: new Date().toISOString(),
+      items: products.map((p) => ({
+        sku: p.sku,
+        nameMn: p.nameMn,
+        unit: p.unit,
+        category: p.category,
+        priceMnt: byProduct.get(p.id) ?? p.priceMnt,
+        retailMnt: p.priceMnt,
+        listed: byProduct.has(p.id),
+      })),
+    };
+  }
+
+  /** Creates (or returns) the customer's read-only link. */
+  async share(id: string, actorId: string) {
+    const list = await this.prisma.priceList.findUnique({ where: { id } });
+    if (!list) throw new NotFoundException('Price list not found');
+    if (!list.isActive) throw new BadRequestException('Идэвхгүй жагсаалтыг илгээхгүй / The list is not active');
+    const token = list.shareToken ?? randomBytes(24).toString('base64url');
+    if (!list.shareToken) {
+      await this.prisma.priceList.update({ where: { id }, data: { shareToken: token } });
+      this.log.log(`Price list "${list.name}" shared by ${actorId}`);
+    }
+    return { publicPath: `/price/${token}` };
+  }
+
+  /** Turns the link off; anyone holding it sees "not found" from now on. */
+  async unshare(id: string, actorId: string) {
+    await this.prisma.priceList.updateMany({ where: { id }, data: { shareToken: null } });
+    this.log.log(`Price list ${id} link revoked by ${actorId}`);
+    return { shared: false };
+  }
+
+  /** The sheet behind a shared link; only while the list is active and the link has not been revoked. */
+  async publicSheet(token: string) {
+    if (!token || token.length < 20) throw new NotFoundException('Price list not found');
+    const list = await this.prisma.priceList.findUnique({ where: { shareToken: token }, include: { items: true } });
+    if (!list || !list.isActive) throw new NotFoundException('Price list not found');
+    return this.buildSheet(list, false);
   }
 
   /** Sets (or with null, removes) list prices for the given products in one transaction. */

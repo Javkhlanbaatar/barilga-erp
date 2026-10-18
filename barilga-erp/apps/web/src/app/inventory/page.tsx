@@ -13,6 +13,7 @@ import {
   productMatchesQuery,
   productStockStatus,
 } from '@/lib/types';
+import { useFeatures } from '@/lib/features';
 import { OVERSIGHT_ROLES, TOP_ROLES, hasRole } from '@/lib/rbac';
 
 const STATUS_LABEL: Record<StockStatus, string> = {
@@ -105,6 +106,7 @@ export default function InventoryPage() {
   const [ledger, setLedger] = useState<{ product: Product; rows: StockMovement[] } | null>(null);
   const [openingWarehouse, setOpeningWarehouse] = useState('');
 
+  const features = useFeatures();
   const canManage = hasRole(user?.role, OVERSIGHT_ROLES);
   // The catalog and prices are shared by every shop: only admin and the general manager change them.
   const canEditCatalog = hasRole(user?.role, TOP_ROLES);
@@ -326,6 +328,11 @@ export default function InventoryPage() {
             <button className="btn-primary" onClick={openCreate}>
               Бараа нэмэх
             </button>
+          )}
+          {features.enabled('PRICE_LISTS') && (
+            <a className="btn-ghost" href="/print/price-list?id=retail" target="_blank" rel="noreferrer">
+              Үнийн жагсаалт хэвлэх
+            </a>
           )}
           <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
             Шинэчлэх
