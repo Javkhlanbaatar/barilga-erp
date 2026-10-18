@@ -1,19 +1,36 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { CustomerPicker } from '@/components/customer-picker';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
-import { hasRole, homeForRole, OVERSIGHT_ROLES } from '@/lib/rbac';
+import { hasRole, homeForRole, OVERSIGHT_ROLES, TOP_ROLES } from '@/lib/rbac';
 import { AuthUser, Customer, Product, Role, StockReceipt, Warehouse } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
-type Line = { productId: string; sku: string; nameMn: string; unit: string; quantity: string; unitCost: string };
+type Line = {
+  productId: string;
+  sku: string;
+  nameMn: string;
+  unit: string;
+  quantity: string;
+  unitCost: string;
+  /** For the person receiving: the shelf price and the last purchase price, to catch a wrong cost. */
+  priceMnt: number;
+  lastCostMnt: number | null;
+  stockQty: number;
+};
 
 const RECEIPT_ROLES: Role[] = ['ADMIN', 'MANAGER', 'ACHIGCH_BELTGEGCH'];
 const qty = (v: string | number) => Number(v).toLocaleString('mn-MN', { maximumFractionDigits: 3 });
+const ymd = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(d);
 
+/**
+ * Бараа орлого: goods arriving from a supplier. Scan or search each product (scanning the same one again
+ * adds one more), type the quantity and — managers — the unit cost. A code that is not registered yet can be
+ * registered on the spot. The receipt can be printed for the supplier's driver to sign.
+ */
 export default function ReceiptsPage() {
   const router = useRouter();
   const [me, setMe] = useState<AuthUser | null>(null);
@@ -33,8 +50,13 @@ export default function ReceiptsPage() {
   const [lines, setLines] = useState<Line[]>([]);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [unknown, setUnknown] = useState<string | null>(null);
+  const [newProduct, setNewProduct] = useState({ nameMn: '', unit: 'ш', priceMnt: '', sku: '' });
+  const [filterFrom, setFilterFrom] = useState(() => ymd(new Date(Date.now() - 29 * 86_400_000)));
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
+  const canAddProduct = hasRole(me?.role, TOP_ROLES);
   const lockedTo = isOversight ? null : (me?.warehouseId ?? null);
 
   const flash = useCallback((kind: Toast['kind'], text: string) => {
@@ -45,7 +67,7 @@ export default function ReceiptsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setRows(await api<StockReceipt[]>('/inventory/receipts'));
+      setRows(await api<StockReceipt[]>('/inventory/receipts?limit=300'));
     } catch (err) {
       flash('error', err instanceof Error ? err.message : 'Ачаалж чадсангүй');
     } finally {
@@ -98,23 +120,101 @@ export default function ReceiptsPage() {
     setSearch('');
     setLines([]);
     setFormError('');
+    setUnknown(null);
     setOpen(true);
+    window.setTimeout(() => searchRef.current?.focus(), 50);
   }
 
+  function close() {
+    if (lines.length && !window.confirm('Оруулсан бараанууд хадгалагдахгүй. Хаах уу?')) return;
+    setOpen(false);
+  }
+
+  /** Adds the product, or one more of it when it is already on the receipt (scanning twice = 2). */
   function addLine(p: Product) {
-    if (lines.some((l) => l.productId === p.id)) return;
-    setLines([...lines, { productId: p.id, sku: p.sku, nameMn: p.nameMn, unit: p.unit, quantity: '1', unitCost: '' }]);
+    setLines((prev) => {
+      const at = prev.findIndex((l) => l.productId === p.id);
+      if (at >= 0) return prev.map((l, i) => (i === at ? { ...l, quantity: String((Number(l.quantity) || 0) + 1) } : l));
+      return [
+        ...prev,
+        {
+          productId: p.id,
+          sku: p.sku,
+          nameMn: p.nameMn,
+          unit: p.unit,
+          quantity: '1',
+          unitCost: '',
+          priceMnt: p.priceMnt,
+          lastCostMnt: (p as Product & { lastCostMnt?: number | null }).lastCostMnt ?? null,
+          stockQty: Number(p.stockQty),
+        },
+      ];
+    });
     setSearch('');
     setResults([]);
+    setUnknown(null);
+    searchRef.current?.focus();
+  }
+
+  /** Enter in the search box (or a scanner): exact barcode / code first, then the only match. */
+  async function onEnter() {
+    const code = search.trim();
+    if (!code) return;
+    const t = code.toLowerCase();
+    const pick = (list: Product[]) =>
+      list.find((r) => r.barcode === code) ?? list.find((r) => r.sku.toLowerCase() === t) ?? (list.length === 1 ? list[0] : undefined);
+    const hit = pick(results);
+    if (hit) return addLine(hit);
+    try {
+      const found = await api<Product[]>(`/products?q=${encodeURIComponent(code)}`);
+      const exact = pick(found);
+      if (exact) return addLine(exact);
+      if (!found.length) {
+        // Not registered: offer to register it with this code.
+        setUnknown(code);
+        setNewProduct({ nameMn: '', unit: 'ш', priceMnt: '', sku: /^\d{8,14}$/.test(code) ? '' : code });
+      } else setResults(found.slice(0, 30));
+    } catch {
+      // keep typing
+    }
+  }
+
+  /** Registers a product that arrived for the first time (its code as barcode), then puts it on the receipt. */
+  async function createProduct() {
+    if (!unknown) return;
+    if (newProduct.nameMn.trim().length < 2) return setFormError('Барааны нэрийг бичнэ үү');
+    const isBarcode = /^[0-9]{8,14}$/.test(unknown);
+    try {
+      const p = await api<Product>('/products', {
+        method: 'POST',
+        body: JSON.stringify({
+          sku: newProduct.sku.trim() || (isBarcode ? `P-${unknown.slice(-8)}` : unknown),
+          barcode: isBarcode ? unknown : undefined,
+          nameMn: newProduct.nameMn.trim(),
+          nameEn: newProduct.nameMn.trim(),
+          unit: newProduct.unit.trim() || 'ш',
+          priceMnt: Math.max(0, Math.round(Number(newProduct.priceMnt) || 0)),
+          weightKg: 0,
+          lengthM: 0,
+          volumeM3: 0,
+          stockQty: 0,
+        }),
+      });
+      flash('ok', `«${p.nameMn}» бүртгэгдлээ`);
+      addLine(p);
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Бараа бүртгэж чадсангүй');
+    }
   }
 
   const total = lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitCost) || 0), 0);
+  const units = lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
 
   /** A manager corrects a purchase price later; the reason goes to the admin's edit report. */
   async function editCost(r: StockReceipt, i: StockReceipt['items'][number]) {
     const raw = window.prompt(`${i.product.nameMn}: шинэ нэгж үнэ (₮, хоосон бол үнэгүй):`, i.unitCostMnt == null ? '' : String(i.unitCostMnt));
     if (raw === null) return;
-    const reason = window.prompt('Засах шалтгаан (админ харна):');
+    const reason = window.prompt('Засах шалтгаан (засварын түүхэд бичигдэнэ):');
     if (!reason || reason.trim().length < 3) return;
     try {
       await api(`/inventory/receipts/${r.id}/items/${i.id}/cost`, {
@@ -131,16 +231,17 @@ export default function ReceiptsPage() {
   async function submit(e: FormEvent) {
     e.preventDefault();
     setFormError('');
+    if (!supplierName.trim() && !partner) return setFormError('Нийлүүлэгчийн нэрийг бичнэ үү');
     if (lines.length === 0) return setFormError('Дор хаяж нэг бараа нэмнэ үү');
     const bad = lines.find((l) => !(Number(l.quantity) > 0));
-    if (bad) return setFormError(`${bad.sku}: тоо 0-ээс их байх ёстой`);
+    if (bad) return setFormError(`${bad.nameMn}: тоо 0-ээс их байх ёстой`);
     setSaving(true);
     try {
       const created = await api<StockReceipt>('/inventory/receipts', {
         method: 'POST',
         body: JSON.stringify({
           warehouseId,
-          supplierName: supplierName.trim(),
+          supplierName: (partner?.name ?? supplierName).trim(),
           supplierCustomerId: partner?.id,
           supplierInvoiceNo: supplierInvoiceNo.trim() || undefined,
           notes: notes.trim() || undefined,
@@ -152,7 +253,9 @@ export default function ReceiptsPage() {
         }),
       });
       setOpen(false);
-      flash('ok', `${created.receiptNumber}: ${lines.length} бараа орлогод авлаа`);
+      setLines([]);
+      flash('ok', `${created.receiptNumber}: ${lines.length} төрлийн бараа орлогод авлаа`);
+      window.open(`/print/receipts/${created.id}`, '_blank', 'noopener');
       await load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
@@ -161,6 +264,8 @@ export default function ReceiptsPage() {
     }
   }
 
+  const shown = rows.filter((r) => ymd(new Date(r.receivedAt)) >= filterFrom);
+
   return (
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
@@ -168,20 +273,21 @@ export default function ReceiptsPage() {
           <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Агуулах</p>
           <h2 className="text-xl font-bold">Бараа орлого</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Нийлүүлэгчээс ирсэн барааг агуулахад авна. Өртөг заавал биш. Алдааг «Агуулахын үлдэгдэл» дээр тохируулгаар засна.
+            Нийлүүлэгчээс ирсэн барааг уншуулж эсвэл хайж нэмнэ — нэг барааг дахин уншуулбал тоо нь нэмэгдэнэ. Өртгийг менежер оруулна.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-end gap-2">
+          <label className="text-xs text-slate-400">
+            Хэзээнээс
+            <input type="date" className="mt-1 block" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} />
+          </label>
           {isOversight || lockedTo ? (
             <button className="btn-primary" onClick={openCreate}>
-              Орлого авах
+              + Орлого авах
             </button>
           ) : (
             <p className="text-xs text-slate-400 max-w-[220px]">Орлого авахын тулд танд агуулах оноогдсон байх ёстой.</p>
           )}
-          <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
-            Шинэчлэх
-          </button>
         </div>
       </div>
 
@@ -194,11 +300,12 @@ export default function ReceiptsPage() {
               <th>Агуулах</th>
               <th>Нийлүүлэгч</th>
               <th>Бараа</th>
-              <th className="text-right pr-3">Өртгийн дүн</th>
+              <th className="text-right">Өртгийн дүн</th>
+              <th className="pr-3" />
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {shown.map((r) => {
               const costed = r.items.filter((i) => i.unitCostMnt != null);
               const sum = costed.reduce((s, i) => s + Number(i.quantity) * (i.unitCostMnt ?? 0), 0);
               return (
@@ -220,8 +327,7 @@ export default function ReceiptsPage() {
                     <ul className="space-y-0.5">
                       {r.items.map((i) => (
                         <li key={i.id}>
-                          <span className="font-mono text-[11px] text-slate-400">{i.product.sku}</span> {i.product.nameMn} ·{' '}
-                          <b>{qty(i.quantity)}</b> {i.product.unit}
+                          {i.product.nameMn} · <b>{qty(i.quantity)}</b> {i.product.unit}
                           {i.unitCostMnt != null && <span className="text-slate-400"> × {tugrik(i.unitCostMnt)}</span>}
                           {isOversight && (
                             <button className="ml-2 text-[11px] text-amber-300 hover:underline" onClick={() => void editCost(r, i)}>
@@ -232,11 +338,14 @@ export default function ReceiptsPage() {
                       ))}
                     </ul>
                   </td>
-                  <td className="py-3 pr-3 text-right">
+                  <td className="py-3 text-right">
                     {costed.length ? tugrik(sum) : '—'}
-                    {costed.length > 0 && costed.length < r.items.length && (
-                      <span className="block text-[11px] text-slate-500">хэсэгчлэн</span>
-                    )}
+                    {costed.length > 0 && costed.length < r.items.length && <span className="block text-[11px] text-slate-500">хэсэгчлэн</span>}
+                  </td>
+                  <td className="py-3 pr-3 text-right">
+                    <a className="btn-ghost px-2 py-1 text-xs" href={`/print/receipts/${r.id}`} target="_blank" rel="noreferrer">
+                      🖨
+                    </a>
                   </td>
                 </tr>
               );
@@ -244,47 +353,56 @@ export default function ReceiptsPage() {
           </tbody>
         </table>
         {loading && <p className="p-3 text-slate-500">Уншиж байна…</p>}
-        {!loading && rows.length === 0 && <p className="p-3 text-slate-500">Орлого алга.</p>}
+        {!loading && shown.length === 0 && <p className="p-3 text-slate-500">Энэ хугацаанд орлого алга. «+ Орлого авах» дарж эхэлнэ.</p>}
       </div>
 
       {open && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={submit} className="card w-full max-w-3xl space-y-3 max-h-[90vh] overflow-auto">
-            <h3 className="font-semibold text-lg">Бараа орлого авах</h3>
+          <form onSubmit={submit} className="card w-full max-w-4xl space-y-4 max-h-[92vh] overflow-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-lg">Бараа орлого авах</h3>
+              <button type="button" className="btn-ghost text-xs" onClick={close}>
+                ✕
+              </button>
+            </div>
             {formError && <p className="text-red-400 text-sm">{formError}</p>}
+
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="block text-xs text-slate-400">
-                Агуулах
+                1. Хаана авах
                 <select className="mt-1 w-full" value={warehouseId} disabled={!!lockedTo} onChange={(e) => setWarehouseId(e.target.value)}>
-                  {warehouses.filter((w) => w.isActive).map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.name}
-                    </option>
-                  ))}
+                  {warehouses
+                    .filter((w) => w.isActive)
+                    .map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                      </option>
+                    ))}
                 </select>
               </label>
-              <div className="block text-xs text-slate-400 space-y-1">
-                Нийлүүлэгч
-                {isOversight && (
-                <CustomerPicker
-                  value={partner}
-                  onChange={(c) => {
-                    setPartner(c);
-                    if (c) setSupplierName(c.name);
-                  }}
-                  filter={(c) => !!c.sellsToUs || !!c.barterContract}
-                />
-                )}
-                {!partner && (
-                  <input
-                    className="w-full"
-                    required
-                    minLength={2}
-                    placeholder={isOversight ? 'эсвэл нэрээр бичих (тооцоонд орохгүй)' : 'Нийлүүлэгчийн нэр'}
-                    value={supplierName}
-                    onChange={(e) => setSupplierName(e.target.value)}
-                  />
-                )}
+              <div className="block text-xs text-slate-400">
+                2. Нийлүүлэгч
+                <div className="mt-1 space-y-1">
+                  {isOversight && (
+                    <CustomerPicker
+                      value={partner}
+                      onChange={(c) => {
+                        setPartner(c);
+                        if (c) setSupplierName(c.name);
+                      }}
+                      filter={(c) => !!c.sellsToUs || !!c.barterContract}
+                    />
+                  )}
+                  {!partner && (
+                    <input
+                      className="w-full"
+                      placeholder={isOversight ? 'Гэрээгүй бол нэрээр бичнэ' : 'Нийлүүлэгчийн нэр'}
+                      value={supplierName}
+                      onChange={(e) => setSupplierName(e.target.value)}
+                    />
+                  )}
+                  {partner && <p className="text-[11px] text-sky-300">Өртөгтэй мөрүүд энэ харилцагчийн тооцоонд (өглөг) орно.</p>}
+                </div>
               </div>
               <label className="block text-xs text-slate-400">
                 Падаан / нэхэмжлэхийн № (заавал биш)
@@ -293,33 +411,28 @@ export default function ReceiptsPage() {
             </div>
 
             <div className="relative">
+              <p className="mb-1 text-xs text-slate-400">3. Бараа (баркод уншуулах эсвэл нэр, код бичээд Enter)</p>
               <input
-                className="w-full"
+                ref={searchRef}
+                className="w-full text-base"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => {
-                  // Barcode scanner / Enter: add the exact code or the only match.
                   if (e.key !== 'Enter') return;
                   e.preventDefault();
-                  const t = search.trim().toLowerCase();
-                  const hit = results.find((r) => r.sku.toLowerCase() === t) ?? (results.length === 1 ? results[0] : undefined);
-                  if (hit) return addLine(hit);
-                  // A scanner is faster than the search: look the code up directly.
-                  void api<Product[]>(`/products?q=${encodeURIComponent(search.trim())}`)
-                    .then((found) => {
-                      const exact = found.find((r) => r.sku.toLowerCase() === t);
-                      if (exact) addLine(exact);
-                    })
-                    .catch(() => undefined);
+                  void onEnter();
                 }}
-                placeholder="Бараа хайх эсвэл баркод уншуулах (Enter нэмнэ)…"
+                placeholder="🔍 Баркод / нэр / код…"
               />
               {results.length > 0 && (
-                <ul className="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded border border-slate-700 bg-steel-900 divide-y divide-slate-800">
+                <ul className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded border border-slate-700 bg-steel-900 divide-y divide-slate-800">
                   {results.map((p) => (
                     <li key={p.id}>
-                      <button type="button" className="w-full text-left px-3 py-1.5 text-sm hover:bg-steel-800" onClick={() => addLine(p)}>
-                        <span className="font-mono text-[11px] text-slate-400">{p.sku}</span> {p.nameMn}
+                      <button type="button" className="flex w-full justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-steel-800" onClick={() => addLine(p)}>
+                        <span>
+                          {p.nameMn} <span className="font-mono text-[11px] text-slate-500">{p.sku}</span>
+                        </span>
+                        <span className="text-xs text-slate-400">үлдэгдэл {qty(p.stockQty)} {p.unit}</span>
                       </button>
                     </li>
                   ))}
@@ -327,72 +440,126 @@ export default function ReceiptsPage() {
               )}
             </div>
 
+            {unknown && (
+              <div className="rounded-lg border border-amber-700 bg-amber-950/30 p-3 text-sm">
+                <p className="text-amber-200">
+                  «<span className="font-mono">{unknown}</span>» бүртгэлгүй бараа.
+                  {!canAddProduct && ' Админ эсвэл ерөнхий менежерт бүртгүүлнэ үү.'}
+                </p>
+                {canAddProduct && (
+                  <div className="mt-2 grid gap-2 sm:grid-cols-5">
+                    <input className="sm:col-span-2" placeholder="Барааны нэр" value={newProduct.nameMn} onChange={(e) => setNewProduct({ ...newProduct, nameMn: e.target.value })} />
+                    <input placeholder="Нэгж (ш, кг, м…)" value={newProduct.unit} onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })} />
+                    <input placeholder="Зарах үнэ ₮" inputMode="numeric" value={newProduct.priceMnt} onChange={(e) => setNewProduct({ ...newProduct, priceMnt: e.target.value })} />
+                    <button type="button" className="btn-primary text-sm" onClick={() => void createProduct()}>
+                      Бүртгээд нэмэх
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {lines.length > 0 && (
               <table className="w-full text-sm">
                 <thead className="text-left text-slate-400 text-xs">
                   <tr>
                     <th className="py-1">Бараа</th>
-                    <th>Тоо</th>
-                    <th>Нэгж өртөг ₮ (заавал биш)</th>
+                    <th>Одоо байгаа</th>
+                    <th>Ирсэн тоо</th>
+                    <th>Нэгж өртөг ₮</th>
                     <th className="text-right">Дүн</th>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l, idx) => (
-                    <tr key={l.productId} className="border-t border-slate-800">
-                      <td className="py-1.5">
-                        <span className="font-mono text-[11px] text-slate-400">{l.sku}</span> {l.nameMn}
-                      </td>
-                      <td>
-                        <input
-                          className="w-24"
-                          type="number"
-                          min="0.001"
-                          step="any"
-                          required
-                          value={l.quantity}
-                          onChange={(e) => setLines(lines.map((x, i) => (i === idx ? { ...x, quantity: e.target.value } : x)))}
-                        />{' '}
-                        <span className="text-xs text-slate-400">{l.unit}</span>
-                      </td>
-                      <td>
-                        <input
-                          className="w-32"
-                          type="number"
-                          min="0"
-                          step="1"
-                          disabled={!isOversight}
-                          placeholder={isOversight ? '' : 'менежер оруулна'}
-                          value={l.unitCost}
-                          onChange={(e) => setLines(lines.map((x, i) => (i === idx ? { ...x, unitCost: e.target.value } : x)))}
-                        />
-                      </td>
-                      <td className="text-right text-slate-300">
-                        {l.unitCost && l.quantity ? tugrik(Number(l.unitCost) * Number(l.quantity)) : '—'}
-                      </td>
-                      <td className="text-right">
-                        <button type="button" className="btn-ghost text-xs px-2 py-0.5" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {lines.map((l, idx) => {
+                    const cost = Number(l.unitCost) || 0;
+                    const warn = cost > 0 && l.priceMnt > 0 && cost >= l.priceMnt;
+                    return (
+                      <tr key={l.productId} className="border-t border-slate-800 align-top">
+                        <td className="py-1.5">
+                          {l.nameMn}
+                          <span className="block font-mono text-[11px] text-slate-500">
+                            {l.sku} · зарах үнэ {tugrik(l.priceMnt)}
+                          </span>
+                        </td>
+                        <td className="text-xs text-slate-400">
+                          {qty(l.stockQty)} {l.unit}
+                        </td>
+                        <td>
+                          <input
+                            className="w-24 text-right"
+                            type="number"
+                            min="0.001"
+                            step="any"
+                            required
+                            value={l.quantity}
+                            onChange={(e) => setLines(lines.map((x, i) => (i === idx ? { ...x, quantity: e.target.value } : x)))}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                searchRef.current?.focus();
+                              }
+                            }}
+                          />{' '}
+                          <span className="text-xs text-slate-400">{l.unit}</span>
+                        </td>
+                        <td>
+                          <input
+                            className={`w-28 text-right ${warn ? 'border-red-500' : ''}`}
+                            type="number"
+                            min="0"
+                            step="1"
+                            disabled={!isOversight}
+                            placeholder={isOversight ? (l.lastCostMnt != null ? `өмнө ${l.lastCostMnt}` : '') : 'менежер'}
+                            value={l.unitCost}
+                            onChange={(e) => setLines(lines.map((x, i) => (i === idx ? { ...x, unitCost: e.target.value } : x)))}
+                          />
+                          {warn && <span className="block text-[11px] text-red-300">зарах үнээс их/тэнцүү</span>}
+                          {isOversight && l.lastCostMnt != null && !l.unitCost && (
+                            <button
+                              type="button"
+                              className="block text-[11px] text-amber-brand hover:underline"
+                              onClick={() => setLines(lines.map((x, i) => (i === idx ? { ...x, unitCost: String(l.lastCostMnt) } : x)))}
+                            >
+                              өмнөх өртөг {tugrik(l.lastCostMnt)}
+                            </button>
+                          )}
+                        </td>
+                        <td className="text-right text-slate-300">{l.unitCost && l.quantity ? tugrik(cost * Number(l.quantity)) : '—'}</td>
+                        <td className="text-right">
+                          <button type="button" className="btn-ghost text-xs px-2 py-0.5" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t border-slate-700 text-sm">
+                    <td className="py-2 font-semibold">{lines.length} төрөл</td>
+                    <td />
+                    <td className="font-semibold">{qty(units)}</td>
+                    <td />
+                    <td className="text-right font-bold">{total > 0 ? tugrik(total) : '—'}</td>
+                    <td />
+                  </tr>
+                </tfoot>
               </table>
             )}
-            {total > 0 && <p className="text-right text-sm">Өртгийн нийт дүн: <b>{tugrik(total)}</b></p>}
 
             <label className="block text-xs text-slate-400">
               Тэмдэглэл
-              <input className="mt-1 w-full" maxLength={500} value={notes} onChange={(e) => setNotes(e.target.value)} />
+              <input className="mt-1 w-full" maxLength={500} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="ж: машин 1234 УБА, гэмтэлтэй 2 ш буцаасан" />
             </label>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setOpen(false)}>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <span className="mr-auto text-xs text-slate-500">Хадгалсны дараа орлогын баримт хэвлэх цонх нээгдэнэ.</span>
+              <button type="button" className="btn-ghost" onClick={close}>
                 Болих
               </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Орлогод авах'}
+              <button className="btn-primary" disabled={saving || !lines.length}>
+                {saving ? 'Хадгалж байна…' : `Орлогод авах (${lines.length})`}
               </button>
             </div>
           </form>
