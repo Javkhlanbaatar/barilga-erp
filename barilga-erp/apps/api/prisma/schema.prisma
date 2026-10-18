@@ -79,6 +79,10 @@ enum AccountEntryKind {
   OFFSET
   /// Manager correction, either sign.
   ADJUSTMENT
+  /// They owe us more without an order (e.g. a service or a fee we billed them). Stored negative.
+  CHARGE
+  /// They paid us money outside an order (an advance, or after their order debts were cleared). Stored positive.
+  PAYMENT_FROM_PARTNER
 }
 
 enum BillType {
@@ -783,6 +787,7 @@ model StockReceipt {
   items StockReceiptItem[]
 
   @@index([warehouseId, receivedAt])
+  @@index([supplierCustomerId, receivedAt])
   @@map("inv_stock_receipts")
 }
 
@@ -856,6 +861,8 @@ model AccountEntry {
   /// What caused it, e.g. RECEIPT + receipt id, OFFSET + order id.
   refType     String?          @map("ref_type")
   refId       String?          @map("ref_id")
+  /// How money moved for payment lines (cash / card / transfer); null for goods and corrections.
+  method      PayMethod?
   createdById String           @map("created_by_id")
   createdBy   User             @relation("AccountEntryBy", fields: [createdById], references: [id])
   createdAt   DateTime         @default(now())

@@ -128,15 +128,21 @@ class Table {
     const owned = NESTED_ITEMS[this.name];
     if (include?.items && owned) {
       const child = (this.db as any)[owned.table] as Table;
-      out.items = child.rows.filter((r: Row) => r[owned.fk] === row.id).map((r: Row) => ({ ...r }));
+      const sub = isPlain(include.items) ? (include.items as Row) : {};
+      out.items = child.rows.filter((r: Row) => r[owned.fk] === row.id).map((r: Row) => child.decorate(r, sub));
     }
     // Other to-many lists by parent table: relation name → [child table, foreign key].
     const TO_MANY: Record<string, Record<string, [string, string]>> = {
       cashSession: { movements: ['cashMovement', 'sessionId'] },
       priceList: { items: ['priceListItem', 'priceListId'] },
+      order: { returns: ['salesReturn', 'orderId'] },
     };
     for (const [rel, [table, fk]] of Object.entries(TO_MANY[this.name] ?? {})) {
-      if (include?.[rel]) out[rel] = ((this.db as any)[table] as Table).rows.filter((r: Row) => r[fk] === row.id).map((r: Row) => ({ ...r }));
+      if (include?.[rel]) {
+        const child = (this.db as any)[table] as Table;
+        const sub = isPlain(include[rel]) ? (include[rel] as Row) : {};
+        out[rel] = child.rows.filter((r: Row) => r[fk] === row.id).map((r: Row) => child.decorate(r, sub));
+      }
     }
     if (include?.invoice && this.name === 'order') {
       const inv = this.db.invoice.rows.find((i) => i.orderId === row.id);
@@ -155,7 +161,7 @@ class Table {
           .filter((i) => i.orderId === row.id)
           .map((i) => {
             const item: Row = { ...i };
-            if (isPlain(include.items) && include.items.include?.product) {
+            if (isPlain(include.items) && (include.items.include?.product || include.items.select?.product)) {
               const p = this.db.product.rows.find((x) => x.id === i.productId);
               if (p) item.product = { ...p };
             }

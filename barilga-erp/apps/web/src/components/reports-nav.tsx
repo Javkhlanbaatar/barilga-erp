@@ -56,6 +56,12 @@ export const REPORTS: Array<{ href: string; label: string; hint: string; roles: 
     feature: 'PARTNER_ACCOUNTS',
   },
   {
+    href: '/reports/partners',
+    label: 'Харилцагчийн тайлан',
+    hint: 'Авлагын насжилт, борлуулалт харилцагчаар, худалдан авалт нийлүүлэгчээр',
+    roles: ['ADMIN', 'MANAGER'],
+  },
+  {
     href: '/reports/edits',
     label: 'Засварын түүх',
     hint: 'Үнэ, тооцоо, цалин, эрх, тохиргоо, баримтын загварыг хэн, хэзээ өөрчилсөн',

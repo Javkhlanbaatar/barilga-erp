@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { CustomerPicker } from '@/components/customer-picker';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
+import { useFeatures } from '@/lib/features';
 import { hasRole, homeForRole, OVERSIGHT_ROLES, TOP_ROLES } from '@/lib/rbac';
 import { AuthUser, Customer, Product, Role, StockReceipt, Warehouse } from '@/lib/types';
 
@@ -53,9 +54,12 @@ export default function ReceiptsPage() {
   const [unknown, setUnknown] = useState<string | null>(null);
   const [newProduct, setNewProduct] = useState({ nameMn: '', unit: 'ш', priceMnt: '', sku: '' });
   const [filterFrom, setFilterFrom] = useState(() => ymd(new Date(Date.now() - 29 * 86_400_000)));
+  /** Putting an existing receipt on a partner's account (or taking it off). */
+  const [attach, setAttach] = useState<{ receipt: StockReceipt; partner: Customer | null; reason: string; busy: boolean } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
+  const features = useFeatures();
   const canAddProduct = hasRole(me?.role, TOP_ROLES);
   const lockedTo = isOversight ? null : (me?.warehouseId ?? null);
 
@@ -228,6 +232,24 @@ export default function ReceiptsPage() {
     }
   }
 
+  async function saveAttach(e: FormEvent) {
+    e.preventDefault();
+    if (!attach || attach.reason.trim().length < 3) return;
+    setAttach({ ...attach, busy: true });
+    try {
+      await api(`/inventory/receipts/${attach.receipt.id}/partner`, {
+        method: 'PATCH',
+        body: JSON.stringify({ supplierCustomerId: attach.partner?.id ?? null, reason: attach.reason.trim() }),
+      });
+      flash('ok', attach.partner ? `${attach.receipt.receiptNumber}: ${attach.partner.name}-ийн тооцоонд орлоо` : `${attach.receipt.receiptNumber}: тооцооноос гарлаа`);
+      setAttach(null);
+      await load();
+    } catch (err) {
+      flash('error', err instanceof Error ? err.message : 'Хадгалж чадсангүй');
+      setAttach((a) => (a ? { ...a, busy: false } : a));
+    }
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     setFormError('');
@@ -320,6 +342,14 @@ export default function ReceiptsPage() {
                   <td className="py-3">
                     {r.supplierName}
                     {r.supplierCustomer && <span className="block text-[11px] text-sky-300">харилцагчийн тооцоонд орсон</span>}
+                    {isOversight && features.enabled('PARTNER_ACCOUNTS') && (
+                      <button
+                        className="block text-[11px] text-amber-300 hover:underline"
+                        onClick={() => setAttach({ receipt: r, partner: null, reason: '', busy: false })}
+                      >
+                        {r.supplierCustomer ? 'харилцагч солих / салгах' : 'харилцагчийн тооцоонд оруулах'}
+                      </button>
+                    )}
                     {r.supplierInvoiceNo && <span className="block text-xs text-slate-400">№ {r.supplierInvoiceNo}</span>}
                     {r.notes && <span className="block text-xs text-slate-500">{r.notes}</span>}
                   </td>
@@ -355,6 +385,42 @@ export default function ReceiptsPage() {
         {loading && <p className="p-3 text-slate-500">Уншиж байна…</p>}
         {!loading && shown.length === 0 && <p className="p-3 text-slate-500">Энэ хугацаанд орлого алга. «+ Орлого авах» дарж эхэлнэ.</p>}
       </div>
+
+      {attach && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => !attach.busy && setAttach(null)}>
+          <form onSubmit={saveAttach} className="card w-full max-w-md space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold">{attach.receipt.receiptNumber}: нийлүүлэгч харилцагч</h3>
+            <p className="text-xs text-slate-400">
+              Одоо: <b>{attach.receipt.supplierName}</b>
+              {attach.receipt.supplierCustomer ? ' (тооцоонд орсон)' : ' (тооцоонд ороогүй)'}. Сонгосон харилцагчийн өглөгт энэ орлогын үнэтэй
+              мөрүүдийн дүн орно; хоосон үлдээвэл тооцооноос гарна.
+            </p>
+            <CustomerPicker
+              value={attach.partner}
+              onChange={(c) => setAttach({ ...attach, partner: c })}
+              filter={(c) => !!c.sellsToUs || !!c.barterContract}
+            />
+            <label className="block text-xs text-slate-400">
+              Шалтгаан (засварын түүхэд бичигдэнэ)
+              <input
+                className="mt-1 block w-full"
+                required
+                minLength={3}
+                value={attach.reason}
+                onChange={(e) => setAttach({ ...attach, reason: e.target.value })}
+              />
+            </label>
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn-ghost" onClick={() => setAttach(null)}>
+                Болих
+              </button>
+              <button className="btn-primary" disabled={attach.busy || (!attach.partner && !attach.receipt.supplierCustomer)}>
+                {attach.partner ? 'Тооцоонд оруулах' : 'Тооцооноос гаргах'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {open && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">

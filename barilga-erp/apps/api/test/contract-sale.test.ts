@@ -35,7 +35,7 @@ describe('contract sale (гэрээгээр)', () => {
     const order = await w.db.order.create({ data: { orderNumber: 'BR-C1', status: 'PENDING_PAYMENT', totalMnt: 150_000, customerId: w.partner.id } });
     await w.service.settleSplits(order.id, [{ method: 'CREDIT', amount: 150_000 }] as any);
     await (w.orders as any).closeAgainstPayable(order.id, 'BR-C1', w.partner.id, 150_000, cashier.id);
-    assert.deepEqual(await w.accounts.balance(w.partner.id), { receivableMnt: 0, payableMnt: 50_000, netMnt: -50_000 });
+    assert.deepEqual(await w.accounts.balance(w.partner.id), { receivableMnt: 0, payableMnt: 50_000, netMnt: -50_000, ordersOwedMnt: 0, ledgerMnt: 50_000 });
     assert.equal(w.db.payment.rows.filter((p: any) => p.method === 'OFFSET').reduce((s: number, p: any) => s + p.amountMnt, 0), 150_000);
     const st = await w.accounts.statement(w.partner.id);
     assert.equal(st.lines[st.lines.length - 1].balanceMnt, -50_000);

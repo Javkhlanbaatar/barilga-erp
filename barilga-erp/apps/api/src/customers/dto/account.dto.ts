@@ -5,8 +5,12 @@ import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, M
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
 export class AddAccountEntryDto {
-  /** PURCHASE: we got goods from them · PAYMENT_TO_PARTNER: we paid them · ADJUSTMENT: correction (±). */
-  @IsIn([AccountEntryKind.PURCHASE, AccountEntryKind.PAYMENT_TO_PARTNER, AccountEntryKind.ADJUSTMENT])
+  /**
+   * PURCHASE: we got goods/services from them (amount only; goods with quantities go through a receipt) ·
+   * PAYMENT_TO_PARTNER: we paid them · CHARGE: they owe us more without an order · ADJUSTMENT: correction (±).
+   * Money from them is recorded with the receive action.
+   */
+  @IsIn([AccountEntryKind.PURCHASE, AccountEntryKind.PAYMENT_TO_PARTNER, AccountEntryKind.CHARGE, AccountEntryKind.ADJUSTMENT])
   kind!: AccountEntryKind;
 
   /** ₮. Positive for purchases and payments; adjustments may be negative. */
@@ -24,6 +28,36 @@ export class AddAccountEntryDto {
   @IsOptional()
   @IsDateString()
   occurredAt?: string;
+
+  /** How we paid them (PAYMENT_TO_PARTNER); cash leaves the drawer. */
+  @IsOptional()
+  @IsIn(['CASH', 'CARD', 'TRANSFER'])
+  method?: 'CASH' | 'CARD' | 'TRANSFER';
+}
+
+/** The partner paid us: order debts first, the rest is kept as their advance. */
+export class ReceiveFromPartnerDto {
+  @IsInt()
+  @Min(1)
+  @Max(2_000_000_000)
+  amountMnt!: number;
+
+  @IsIn(['CASH', 'CARD', 'TRANSFER'])
+  method!: 'CASH' | 'CARD' | 'TRANSFER';
+
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @MaxLength(300)
+  description?: string;
+}
+
+export class VoidAccountEntryDto {
+  @Transform(trim)
+  @IsString()
+  @MinLength(3)
+  @MaxLength(300)
+  reason!: string;
 }
 
 export class EditAccountEntryDto {

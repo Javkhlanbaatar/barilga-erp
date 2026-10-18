@@ -680,21 +680,87 @@ export type WarehouseReport = {
 };
 
 /** Two-way partner account (харилцагчийн тооцоо). net > 0: they owe us; net < 0: we owe them. */
+export type AccountLineKind =
+  | 'ON_ACCOUNT'
+  | 'PAID_BY_THEM'
+  | 'RETURNED'
+  | 'PURCHASE'
+  | 'PAYMENT_TO_PARTNER'
+  | 'OFFSET'
+  | 'ADJUSTMENT'
+  | 'CHARGE'
+  | 'PAYMENT_FROM_PARTNER';
+
 export type AccountStatement = {
-  customer: { id: string; name: string; barterContract: string | null };
+  customer: { id: string; name: string; phone?: string; regNumber?: string | null; address?: string | null; barterContract: string | null };
   receivableMnt: number;
   payableMnt: number;
   netMnt: number;
+  /** Part of the receivable owed on on-account orders (what «хасалт» and «өр төлөх» settle). */
+  ordersOwedMnt?: number;
+  /** Sum of the partner ledger: + we owe them, − they owe us. */
+  ledgerMnt?: number;
+  /** With a date range: balance brought forward, debit (they owe more), credit (they owe less), closing. */
+  period?: { from: string | null; to: string | null; openingMnt: number; debitMnt: number; creditMnt: number; closingMnt: number };
   lines: Array<{
     at: string;
-    kind: 'ON_ACCOUNT' | 'PAID_BY_THEM' | 'RETURNED' | 'PURCHASE' | 'PAYMENT_TO_PARTNER' | 'OFFSET' | 'ADJUSTMENT';
+    kind: AccountLineKind;
     description: string;
     effectMnt: number;
     balanceMnt: number;
     orderId?: string;
     entryId?: string;
+    refType?: string | null;
+    refId?: string | null;
+    method?: string | null;
     editable?: boolean;
+    voided?: boolean;
   }>;
+};
+
+/** What we sold one partner and bought from them in a period (GET /customers/:id/trade). */
+export type PartnerTrade = {
+  customer: { id: string; name: string };
+  range: { from: string | null; to: string | null };
+  purchasesShown: boolean;
+  totals: {
+    salesCount: number;
+    salesMnt: number;
+    returnedMnt: number;
+    netSalesMnt: number;
+    moneyMnt: number;
+    offsetMnt: number;
+    owedMnt: number;
+    purchasesCount: number;
+    purchasesMnt: number;
+    unpricedLines: number;
+  };
+  sales: Array<{
+    id: string;
+    orderNumber: string;
+    at: string;
+    status: string;
+    warehouse: string | null;
+    totalMnt: number;
+    moneyMnt: number;
+    offsetMnt: number;
+    owedMnt: number;
+    returnedMnt: number;
+    items: Array<{ id: string; sku: string; nameMn: string; unit: string; quantity: number; unitPrice: number; lineTotal: number }>;
+  }>;
+  purchases: Array<{
+    id: string;
+    receiptNumber: string;
+    at: string;
+    warehouse: string;
+    supplierInvoiceNo: string | null;
+    totalMnt: number;
+    unpricedLines: number;
+    /** id is the product; itemId the receipt line (for pricing it later). */
+    items: Array<{ id: string; itemId: string; sku: string; nameMn: string; unit: string; quantity: number; unitCostMnt: number | null; lineMnt: number | null }>;
+  }>;
+  goods: Array<{ id: string; sku: string; nameMn: string; unit: string; soldQty: number; soldMnt: number; boughtQty: number; boughtMnt: number }>;
+  truncated: boolean;
 };
 
 export type InvoiceState = 'DRAFT' | 'SENT' | 'VIEWED' | 'PARTIAL' | 'OVERDUE' | 'PAID' | 'CANCELLED';

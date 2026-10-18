@@ -7,6 +7,7 @@ import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { AccountsService } from './accounts.service';
 import { CustomersService } from './customers.service';
+import { PartnerTradeService } from './partner-trade.service';
 import { CreateCustomerDto, PayDebtDto, UpdateCustomerDto } from './dto/customer.dto';
 
 @Controller('customers')
@@ -17,7 +18,20 @@ export class CustomersController {
   constructor(
     private readonly customers: CustomersService,
     private readonly accounts: AccountsService,
+    private readonly trade: PartnerTradeService,
   ) {}
+
+  /** Order debt this user may collect for the customer (their own warehouses). */
+  @Get(':id/owed-here')
+  owedHere(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.accounts.owedHere(id, user);
+  }
+
+  /** What we sold them and bought from them in a period (purchases for managers). */
+  @Get(':id/trade')
+  tradeWith(@Param('id') id: string, @Query('from') from: string | undefined, @Query('to') to: string | undefined, @CurrentUser() user: AuthUser) {
+    return this.trade.trade(id, { from, to }, user);
+  }
 
   /** The customer pays off their debt; the money goes to the oldest open orders first. */
   @Post(':id/pay-debt')

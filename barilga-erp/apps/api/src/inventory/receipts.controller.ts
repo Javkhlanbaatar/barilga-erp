@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -19,8 +19,23 @@ export class ReceiptsController {
   constructor(private readonly receipts: ReceiptsService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query('warehouseId') warehouseId?: string, @Query('limit') limit?: string) {
-    return this.receipts.list(user, { warehouseId, limit: limit ? Number(limit) : undefined });
+  list(
+    @CurrentUser() user: AuthUser,
+    @Query('warehouseId') warehouseId?: string,
+    @Query('limit') limit?: string,
+    @Query('supplierCustomerId') supplierCustomerId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    return this.receipts.list(user, { warehouseId, supplierCustomerId, from, to, limit: limit ? Number(limit) : undefined });
+  }
+
+  /** Put an existing receipt on a partner's account (or take it off). Managers only. */
+  @Patch(':id/partner')
+  attachPartner(@Param('id') id: string, @Body() body: { supplierCustomerId?: string | null; reason?: string }, @CurrentUser() user: AuthUser) {
+    const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+    if (reason.length < 3) throw new BadRequestException('reason is required');
+    return this.receipts.attachPartner(id, body?.supplierCustomerId || null, reason, user);
   }
 
   @Get(':id')

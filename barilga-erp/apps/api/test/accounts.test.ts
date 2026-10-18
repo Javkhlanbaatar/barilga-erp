@@ -33,7 +33,7 @@ describe('partner account', () => {
     const w = await world();
     await w.onAccount(300_000, 'BR-1');
     await w.accounts.addEntry(w.partner.id, { kind: 'PURCHASE', amountMnt: 120_000, description: 'Тоосго авсан' } as any, manager);
-    assert.deepEqual(await w.accounts.balance(w.partner.id), { receivableMnt: 300_000, payableMnt: 120_000, netMnt: 180_000 });
+    assert.deepEqual(await w.accounts.balance(w.partner.id), { receivableMnt: 300_000, payableMnt: 120_000, netMnt: 180_000, ordersOwedMnt: 300_000, ledgerMnt: 120_000 });
     await w.accounts.addEntry(w.partner.id, { kind: 'PAYMENT_TO_PARTNER', amountMnt: 20_000, description: 'Бэлнээр төлсөн' } as any, manager);
     assert.equal((await w.accounts.balance(w.partner.id)).payableMnt, 100_000);
   });
@@ -99,7 +99,11 @@ describe('partner account', () => {
     await assert.rejects(() => w.accounts.addEntry(w.partner.id, { kind: 'ADJUSTMENT', amountMnt: 0, description: 'xxx' } as any, manager), BadRequestException);
     await assert.rejects(() => w.accounts.addEntry(w.partner.id, { kind: 'OFFSET', amountMnt: 5, description: 'xxx' } as any, manager), BadRequestException);
     await w.accounts.addEntry(w.partner.id, { kind: 'ADJUSTMENT', amountMnt: -3_000, description: 'Зөрүү засав' } as any, manager);
-    assert.equal((await w.accounts.balance(w.partner.id)).payableMnt, -3_000);
+    // A ledger below zero means they owe us: it shows as receivable, not as a negative payable.
+    const b = await w.accounts.balance(w.partner.id);
+    assert.equal(b.payableMnt, 0);
+    assert.equal(b.receivableMnt, 3_000);
+    assert.equal(b.netMnt, 3_000);
   });
 });
 

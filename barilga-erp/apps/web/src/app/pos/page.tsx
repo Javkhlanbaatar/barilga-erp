@@ -172,6 +172,21 @@ export default function CheckoutPOS() {
     });
   }, [router]);
 
+  // Opened from a partner's account (?customer=<id>&pay=CONTRACT): the partner is chosen and the goods are paid
+  // with what we owe them (бараагаар тооцоо хаах).
+  useEffect(() => {
+    if (!userId) return;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('customer');
+    if (!id) return;
+    api<Customer>(`/customers/${id}`)
+      .then((c) => {
+        pickCustomer(c);
+        if (params.get('pay') === 'CONTRACT') setPaymentMethodState('CONTRACT');
+      })
+      .catch(() => undefined);
+  }, [userId]);
+
   // Load the full active catalog once. Search only filters the grid, so the barcode
   // scanner (which reads productsRef) still resolves any SKU while a search is active.
   useEffect(() => {

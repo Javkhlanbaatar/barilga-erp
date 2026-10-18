@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OVERSIGHT_ROLES, POS_ROLES } from '../auth/rbac';
@@ -6,7 +6,7 @@ import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { AccountsService } from './accounts.service';
-import { AddAccountEntryDto, EditAccountEntryDto, OffsetDto } from './dto/account.dto';
+import { AddAccountEntryDto, EditAccountEntryDto, OffsetDto, ReceiveFromPartnerDto, VoidAccountEntryDto } from './dto/account.dto';
 
 /** Partner accounts: everyone at the till may read a balance; only managers/admin change it. */
 @Controller('accounts')
@@ -23,8 +23,22 @@ export class AccountsController {
 
   @Get(':customerId')
   @Roles(...POS_ROLES)
-  statement(@Param('customerId') customerId: string) {
-    return this.accounts.statement(customerId);
+  statement(@Param('customerId') customerId: string, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.accounts.statement(customerId, { from, to });
+  }
+
+  /** The partner paid us money: their order debts first, the rest is their advance. */
+  @Post(':customerId/receive')
+  @Roles(...OVERSIGHT_ROLES)
+  receive(@Param('customerId') customerId: string, @Body() dto: ReceiveFromPartnerDto, @CurrentUser() user: AuthUser) {
+    return this.accounts.receive(customerId, dto.amountMnt, dto.method, dto.description ?? '', user);
+  }
+
+  /** Cancel a hand-written line (an opposite line is written; both stay in the history). */
+  @Post('entries/:entryId/void')
+  @Roles(...OVERSIGHT_ROLES)
+  voidEntry(@Param('entryId') entryId: string, @Body() dto: VoidAccountEntryDto, @CurrentUser() user: AuthUser) {
+    return this.accounts.voidEntry(entryId, dto.reason, user);
   }
 
   @Post(':customerId/entries')

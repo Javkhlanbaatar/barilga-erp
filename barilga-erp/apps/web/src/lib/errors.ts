@@ -43,6 +43,8 @@ const EXACT: Array<[RegExp, string]> = [
   [/^Invoice was cancelled/, 'Нэхэмжлэх цуцлагдсан байна.'],
   [/^customerId is required/, 'Харилцагч сонгоно уу.'],
   [/^days must be/, 'Хоногийн тоо 1–90 байна.'],
+  [/^Amount is too large/, 'Дүн хэт их байна.'],
+  [/^reason is required/, 'Шалтгаанаа бичнэ үү.'],
   [/^Order is no longer awaiting payment/, 'Захиалга төлбөр хүлээхээ больсон байна (төлөгдсөн эсвэл цуцлагдсан).'],
   [/^Only orders awaiting payment can be cancelled/, 'Зөвхөн төлбөр хүлээж буй захиалгыг цуцална.'],
   [/^Returns are only allowed after the order is paid/, 'Төлөгдсөн захиалгад л буцаалт хийнэ.'],

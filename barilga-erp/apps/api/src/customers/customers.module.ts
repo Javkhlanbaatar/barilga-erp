@@ -6,12 +6,13 @@ import { CustomersController } from './customers.controller';
 import { CustomersService } from './customers.service';
 import { SettingsModule } from '../settings/settings.module';
 import { PriceListsController, PublicPriceListsController } from './price-lists.controller';
+import { PartnerTradeService } from './partner-trade.service';
 import { PriceListsService } from './price-lists.service';
 
 @Module({
   imports: [PaymentModule, SettingsModule],
   controllers: [CustomersController, PriceListsController, PublicPriceListsController, AccountsController],
-  providers: [CustomersService, PriceListsService, AccountsService],
-  exports: [CustomersService],
+  providers: [CustomersService, PriceListsService, AccountsService, PartnerTradeService],
+  exports: [CustomersService, AccountsService],
 })
 export class CustomersModule {}

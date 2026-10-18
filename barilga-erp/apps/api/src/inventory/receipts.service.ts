@@ -137,6 +137,7 @@ export class ReceiptsService {
    */
   async editItemCost(receiptId: string, itemId: string, unitCostMnt: number | null, reason: string, user: AuthUser) {
     if (!isManagerRole(user.role)) throw new ForbiddenException('Only a manager or admin can change purchase prices');
+    await this.get(receiptId, user); // a branch manager only prices receipts of their own warehouses
     await this.prisma.$transaction(async (tx) => {
       const item = await tx.stockReceiptItem.findFirst({ where: { id: itemId, receiptId }, include: { receipt: true } });
       if (!item) throw new NotFoundException('Receipt line not found');
@@ -182,8 +183,65 @@ export class ReceiptsService {
           actorId: user.id,
         },
       });
-    });
+      // Serializable like attachPartner, so pricing a line while the receipt is moved to a partner cannot leave
+      // the partner's account with the old total.
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     this.log.log(`Receipt ${receiptId} line ${itemId} cost → ${unitCostMnt} by ${user.id}: ${reason}`);
+    return this.get(receiptId, user);
+  }
+
+  /**
+   * Goods that came in without a partner chosen (or from the wrong one) are put on a partner's account later:
+   * the receipt is linked and its priced lines become what we owe them. Lines priced later follow
+   * automatically (editItemCost). Managers only; kept in the edits report.
+   */
+  async attachPartner(receiptId: string, supplierCustomerId: string | null, reason: string, user: AuthUser) {
+    if (!isManagerRole(user.role)) throw new ForbiddenException('Only a manager or admin can change the supplier partner');
+    await this.get(receiptId, user);
+    await this.prisma.$transaction(
+      async (tx) => {
+        const receipt = await tx.stockReceipt.findUniqueOrThrow({ where: { id: receiptId }, include: { items: true } });
+        if ((receipt.supplierCustomerId ?? null) === supplierCustomerId) throw new BadRequestException('Өөрчлөлт алга / Nothing changes');
+        const partner = supplierCustomerId ? await tx.customer.findUnique({ where: { id: supplierCustomerId } }) : null;
+        if (supplierCustomerId && !partner) throw new BadRequestException('Supplier partner not found');
+        if (partner && !partner.sellsToUs && !partner.barterContract) {
+          throw new BadRequestException('Энэ харилцагч нийлүүлэгч биш / Partner is not marked as a supplier');
+        }
+        const entry = await tx.accountEntry.findFirst({ where: { refType: 'RECEIPT', refId: receiptId } });
+        const owed = ReceiptsService.costTotal(receipt.items);
+        if (entry) await tx.accountEntry.delete({ where: { id: entry.id } });
+        if (partner && owed > 0) {
+          await tx.accountEntry.create({
+            data: {
+              customerId: partner.id,
+              kind: AccountEntryKind.PURCHASE,
+              amountMnt: owed,
+              description: `Бараа орлого ${receipt.receiptNumber}${receipt.supplierInvoiceNo ? ` (падаан ${receipt.supplierInvoiceNo})` : ''}`,
+              refType: 'RECEIPT',
+              refId: receiptId,
+              createdById: user.id,
+            },
+          });
+        }
+        await tx.stockReceipt.update({
+          where: { id: receiptId },
+          data: { supplierCustomerId: partner?.id ?? null, ...(partner ? { supplierName: partner.name } : {}) },
+        });
+        await tx.editAudit.create({
+          data: {
+            entityType: 'RECEIPT_PARTNER',
+            entityId: receiptId,
+            summary: `${receipt.receiptNumber}: нийлүүлэгч → ${partner?.name ?? 'харилцагчгүй'} (${owed}₮)`,
+            before: { supplierCustomerId: receipt.supplierCustomerId, amountMnt: entry?.amountMnt ?? null },
+            after: { supplierCustomerId: partner?.id ?? null, amountMnt: partner && owed > 0 ? owed : null },
+            reason,
+            actorId: user.id,
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+    this.log.log(`Receipt ${receiptId} partner → ${supplierCustomerId ?? 'none'} by ${user.id}: ${reason}`);
     return this.get(receiptId, user);
   }
 
@@ -191,10 +249,25 @@ export class ReceiptsService {
     return warehouseWhere(user) as Prisma.StockReceiptWhereInput;
   }
 
-  list(user: AuthUser, filter: { warehouseId?: string; limit?: number } = {}) {
+  list(user: AuthUser, filter: { warehouseId?: string; supplierCustomerId?: string; from?: string; to?: string; limit?: number } = {}) {
     const take = Math.min(Math.max(filter.limit ?? 100, 1), 500);
+    const ok = (d?: string) => Boolean(d && /^\d{4}-\d{2}-\d{2}$/.test(d));
+    const receivedAt =
+      ok(filter.from) || ok(filter.to)
+        ? {
+            ...(ok(filter.from) ? { gte: new Date(`${filter.from}T00:00:00.000+08:00`) } : {}),
+            ...(ok(filter.to) ? { lte: new Date(`${filter.to}T23:59:59.999+08:00`) } : {}),
+          }
+        : undefined;
     return this.prisma.stockReceipt.findMany({
-      where: { AND: [this.scope(user), filter.warehouseId ? { warehouseId: filter.warehouseId } : {}] },
+      where: {
+        AND: [
+          this.scope(user),
+          filter.warehouseId ? { warehouseId: filter.warehouseId } : {},
+          filter.supplierCustomerId ? { supplierCustomerId: filter.supplierCustomerId } : {},
+          receivedAt ? { receivedAt } : {},
+        ],
+      },
       orderBy: { receivedAt: 'desc' },
       take,
       include: RECEIPT_INCLUDE,

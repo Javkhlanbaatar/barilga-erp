@@ -7,6 +7,7 @@ import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { hasRole, homeForRole, OVERSIGHT_ROLES, POS_ROLES } from '@/lib/rbac';
 import { AccountPanel } from '@/components/account-panel';
+import { PartnerTradePanel } from '@/components/partner-trade';
 import { useFeatures } from '@/lib/features';
 import { AuthUser, Customer, CustomerDetail, CustomerType, ORDER_STATUS_LABEL, PriceList } from '@/lib/types';
 
@@ -15,9 +16,21 @@ type Toast = { kind: 'error' | 'ok'; text: string };
 const TYPE_LABEL: Record<CustomerType, string> = { INDIVIDUAL: 'Хувь хүн', COMPANY: 'Байгууллага' };
 const STATUS_LABEL = ORDER_STATUS_LABEL;
 
-/** Takes a payment against the customer's whole debt; the server applies it to the oldest orders first. */
-function PayDebt({ customerId, owed, onDone }: { customerId: string; owed: number; onDone: () => void }) {
-  const [amount, setAmount] = useState(String(owed));
+/**
+ * Takes a payment against the customer's debt; the server applies it to the oldest orders first. A branch
+ * cashier/manager settles only the orders of their own shops, so the most they can take is asked for first.
+ */
+function PayDebt({ customerId, owedTotal, onDone }: { customerId: string; owedTotal: number; onDone: () => void }) {
+  const [owed, setOwed] = useState(owedTotal);
+  const [amount, setAmount] = useState(String(owedTotal));
+  useEffect(() => {
+    api<{ owedMnt: number }>(`/customers/${customerId}/owed-here`)
+      .then((r) => {
+        setOwed(r.owedMnt);
+        setAmount(String(r.owedMnt));
+      })
+      .catch(() => undefined);
+  }, [customerId, owedTotal]);
   const [method, setMethod] = useState<'CASH' | 'CARD' | 'TRANSFER'>('CASH');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
@@ -36,8 +49,10 @@ function PayDebt({ customerId, owed, onDone }: { customerId: string; owed: numbe
       setBusy(false);
     }
   }
+  if (owed <= 0) return <p className="mt-2 text-xs text-slate-500">Таны салбарын захиалгад өр алга (бусад салбарт төлнө).</p>;
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2">
+      {owed < owedTotal && <p className="w-full text-[11px] text-slate-400">Таны салбарт: {tugrik(owed)}</p>}
       <input className="w-32" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
       <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
         <option value="CASH">Бэлэн</option>
@@ -80,6 +95,7 @@ export default function CustomersPage() {
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [detailTab, setDetailTab] = useState<'account' | 'trade'>('account');
 
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
   const features = useFeatures();
@@ -317,7 +333,7 @@ export default function CustomersPage() {
                     ))}
                   </ul>
                   {features.enabled('CREDIT_SALES') && (
-                    <PayDebt customerId={detail.id} owed={detail.credit.owedMnt} onDone={() => void openDetail(detail)} />
+                    <PayDebt customerId={detail.id} owedTotal={detail.credit.owedMnt} onDone={() => void openDetail(detail)} />
                   )}
                 </div>
               )}
@@ -367,9 +383,31 @@ export default function CustomersPage() {
         </aside>
       </div>
 
-      {detail && features.enabled('PARTNER_ACCOUNTS') && (
-        <div className="mt-4">
-          <AccountPanel key={detail.id} customerId={detail.id} canManage={isOversight} />
+      {detail && (
+        <div className="mt-4 space-y-2">
+          <div className="flex gap-1">
+            {features.enabled('PARTNER_ACCOUNTS') && (
+              <button className={detailTab === 'account' ? 'btn-primary text-sm' : 'btn-ghost text-sm'} onClick={() => setDetailTab('account')}>
+                Тооцоо (авлага / өглөг)
+              </button>
+            )}
+            <button
+              className={detailTab === 'trade' || !features.enabled('PARTNER_ACCOUNTS') ? 'btn-primary text-sm' : 'btn-ghost text-sm'}
+              onClick={() => setDetailTab('trade')}
+            >
+              Худалдаа / худалдан авалт
+            </button>
+          </div>
+          {detailTab === 'account' && features.enabled('PARTNER_ACCOUNTS') ? (
+            <AccountPanel
+              key={detail.id}
+              customerId={detail.id}
+              canManage={isOversight}
+              partnerIsSupplier={Boolean(detail.sellsToUs || detail.barterContract) && features.enabled('STOCK_RECEIPTS')}
+            />
+          ) : (
+            <PartnerTradePanel key={detail.id} customerId={detail.id} />
+          )}
         </div>
       )}
 

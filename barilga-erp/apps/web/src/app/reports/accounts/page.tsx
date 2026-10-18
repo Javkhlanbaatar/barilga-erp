@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ReportsNav } from '@/components/reports-nav';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
+import { downloadCsv } from '@/lib/csv';
 import { hasRole, homeForRole, OVERSIGHT_ROLES } from '@/lib/rbac';
 import { AuthUser } from '@/lib/types';
 
@@ -56,9 +57,25 @@ export default function AccountsReportPage() {
             Авлага = тэд бидэнд өртэй (дараа төлөхөөр авсан) · Өглөг = бид тэдэнд өртэй (тэднээс авсан бараа). Хуулгыг харилцагчийн хуудаснаас харна.
           </p>
         </div>
-        <button className="btn-ghost print:hidden" onClick={() => window.print()}>
-          🖨 Хэвлэх
-        </button>
+        <div className="flex gap-2 print:hidden">
+          <button
+            className="btn-ghost"
+            disabled={!data}
+            onClick={() =>
+              data &&
+              downloadCsv(
+                `hariltsagchiin-tootsoo-${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date())}`,
+                ['Харилцагч', 'Утас', 'Авлага', 'Өглөг', 'Цэвэр (+ тэд бидэнд)'],
+                data.partners.map((p) => [p.name, p.phone, p.receivableMnt, p.payableMnt, p.netMnt]),
+              )
+            }
+          >
+            Excel
+          </button>
+          <button className="btn-ghost" onClick={() => window.print()}>
+            🖨 Хэвлэх
+          </button>
+        </div>
       </div>
       {error && <p className="text-red-400 mb-3">{error}</p>}
       {data && (
