@@ -249,8 +249,12 @@ export class OrdersService {
         throw new ForbiddenException('Энэ харилцагч нийлүүлэгч эсвэл бартерын гэрээтэй биш / Customer has no supply or barter contract');
       }
       // The other parts must be paid on the spot, so the goods are released (and netted) right away.
-      if (splitMethods.some((m) => m === CheckoutPaymentMethod.QPAY || m === CheckoutPaymentMethod.INVOICE)) {
-        throw new BadRequestException('Гэрээгээр олгохдоо үлдсэн хэсгийг бэлэн, карт эсвэл шилжүүлгээр авна / Contract part goes with cash, card or transfer only');
+      if (
+        splitMethods.some(
+          (m) => m === CheckoutPaymentMethod.QPAY || m === CheckoutPaymentMethod.INVOICE || m === CheckoutPaymentMethod.TRANSFER,
+        )
+      ) {
+        throw new BadRequestException('Гэрээгээр олгохдоо үлдсэн хэсгийг бэлэн эсвэл картаар авна / Contract part goes with cash or card only');
       }
       if (contractSplits.length > 1 || splitMethods.includes(CheckoutPaymentMethod.CREDIT)) {
         throw new BadRequestException('Гэрээгээр болон дараа төлөхөөр нэг захиалгад зэрэг олгохгүй / Only one contract part, not combined with on-account');

@@ -87,8 +87,9 @@ export class PaymentService {
       .map((s) => ({
         method: this.toPayMethod(s.method),
         amount: Math.round(Number(s.amount)),
-        // Sent an invoice: a bank transfer the buyer has not made yet. Held UNPAID until someone confirms it arrived.
-        awaiting: s.method === 'INVOICE',
+        // A bank transfer (or an invoice sent for one) is held UNPAID until someone sees it on the bank
+        // statement and presses «Мөнгө орсон»; until then the goods are not released.
+        awaiting: s.method === 'INVOICE' || s.method === 'TRANSFER',
       }))
       .filter((s) => s.amount > 0);
 

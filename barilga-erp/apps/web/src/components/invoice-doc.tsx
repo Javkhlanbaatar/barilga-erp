@@ -157,6 +157,9 @@ export function InvoiceDoc({
 }) {
   const { paid, due } = paidAndDue(order);
   const t = template;
+  // A walk-in sale has no real buyer: print dotted lines so the company name, РД… are written by hand.
+  const unknownBuyer = !order.customerName?.trim() || order.customerName.trim() === 'Энгийн харилцагч';
+  const blankBuyer = Boolean(t?.blankBuyer) || unknownBuyer;
   return (
     <div className="relative space-y-5">
       <Watermark company={company} />
@@ -186,9 +189,9 @@ export function InvoiceDoc({
         </div>
         <div className="rounded border border-slate-400 p-3">
           <p className="mb-1 font-semibold">Төлөгч</p>
-          {t?.blankBuyer ? (
+          {blankBuyer ? (
             <div className="space-y-2 pt-1">
-              <Blank label="Нэр" wide />
+              <Blank label="Байгууллага / нэр" wide />
               <Blank label="РД" wide />
               <Blank label="Утас" wide />
               <Blank label="Хаяг" wide />

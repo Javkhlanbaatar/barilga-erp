@@ -124,6 +124,24 @@ export default function OrderDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waitingQpay, params.id]);
 
+  const awaitedTransfer = (order?.payments ?? [])
+    .filter((p) => p.method === 'TRANSFER' && p.status === 'UNPAID')
+    .reduce((s, p) => s + p.amountMnt, 0);
+
+  /** The bank statement shows the transfer: release the order (and print the receipt). */
+  async function confirmTransfer() {
+    if (!window.confirm(`Банкны хуулгад ${tugrik(awaitedTransfer)} орсныг шалгасан уу? Баталгаажуулсны дараа захиалга бэлтгэлд орно.`)) return;
+    setChecking(true);
+    setCheckMsg('');
+    try {
+      setOrder(await api<Order>(`/orders/${params.id}/confirm-transfer`, { method: 'POST', body: '{}' }));
+    } catch (err) {
+      setCheckMsg(err instanceof Error ? err.message : 'Баталгаажуулж чадсангүй');
+    } finally {
+      setChecking(false);
+    }
+  }
+
   async function checkQpay() {
     setChecking(true);
     setCheckMsg('');
@@ -492,6 +510,19 @@ export default function OrderDetailPage() {
                 {checking ? 'Шалгаж байна…' : 'Төлбөр шалгах'}
               </button>
               {checkMsg && <p className="text-xs text-slate-300">{checkMsg}</p>}
+            </div>
+          )}
+          {awaitedTransfer > 0 && order.status === 'PENDING_PAYMENT' && (
+            <div className="space-y-2 rounded-xl border border-sky-700 bg-sky-950/40 p-3 text-sm">
+              <p className="text-sky-100">
+                Банкны шилжүүлэг хүлээж байна: <b>{tugrik(awaitedTransfer)}</b>. Гүйлгээний утга: <b className="font-mono">{order.orderNumber}</b>
+              </p>
+              <p className="text-xs text-slate-400">Банкны апп / хуулгаас мөнгө орсныг шалгаад дарна. Тэр хүртэл бараа олгохгүй.</p>
+              {canTakePayment && (
+                <button className="btn-primary text-sm" disabled={checking} onClick={() => void confirmTransfer()}>
+                  ✓ Мөнгө орсон
+                </button>
+              )}
             </div>
           )}
           {!waitingQpay && checkMsg && <p className="text-xs text-slate-300">{checkMsg}</p>}

@@ -12,7 +12,7 @@ import { useFeatures } from '@/lib/features';
 import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, companionLines, productMatchesQuery, productStockStatus } from '@/lib/types';
 import { POS_ROLES, TOP_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
-type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT' | 'INVOICE';
+type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
 /** A sale put on hold (хүлээлгэсэн): kept in this browser for this cashier until it is resumed or the day ends. */
 type HeldSale = {
@@ -312,7 +312,6 @@ export default function CheckoutPOS() {
   const contractPartner = !!customer && (!!customer.sellsToUs || !!customer.barterContract);
   const contractOffered = features.enabled('PARTNER_ACCOUNTS') && contractPartner && (partnerPayable ?? 0) > 0;
   const deliveryOffered = features.enabled('DELIVERY');
-  const invoiceOffered = features.enabled('INVOICES');
   const splitOthers = splitCard + splitQpay + splitTransfer + splitCredit + splitContract + splitInvoice;
   const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit + splitContract + splitInvoice;
   useEffect(() => {
@@ -337,13 +336,13 @@ export default function CheckoutPOS() {
         { method: 'CASH' as const, amount: splitCash, status: 'PAID' },
         { method: 'CARD' as const, amount: splitCard, status: 'PAID' },
         { method: 'QPAY' as const, amount: splitQpay, status: 'PENDING' },
-        { method: 'TRANSFER' as const, amount: splitTransfer, status: 'PAID' },
+        // A bank transfer is confirmed once it shows on the bank statement (Мөнгө орсон on the order).
+        { method: 'TRANSFER' as const, amount: splitTransfer, status: 'PENDING' },
         { method: 'CREDIT' as const, amount: splitCredit, status: 'PENDING' },
         { method: 'CONTRACT' as const, amount: splitContract, status: 'PAID' },
-        { method: 'INVOICE' as const, amount: splitInvoice, status: 'PENDING' },
       ].filter((p) => p.amount > 0);
     }
-    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' || paymentMethod === 'CREDIT' || paymentMethod === 'INVOICE' ? 'PENDING' : 'PAID' }];
+    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' || paymentMethod === 'CREDIT' || paymentMethod === 'TRANSFER' ? 'PENDING' : 'PAID' }];
   }
 
   /** Picking a registered customer fills the order snapshot (still editable); a company also sets the E-Barimt РД. */
@@ -468,15 +467,13 @@ export default function CheckoutPOS() {
       ? 'Дараа төлөхөөр олгох (зээл)'
       : paymentMethod === 'CONTRACT' && paymentMode === 'SINGLE'
       ? 'Гэрээгээр олгох (өглөгөөс хасна)'
-      : paymentMethod === 'INVOICE' && paymentMode === 'SINGLE'
-      ? 'Нэхэмжлэх үүсгэх (шилжүүлэг хүлээнэ)'
+      : paymentMethod === 'TRANSFER' && paymentMode === 'SINGLE'
+      ? 'Захиалга үүсгэх (шилжүүлэг хүлээнэ)'
       : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж'})`;
-  const usesInvoice = paymentMode === 'SPLIT' ? splitInvoice > 0 : paymentMethod === 'INVOICE';
   // Why the button is disabled, in words, so the cashier is never left guessing.
   const missing: string[] = [];
   if (!cart.length) missing.push('бараа нэмнэ үү');
   else if (!quote) missing.push('үнэ тооцоолж байна…');
-  if (usesInvoice && !customerName.trim()) missing.push('нэхэмжлэхэд харилцагчийн нэр бичнэ үү');
   if (ourDelivery && (!customerName.trim() || !customerPhone.trim())) missing.push('хүргэлтэд нэр, утас бичнэ үү');
   if (paymentMode === 'SPLIT' && !splitOk) missing.push('хуваасан дүн нийт дүнтэй тэнцэх ёстой');
   if (usesCredit && !(creditOffered && customer)) missing.push('дараа төлөх эрхтэй харилцагч сонгоно уу');
@@ -780,7 +777,7 @@ export default function CheckoutPOS() {
             onChange={(e) => setCustomerPhone(e.target.value)}
           />
 
-          {(features.enabled('EBARIMT') || billType === 'COMPANY' || usesInvoice) && (
+          {(features.enabled('EBARIMT') || billType === 'COMPANY') && (
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-400">{features.enabled('EBARIMT') ? 'И-Баримт' : 'Худалдан авагч (нэхэмжлэхэд)'}</label>
             <div className="grid grid-cols-2 gap-1.5">
@@ -865,17 +862,8 @@ export default function CheckoutPOS() {
                   onClick={() => setPaymentMethod('TRANSFER')}
                   className={`col-span-3 ${chipClass(paymentMethod === 'TRANSFER', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}`}
                 >
-                  Банкны шилжүүлэг (орсныг шалгасан)
+                  Банкны шилжүүлэг — мөнгө орсны дараа «Мөнгө орсон» дарж батална
                 </button>
-                {invoiceOffered && (
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('INVOICE')}
-                    className={`col-span-3 ${chipClass(paymentMethod === 'INVOICE', 'bg-sky-700 text-white border-sky-500 font-semibold')}`}
-                  >
-                    Нэхэмжлэхээр — шилжүүлэг хүлээнэ (мөнгө орсны дараа олгоно)
-                  </button>
-                )}
                 {creditOffered && (
                   <button
                     type="button"
@@ -946,7 +934,7 @@ export default function CheckoutPOS() {
                 </label>
                 <label className="block text-slate-400">
                   <span className="flex justify-between">
-                    Банкны шилжүүлэг
+                    Банкны шилжүүлэг (орсны дараа батална)
                     {splitCash > 0 && (
                       <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitTransfer, splitTransfer)}>
                         үлдсэнийг энд
@@ -977,25 +965,6 @@ export default function CheckoutPOS() {
                       className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                       value={splitCredit}
                       onChange={(e) => other(setSplitCredit)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-                    />
-                  </label>
-                )}
-                {invoiceOffered && (
-                  <label className="block text-slate-400">
-                    <span className="flex justify-between">
-                    Нэхэмжлэхээр (шилжүүлэг хүлээнэ)
-                    {splitCash > 0 && (
-                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitInvoice, splitInvoice)}>
-                        үлдсэнийг энд
-                      </button>
-                    )}
-                  </span>
-                    <input
-                      type="number"
-                      min={0}
-                      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
-                      value={splitInvoice}
-                      onChange={(e) => other(setSplitInvoice)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                     />
                   </label>
                 )}

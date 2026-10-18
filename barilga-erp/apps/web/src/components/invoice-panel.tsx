@@ -59,8 +59,6 @@ export function InvoicePanel({ order, canManage, onOrder }: { order: Order; canM
     void load();
   }, [load, order.status]);
 
-  const awaited = (order.payments ?? []).filter((p) => p.method === 'TRANSFER' && p.status === 'UNPAID');
-  const awaitedMnt = awaited.reduce((s, p) => s + p.amountMnt, 0);
   const link = inv?.token ? `${window.location.origin}/invoice/${inv.token}` : '';
 
   async function save(e: FormEvent) {
@@ -137,20 +135,6 @@ export function InvoicePanel({ order, canManage, onOrder }: { order: Order; canM
     }
   }
 
-  async function confirmTransfer() {
-    if (!window.confirm(`Банкны хуулгад ${tugrik(awaitedMnt)} орсныг шалгасан уу? Баталгаажуулсны дараа захиалга бэлтгэлд орно.`)) return;
-    setBusy(true);
-    setError('');
-    try {
-      onOrder(await api<Order>(`/orders/${order.id}/confirm-transfer`, { method: 'POST' }));
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Баталгаажуулж чадсангүй');
-    } finally {
-      setBusy(false);
-    }
-  }
-
   if (!loaded) return null;
   if (!inv && order.status === 'CANCELLED') return null;
 
@@ -194,16 +178,7 @@ export function InvoicePanel({ order, canManage, onOrder }: { order: Order; canM
         {inv && <span className={`rounded-full border px-2 py-0.5 text-xs ${STATE_CLASS[inv.state]}`}>{INVOICE_STATE_LABEL[inv.state]}</span>}
       </div>
 
-      {awaitedMnt > 0 && order.status === 'PENDING_PAYMENT' && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-700/60 bg-amber-950/30 p-3 text-sm">
-          <span>
-            Шилжүүлэг хүлээж байна: <b>{tugrik(awaitedMnt)}</b>. Мөнгө орсны дараа бараа олгоно.
-          </span>
-          <button className="btn-primary text-sm" disabled={busy} onClick={() => void confirmTransfer()}>
-            Шилжүүлэг орсныг баталгаажуулах
-          </button>
-        </div>
-      )}
+
 
       {!inv || editing ? (
         form
