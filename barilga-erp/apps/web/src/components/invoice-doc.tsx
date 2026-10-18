@@ -1,7 +1,7 @@
 'use client';
 
 import { mediaUrl, tugrik } from '@/lib/api';
-import type { CompanySettings } from '@/lib/types';
+import type { CompanySettings, DocTemplate } from '@/lib/types';
 
 /** The order fields an invoice needs — both the staff order and the buyer's public view provide them. */
 export type InvoiceDocOrder = {
@@ -97,21 +97,81 @@ export function paidAndDue<P extends { status: string; amountMnt: number }>(orde
   return { live, paid, due: Math.max(0, order.totalMnt - paid) };
 }
 
-export function InvoiceDoc({ order, company, invoice }: { order: InvoiceDocOrder; company: CompanySettings; invoice?: InvoiceMeta | null }) {
+/** Free text under the heading or above the signatures. */
+export function DocNote({ text, className = '' }: { text?: string; className?: string }) {
+  return text ? <p className={`whitespace-pre-line text-xs ${className}`}>{text}</p> : null;
+}
+
+/** A line to fill in by hand. */
+export function Blank({ label, wide = false }: { label: string; wide?: boolean }) {
+  return (
+    <p className="flex items-end gap-1">
+      <span className="whitespace-nowrap">{label}:</span>
+      <span className={`border-b border-dotted border-black ${wide ? 'flex-1' : 'w-40'}`}>&nbsp;</span>
+    </p>
+  );
+}
+
+/** Empty table rows after the goods, for lines added by hand. */
+export function BlankRows({ n, cols }: { n: number; cols: number }) {
+  return (
+    <>
+      {Array.from({ length: n }, (_, i) => (
+        <tr key={`blank-${i}`}>
+          {Array.from({ length: cols }, (_, j) => (
+            <td key={j}>&nbsp;</td>
+          ))}
+        </tr>
+      ))}
+    </>
+  );
+}
+
+/** Signature lines (and an optional stamp box) at the foot of a document. */
+export function Signatures({ names, stamp, signer }: { names: string[]; stamp?: boolean; signer?: string }) {
+  if (!names.length && !stamp) return null;
+  return (
+    <div className="flex items-end justify-between gap-6 pt-8 text-xs">
+      <div className="grid flex-1 gap-6" style={{ gridTemplateColumns: `repeat(${Math.max(1, names.length)}, minmax(0, 1fr))` }}>
+        {names.map((n, i) => (
+          <p key={n}>
+            {n}: ______________________{i === 0 && signer ? ` /${signer}/` : ''}
+          </p>
+        ))}
+      </div>
+      {stamp && <div className="grid h-20 w-20 shrink-0 place-items-center rounded-full border border-dashed border-slate-500 text-[10px] text-slate-500">Тэмдэг</div>}
+    </div>
+  );
+}
+
+export function InvoiceDoc({
+  order,
+  company,
+  invoice,
+  template,
+}: {
+  order: InvoiceDocOrder;
+  company: CompanySettings;
+  invoice?: InvoiceMeta | null;
+  template?: DocTemplate;
+}) {
   const { paid, due } = paidAndDue(order);
+  const t = template;
   return (
     <div className="relative space-y-5">
       <Watermark company={company} />
       <div className="flex items-start justify-between gap-6">
         <SellerBlock company={company} />
         <div className="text-right">
-          <h1 className="text-2xl font-bold tracking-wide">НЭХЭМЖЛЭХ</h1>
+          <h1 className="text-2xl font-bold tracking-wide">{t?.title || 'НЭХЭМЖЛЭХ'}</h1>
           <p className="text-sm">№ {invoice?.invoiceNumber ?? order.orderNumber}</p>
           {invoice && <p className="text-xs">Захиалга: {order.orderNumber}</p>}
           <p className="text-xs">Огноо: {dateTime(invoice?.createdAt ?? order.createdAt)}</p>
           {invoice?.dueDate && <p className="text-xs font-semibold">Төлөх хугацаа: {dateOnly(invoice.dueDate)}</p>}
         </div>
       </div>
+
+      <DocNote text={t?.headerNote} />
 
       <div className="grid grid-cols-2 gap-4 text-xs">
         <div className="rounded border border-slate-400 p-3">
@@ -126,10 +186,21 @@ export function InvoiceDoc({ order, company, invoice }: { order: InvoiceDocOrder
         </div>
         <div className="rounded border border-slate-400 p-3">
           <p className="mb-1 font-semibold">Төлөгч</p>
-          <p>{order.customerName}</p>
-          {order.customerRegNumber && <p>РД: {order.customerRegNumber}</p>}
-          <p>Утас: {order.customerPhone}</p>
-          {order.deliveryAddress && <p>Хаяг: {order.deliveryAddress}</p>}
+          {t?.blankBuyer ? (
+            <div className="space-y-2 pt-1">
+              <Blank label="Нэр" wide />
+              <Blank label="РД" wide />
+              <Blank label="Утас" wide />
+              <Blank label="Хаяг" wide />
+            </div>
+          ) : (
+            <>
+              <p>{order.customerName}</p>
+              {order.customerRegNumber && <p>РД: {order.customerRegNumber}</p>}
+              <p>Утас: {order.customerPhone}</p>
+              {order.deliveryAddress && <p>Хаяг: {order.deliveryAddress}</p>}
+            </>
+          )}
         </div>
       </div>
 
@@ -157,6 +228,7 @@ export function InvoiceDoc({ order, company, invoice }: { order: InvoiceDocOrder
               <td className="text-right">{tugrik(i.lineTotal)}</td>
             </tr>
           ))}
+          <BlankRows n={t?.blankRows ?? 0} cols={7} />
           <FeeRows order={order} cols={7} />
           <tr>
             <td colSpan={6} className="text-right font-bold">
@@ -189,10 +261,12 @@ export function InvoiceDoc({ order, company, invoice }: { order: InvoiceDocOrder
         </p>
       )}
 
-      <div className="grid grid-cols-2 gap-10 pt-8 text-xs">
-        <p>Нэхэмжилсэн: ______________________ /{order.createdBy?.fullName ?? order.createdBy?.name ?? ''}/</p>
-        <p>Хүлээн авсан: ______________________</p>
-      </div>
+      <DocNote text={t?.footerNote} />
+      <Signatures
+        names={t?.signatures ?? ['Нэхэмжилсэн', 'Хүлээн авсан']}
+        stamp={t?.stamp}
+        signer={order.createdBy?.fullName ?? order.createdBy?.name ?? ''}
+      />
       <p className="pt-4 text-[10px] text-slate-500">Энэ нэхэмжлэх нь И-баримт биш. Албан ёсны баримтыг И-баримтын системээс авна.</p>
     </div>
   );

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompanySettingsDto } from './company.dto';
+import { DEFAULT_TEMPLATE, DocTemplate, DocTemplatesDto } from './doc-template.dto';
 import { Orientation, PaperSize, PRINT_DOCS, PrintDoc, PrintSettingsDto } from './print.dto';
 
 const COMPANY_KEY = 'COMPANY';
@@ -35,6 +36,7 @@ const EMPTY_COMPANY: CompanySettings = {
 };
 
 const PRINT_KEY = 'PRINT';
+const DOCS_KEY = 'DOC_TEMPLATES';
 
 export type PrintSettings = Record<PrintDoc, { paper: PaperSize; orientation: Orientation; copies: number }>;
 
@@ -121,5 +123,33 @@ export class SettingsService {
     });
     this.log.log(`Company settings updated by ${actorId}`);
     return this.company();
+  }
+
+  /** Wording and empty spaces of each printed document (built-in defaults until an admin changes them). */
+  async documents(): Promise<Record<PrintDoc, DocTemplate>> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: DOCS_KEY } });
+    const saved = (row?.value ?? {}) as Partial<Record<PrintDoc, Partial<DocTemplate>>>;
+    return Object.fromEntries(PRINT_DOCS.map((d) => [d, { ...DEFAULT_TEMPLATE[d], ...(saved[d] ?? {}) }])) as Record<PrintDoc, DocTemplate>;
+  }
+
+  async setDocuments(dto: DocTemplatesDto, actorId: string) {
+    const merged = await this.documents();
+    for (const d of PRINT_DOCS) {
+      const next = dto[d];
+      if (!next) continue;
+      merged[d] = {
+        ...merged[d],
+        ...Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)),
+        ...(next.signatures ? { signatures: next.signatures.map((x) => x.trim()).filter(Boolean) } : {}),
+      } as DocTemplate;
+    }
+    const json = merged as unknown as Prisma.InputJsonValue;
+    await this.prisma.appSetting.upsert({
+      where: { key: DOCS_KEY },
+      create: { key: DOCS_KEY, value: json, updatedById: actorId },
+      update: { value: json, updatedById: actorId },
+    });
+    this.log.log(`Document templates updated by ${actorId}`);
+    return merged;
   }
 }

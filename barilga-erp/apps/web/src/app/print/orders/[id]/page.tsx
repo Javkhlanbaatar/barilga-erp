@@ -3,8 +3,8 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api, tugrik } from '@/lib/api';
-import { FeeRows, InvoiceDoc, InvoiceMeta, LogoMark, SellerBlock, Watermark, paidAndDue } from '@/components/invoice-doc';
-import { companionLines, type CompanySettings, type Order } from '@/lib/types';
+import { Blank, BlankRows, DocNote, FeeRows, InvoiceDoc, InvoiceMeta, LogoMark, SellerBlock, Signatures, Watermark, paidAndDue } from '@/components/invoice-doc';
+import { companionLines, type CompanySettings, type DocTemplate, type Order } from '@/lib/types';
 
 type Doc = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
 type Layout = { paper: 'A4' | 'A5' | '80MM'; orientation: 'portrait' | 'landscape'; copies: number };
@@ -64,18 +64,25 @@ function PrintOrder() {
   const [company, setCompany] = useState<CompanySettings | null>(null);
   const [layouts, setLayouts] = useState<PrintSettings | null>(null);
   const [invoice, setInvoice] = useState<InvoiceMeta | null>(null);
+  const [templates, setTemplates] = useState<Record<Doc, DocTemplate> | null>(null);
   const [error, setError] = useState('');
+  // ?edit=1: the page can be typed on before printing (one-off changes, nothing is saved) and does not print
+  // by itself. ?blank=1: the buyer's details and a few extra rows are left empty to fill in by hand.
+  const [editing, setEditing] = useState(search.get('edit') === '1');
+  const blank = search.get('blank') === '1';
 
   useEffect(() => {
     Promise.all([
       api<Order>(`/orders/${params.id}`),
       api<CompanySettings>('/settings/company'),
       api<PrintSettings>('/settings/print'),
+      api<Record<Doc, DocTemplate>>('/settings/documents').catch(() => null),
     ])
-      .then(([o, c, p]) => {
+      .then(([o, c, p, t]) => {
         setOrder(o);
         setCompany(c);
         setLayouts(p);
+        setTemplates(t);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ачаалж чадсангүй'));
     // The invoice number and due date, when one was sent for this order (the module may be off).
@@ -83,23 +90,25 @@ function PrintOrder() {
   }, [params.id]);
 
   useEffect(() => {
-    if (order && company && layouts) {
+    if (order && company && layouts && search.get('edit') !== '1') {
       const t = window.setTimeout(() => window.print(), 300);
       return () => window.clearTimeout(t);
     }
-  }, [order, company, layouts]);
+  }, [order, company, layouts, search]);
 
   if (error) return <p className="p-6 text-red-600">{error}</p>;
   if (!order || !company || !layouts) return <p className="p-6 text-slate-500">Уншиж байна…</p>;
 
   const layout = layouts[doc];
   const geo = pageGeometry(layout);
+  const base: DocTemplate = templates?.[doc] ?? { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: [], stamp: false, showPrices: true };
+  const tpl: DocTemplate = blank ? { ...base, blankBuyer: true, blankRows: Math.max(base.blankRows, 5) } : base;
   const body = (
     <>
-      {doc === 'invoice' && <InvoiceDoc order={order} company={company} invoice={invoice} />}
-      {doc === 'receipt' && <Receipt order={order} company={company} />}
-      {doc === 'issueNote' && <IssueNote order={order} company={company} />}
-      {doc === 'picklist' && <Picklist order={order} company={company} />}
+      {doc === 'invoice' && <InvoiceDoc order={order} company={company} invoice={invoice} template={tpl} />}
+      {doc === 'receipt' && <Receipt order={order} company={company} t={tpl} />}
+      {doc === 'issueNote' && <IssueNote order={order} company={company} t={tpl} />}
+      {doc === 'picklist' && <Picklist order={order} company={company} t={tpl} />}
     </>
   );
 
@@ -118,6 +127,16 @@ function PrintOrder() {
             {label}
           </a>
         ))}
+        <button
+          className={`rounded px-3 py-1 ${editing ? 'bg-amber-500 text-black' : 'border border-slate-300 bg-white'}`}
+          onClick={() => setEditing((v) => !v)}
+          title="Хэвлэхийн өмнө баримт дээрх аль ч бичгийг шууд засна (хадгалагдахгүй)"
+        >
+          ✎ {editing ? 'Засаж байна — дуусгах' : 'Засаад хэвлэх'}
+        </button>
+        <a className="rounded border border-slate-300 bg-white px-3 py-1" href={`?doc=${doc}${blank ? '' : '&blank=1'}&edit=1`}>
+          {blank ? 'Энгийн хувилбар' : 'Хоосон талбартай'}
+        </a>
         <span className="text-slate-500">
           {layout.paper === '80MM' ? '80мм' : `${layout.paper} ${layout.orientation === 'landscape' ? 'хэвтээ' : 'босоо'}`} ·{' '}
           {layout.copies} хувь
@@ -129,8 +148,10 @@ function PrintOrder() {
       {Array.from({ length: layout.copies }, (_, i) => (
         <section
           key={i}
-          className={`print-copy mx-auto py-6 ${geo.small ? 'print-small' : ''}`}
+          className={`print-copy mx-auto py-6 ${geo.small ? 'print-small' : ''} ${editing ? 'editing' : ''}`}
           style={{ width: `${geo.width}mm`, breakAfter: i < layout.copies - 1 ? 'page' : 'auto' }}
+          contentEditable={editing}
+          suppressContentEditableWarning
         >
           {body}
         </section>
@@ -147,12 +168,18 @@ function PrintOrder() {
         .print-doc th, .print-doc td { border: 1px solid #333; padding: 4px 6px; font-size: 12px; }
         .print-doc .print-small th, .print-doc .print-small td { padding: 2px 4px; font-size: 10px; }
         .print-doc th { background: #f1f5f9; text-align: left; }
+        @media screen { .print-copy.editing { outline: 2px dashed #f59e0b; outline-offset: 6px; cursor: text; } }
       `}</style>
+      {editing && (
+        <p className="no-print fixed bottom-3 left-1/2 -translate-x-1/2 rounded bg-amber-500 px-3 py-1.5 text-xs text-black shadow">
+          Баримт дээр дарж бичгийг засна. Засвар хадгалагдахгүй — зөвхөн энэ удаагийн хэвлэлтэд.
+        </p>
+      )}
     </div>
   );
 }
 
-function Receipt({ order, company }: { order: Order; company: CompanySettings }) {
+function Receipt({ order, company, t }: { order: Order; company: CompanySettings; t: DocTemplate }) {
   const { live, paid, due } = paidAndDue(order);
   return (
     <div className="relative font-mono text-[12px] leading-5">
@@ -161,13 +188,15 @@ function Receipt({ order, company }: { order: Order; company: CompanySettings })
         <LogoMark company={company} className="h-10" />
       </div>
       <p className="text-center text-sm font-bold">{company.name || 'Борлуулалтын баримт'}</p>
+      {t.title && <p className="text-center font-bold">{t.title}</p>}
       {company.regNumber && <p className="text-center">РД: {company.regNumber}</p>}
       {company.phone && <p className="text-center">{company.phone}</p>}
       <p className="my-1 border-t border-dashed border-black" />
       <p>Баримт: {order.orderNumber}</p>
       <p>Огноо: {dateTime(order.createdAt)}</p>
       <p>Кассчин: {order.createdBy?.fullName ?? order.createdBy?.name ?? ''}</p>
-      <p>Харилцагч: {order.customerName}</p>
+      {t.blankBuyer ? <Blank label="Харилцагч" wide /> : <p>Харилцагч: {order.customerName}</p>}
+      {t.headerNote && <p className="whitespace-pre-line">{t.headerNote}</p>}
       <p className="my-1 border-t border-dashed border-black" />
       {order.items.map((i) => (
         <div key={i.id}>
@@ -224,17 +253,23 @@ function Receipt({ order, company }: { order: Order; company: CompanySettings })
       {order.lottery && <p className="mt-1">И-баримт сугалаа: {order.lottery}</p>}
       <p className="my-1 border-t border-dashed border-black" />
       {company.receiptFooter && <p className="whitespace-pre-line text-center">{company.receiptFooter}</p>}
+      {t.footerNote && <p className="whitespace-pre-line text-center">{t.footerNote}</p>}
+      {t.signatures.map((s) => (
+        <p key={s} className="pt-3">
+          {s}: ____________
+        </p>
+      ))}
       <p className="text-center">Баярлалаа!</p>
     </div>
   );
 }
 
-function Picklist({ order, company }: { order: Order; company: CompanySettings }) {
+function Picklist({ order, company, t }: { order: Order; company: CompanySettings; t: DocTemplate }) {
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-xl font-bold">БАРАА БЭЛТГЭХ ХУУДАС</h1>
+          <h1 className="text-xl font-bold">{t.title || 'БАРАА БЭЛТГЭХ ХУУДАС'}</h1>
           <p className="text-sm">
             Захиалга № {order.orderNumber} · {dateTime(order.createdAt)}
           </p>
@@ -295,27 +330,27 @@ function Picklist({ order, company }: { order: Order; company: CompanySettings }
               <td className="w-32">{i.pickedBy?.fullName ?? ''}</td>
             </tr>
           ))}
+          <BlankRows n={t.blankRows} cols={7} />
         </tbody>
       </table>
-      <div className="grid grid-cols-3 gap-6 pt-10 text-xs">
-        <p>Бэлтгэсэн: __________________</p>
-        <p>Шалгасан: __________________</p>
-        <p>Хүлээн авсан: __________________</p>
-      </div>
+      <DocNote text={t.footerNote} />
+      <Signatures names={t.signatures} stamp={t.stamp} />
     </div>
   );
 }
 
 /** Goods issue note: what leaves the warehouse for this order, numbered like the invoice. */
-function IssueNote({ order, company }: { order: Order; company: CompanySettings }) {
+function IssueNote({ order, company, t }: { order: Order; company: CompanySettings; t: DocTemplate }) {
   const goods = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
+  const prices = t.showPrices;
+  const cols = prices ? 7 : 5;
   return (
     <div className="relative space-y-3">
       <Watermark company={company} />
       <div className="flex items-start justify-between gap-4">
         <SellerBlock company={company} />
         <div className="text-right">
-          <h1 className="text-xl font-bold tracking-wide">ЗАРЛАГЫН БАРИМТ</h1>
+          <h1 className="text-xl font-bold tracking-wide">{t.title || 'ЗАРЛАГЫН БАРИМТ'}</h1>
           <p className="text-sm">№ {order.orderNumber}</p>
           <p className="text-xs">Огноо: {dateTime(order.completedAt ?? order.createdAt)}</p>
         </div>
@@ -324,10 +359,14 @@ function IssueNote({ order, company }: { order: Order; company: CompanySettings 
         <p>
           Зарлагадсан агуулах: <b>{order.warehouse?.name ?? '—'}</b>
         </p>
-        <p>
-          Хүлээн авагч: <b>{order.customerName}</b>
-          {order.customerRegNumber ? ` (РД ${order.customerRegNumber})` : ''} · {order.customerPhone}
-        </p>
+        {t.blankBuyer ? (
+          <Blank label="Хүлээн авагч" wide />
+        ) : (
+          <p>
+            Хүлээн авагч: <b>{order.customerName}</b>
+            {order.customerRegNumber ? ` (РД ${order.customerRegNumber})` : ''} · {order.customerPhone}
+          </p>
+        )}
         <p>Хүргэлт: {DELIVERY_MN[order.deliveryMethod] ?? order.deliveryMethod}</p>
         {order.vehicleNumber && (
           <p>
@@ -336,6 +375,7 @@ function IssueNote({ order, company }: { order: Order; company: CompanySettings 
           </p>
         )}
       </div>
+      <DocNote text={t.headerNote} />
       <table>
         <thead>
           <tr>
@@ -344,8 +384,8 @@ function IssueNote({ order, company }: { order: Order; company: CompanySettings 
             <th>Код</th>
             <th>Нэгж</th>
             <th className="text-right">Тоо</th>
-            <th className="text-right">Нэгж үнэ</th>
-            <th className="text-right">Дүн</th>
+            {prices && <th className="text-right">Нэгж үнэ</th>}
+            {prices && <th className="text-right">Дүн</th>}
           </tr>
         </thead>
         <tbody>
@@ -361,23 +401,23 @@ function IssueNote({ order, company }: { order: Order; company: CompanySettings 
               <td className="font-mono">{i.product.sku}</td>
               <td>{i.product.unit}</td>
               <td className="text-right font-semibold">{qty(i.quantity)}</td>
-              <td className="text-right">{tugrik(i.unitPrice)}</td>
-              <td className="text-right">{tugrik(i.lineTotal)}</td>
+              {prices && <td className="text-right">{tugrik(i.unitPrice)}</td>}
+              {prices && <td className="text-right">{tugrik(i.lineTotal)}</td>}
             </tr>
           ))}
-          <tr>
-            <td colSpan={6} className="text-right font-bold">
-              Барааны дүн
-            </td>
-            <td className="text-right font-bold">{tugrik(goods)}</td>
-          </tr>
+          <BlankRows n={t.blankRows} cols={cols} />
+          {prices && (
+            <tr>
+              <td colSpan={6} className="text-right font-bold">
+                Барааны дүн
+              </td>
+              <td className="text-right font-bold">{tugrik(goods)}</td>
+            </tr>
+          )}
         </tbody>
       </table>
-      <div className="grid grid-cols-3 gap-4 pt-6 text-xs">
-        <p>Олгосон (нярав): ______________</p>
-        <p>Хүлээн авсан: ______________</p>
-        <p>Шалгасан: ______________</p>
-      </div>
+      <DocNote text={t.footerNote} />
+      <Signatures names={t.signatures} stamp={t.stamp} />
     </div>
   );
 }

@@ -111,6 +111,8 @@ export default function CheckoutPOS() {
   const [splitTransfer, setSplitTransfer] = useState(0);
   const [splitContract, setSplitContract] = useState(0);
   const [splitInvoice, setSplitInvoice] = useState(0);
+  /** Cash is the balancing line: it holds whatever the other methods do not cover, until typed by hand. */
+  const [cashManual, setCashManual] = useState(false);
   /** What we owe the selected supply/barter partner — the most a contract sale can take. */
   const [partnerPayable, setPartnerPayable] = useState<number | null>(null);
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
@@ -311,7 +313,21 @@ export default function CheckoutPOS() {
   const contractOffered = features.enabled('PARTNER_ACCOUNTS') && contractPartner && (partnerPayable ?? 0) > 0;
   const deliveryOffered = features.enabled('DELIVERY');
   const invoiceOffered = features.enabled('INVOICES');
+  const splitOthers = splitCard + splitQpay + splitTransfer + splitCredit + splitContract + splitInvoice;
   const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit + splitContract + splitInvoice;
+  useEffect(() => {
+    if (paymentMode === 'SPLIT' && !cashManual) setSplitCash(Math.max(0, totalMnt - splitOthers));
+  }, [paymentMode, cashManual, totalMnt, splitOthers]);
+  /** Another method's amount was typed: cash takes the rest again. */
+  const other = (set: (n: number) => void) => (n: number) => {
+    setCashManual(false);
+    set(n);
+  };
+  /** Moves everything still on cash onto this method. */
+  const restTo = (set: (n: number) => void, current: number) => () => {
+    setCashManual(false);
+    set(current + Math.max(0, totalMnt - splitOthers));
+  };
   const linePrice = new Map((quote?.lines ?? []).map((l) => [l.productId, l]));
   const splitOk = paymentMode === 'SPLIT' && totalMnt > 0 && splitSum === totalMnt && splitSum > 0;
 
@@ -812,6 +828,7 @@ export default function CheckoutPOS() {
                 type="button"
                 onClick={() => {
                   setPaymentMode('SPLIT');
+                  setCashManual(false);
                   setSplitCash(totalMnt);
                   setSplitCard(0);
                   setSplitQpay(0);
@@ -831,10 +848,17 @@ export default function CheckoutPOS() {
                   QPay QR
                 </button>
                 <button type="button" onClick={() => setPaymentMethod('CASH')} className={chipClass(paymentMethod === 'CASH', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}>
-                  Бэлэн мөнгө
+                  Бэлэн мөнгө <span className="text-slate-500">(бусдад оруулсныг хасаад үлдсэн нь энд автоматаар)</span>
                 </button>
                 <button type="button" onClick={() => setPaymentMethod('CARD')} className={chipClass(paymentMethod === 'CARD', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}>
-                  Карт (POS)
+                  <span className="flex justify-between">
+                    Карт (POS)
+                    {splitCash > 0 && (
+                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitCard, splitCard)}>
+                        үлдсэнийг энд
+                      </button>
+                    )}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -887,7 +911,10 @@ export default function CheckoutPOS() {
                     min={0}
                     className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitCash}
-                    onChange={(e) => setSplitCash(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    onChange={(e) => {
+                      setCashManual(true);
+                      setSplitCash(Math.max(0, Math.round(Number(e.target.value) || 0)));
+                    }}
                   />
                 </label>
                 <label className="block text-slate-400">
@@ -897,50 +924,78 @@ export default function CheckoutPOS() {
                     min={0}
                     className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitCard}
-                    onChange={(e) => setSplitCard(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    onChange={(e) => other(setSplitCard)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
                 <label className="block text-slate-400">
-                  QPay (зөвхөн энэ дүнгээр QR)
+                  <span className="flex justify-between">
+                    QPay (зөвхөн энэ дүнгээр QR)
+                    {splitCash > 0 && (
+                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitQpay, splitQpay)}>
+                        үлдсэнийг энд
+                      </button>
+                    )}
+                  </span>
                   <input
                     type="number"
                     min={0}
                     className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitQpay}
-                    onChange={(e) => setSplitQpay(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    onChange={(e) => other(setSplitQpay)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
                 <label className="block text-slate-400">
-                  Банкны шилжүүлэг
+                  <span className="flex justify-between">
+                    Банкны шилжүүлэг
+                    {splitCash > 0 && (
+                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitTransfer, splitTransfer)}>
+                        үлдсэнийг энд
+                      </button>
+                    )}
+                  </span>
                   <input
                     type="number"
                     min={0}
                     className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitTransfer}
-                    onChange={(e) => setSplitTransfer(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    onChange={(e) => other(setSplitTransfer)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
                 {creditOffered && (
                   <label className="block text-slate-400">
+                    <span className="flex justify-between">
                     Дараа төлөх (зээл)
+                    {splitCash > 0 && (
+                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitCredit, splitCredit)}>
+                        үлдсэнийг энд
+                      </button>
+                    )}
+                  </span>
                     <input
                       type="number"
                       min={0}
                       className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                       value={splitCredit}
-                      onChange={(e) => setSplitCredit(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                      onChange={(e) => other(setSplitCredit)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                     />
                   </label>
                 )}
                 {invoiceOffered && (
                   <label className="block text-slate-400">
+                    <span className="flex justify-between">
                     Нэхэмжлэхээр (шилжүүлэг хүлээнэ)
+                    {splitCash > 0 && (
+                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitInvoice, splitInvoice)}>
+                        үлдсэнийг энд
+                      </button>
+                    )}
+                  </span>
                     <input
                       type="number"
                       min={0}
                       className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                       value={splitInvoice}
-                      onChange={(e) => setSplitInvoice(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                      onChange={(e) => other(setSplitInvoice)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                     />
                   </label>
                 )}
@@ -953,7 +1008,7 @@ export default function CheckoutPOS() {
                       max={partnerPayable ?? 0}
                       className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                       value={splitContract}
-                      onChange={(e) => setSplitContract(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                      onChange={(e) => other(setSplitContract)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                     />
                   </label>
                 )}

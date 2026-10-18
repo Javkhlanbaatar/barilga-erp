@@ -22,6 +22,7 @@ import { CATALOG_READ_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
 import { CompanySettingsDto } from './company.dto';
+import { DocTemplatesDto } from './doc-template.dto';
 import { PrintSettingsDto } from './print.dto';
 import { SettingsService } from './settings.service';
 
@@ -95,5 +96,18 @@ export class SettingsController {
   @Roles(Role.ADMIN)
   setPrint(@Body() dto: PrintSettingsDto, @CurrentUser() user: AuthUser) {
     return this.settings.setPrint(dto, user.id);
+  }
+
+  /** Document wording; everyone reads it when printing. */
+  @Get('documents')
+  @Roles(...CATALOG_READ_ROLES)
+  documents() {
+    return this.settings.documents();
+  }
+
+  @Put('documents')
+  @Roles(Role.ADMIN)
+  setDocuments(@Body() dto: DocTemplatesDto, @CurrentUser() user: AuthUser) {
+    return this.settings.setDocuments(dto, user.id);
   }
 }

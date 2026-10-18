@@ -584,6 +584,19 @@ export type FeatureSwitch = {
   updatedAt: string | null;
 };
 
+/** Wording and empty spaces of one printed document (Админ → Компанийн мэдээлэл → Баримтын загвар). */
+export type DocTemplate = {
+  title: string;
+  headerNote: string;
+  footerNote: string;
+  blankBuyer: boolean;
+  blankRows: number;
+  signatures: string[];
+  stamp: boolean;
+  showPrices: boolean;
+};
+export type PrintDocKey = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
+
 /** Seller details printed on invoices and receipts (admin settings). */
 export type CompanySettings = {
   name: string;
