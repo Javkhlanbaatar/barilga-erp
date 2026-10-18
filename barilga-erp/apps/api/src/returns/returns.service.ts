@@ -163,6 +163,14 @@ export class ReturnsService {
     if (dto.refundMethod === PayMethod.OFFSET) {
       throw new BadRequestException('A refund is paid out (cash, card, QPay, transfer) or taken off a debt (CREDIT)');
     }
+    // QPay cannot send money back to the payer: QPay purchases are refunded by bank transfer.
+    if (dto.refundMethod === PayMethod.QPAY) {
+      throw new BadRequestException('QPay-ээр мөнгө буцаах боломжгүй — «Банкны шилжүүлэг» сонгож дансыг бичнэ үү / Refund QPay payments by bank transfer');
+    }
+    const refundAccount = dto.refundAccount?.trim() || null;
+    if (dto.refundMethod === PayMethod.TRANSFER && (!refundAccount || refundAccount.length < 6)) {
+      throw new BadRequestException('Мөнгө шилжүүлэх данс (банк, дансны дугаар, нэр)-ыг бичнэ үү / Enter the account to refund to');
+    }
     let debtClosed = false;
     const credit = order.payments.find((p) => p.method === PayMethod.CREDIT && p.status === PaymentStatus.UNPAID);
     if (credit && credit.amountMnt > 0) {
@@ -209,9 +217,12 @@ export class ReturnsService {
         reason: dto.reason.trim(),
         refundAmount,
         refundMethod: dto.refundMethod,
+        refundAccount: dto.refundMethod === PayMethod.TRANSFER ? refundAccount : null,
         // Lowering a debt hands nothing back, and cash leaves the drawer right here (the drawer count already
-        // subtracts it), so both are done. Card, QPay and transfer refunds wait for the bank payout.
-        ...(dto.refundMethod === PayMethod.CREDIT || dto.refundMethod === PayMethod.CASH ? { refundStatus: RefundStatus.PAID_OUT } : {}),
+        // subtracts it), so both are done. Card and transfer refunds wait until someone marks them paid out.
+        ...(dto.refundMethod === PayMethod.CREDIT || dto.refundMethod === PayMethod.CASH
+          ? { refundStatus: RefundStatus.PAID_OUT, paidOutAt: new Date(), paidOutById: user.id }
+          : {}),
         createdById: user.id,
         ebarimtStatus: 'PENDING',
         items: {
@@ -270,5 +281,21 @@ export class ReturnsService {
         totalAmount: l.lineRefund,
       })),
     };
+  }
+
+  /** A card or bank-transfer refund was actually sent to the customer (managers, their own warehouses). */
+  async markPaidOut(returnId: string, user: AuthUser) {
+    if (!isManagerRole(user.role)) throw new ForbiddenException('Only managers can confirm a refund payout');
+    const ret = await this.prisma.salesReturn.findUnique({ where: { id: returnId }, include: { order: { select: { warehouseId: true } } } });
+    if (!ret) throw new NotFoundException('Return not found');
+    assertWarehouseAccess(user, ret.order.warehouseId, ret.order.warehouseId ? undefined : await this.inventory.defaultWarehouseId());
+    const done = await this.prisma.salesReturn.updateMany({
+      where: { id: returnId, refundStatus: RefundStatus.PENDING_PAYOUT },
+      data: { refundStatus: RefundStatus.PAID_OUT, paidOutAt: new Date(), paidOutById: user.id },
+    });
+    if (done.count === 1) {
+      this.log.log(`Refund ${returnId} (${ret.refundAmount}₮ ${ret.refundMethod}) paid out, confirmed by ${user.id}`);
+    }
+    return this.prisma.salesReturn.findUniqueOrThrow({ where: { id: returnId } });
   }
 }

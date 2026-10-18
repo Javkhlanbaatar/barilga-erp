@@ -243,9 +243,11 @@ export type Order = {
     id: string;
     reason: string;
     refundAmount: number;
-    refundMethod: 'CASH' | 'QPAY' | 'CARD';
-    /** PENDING_PAYOUT until money is actually handed back; no payout flow exists yet. */
+    refundMethod: 'CASH' | 'QPAY' | 'CARD' | 'TRANSFER' | 'CREDIT';
+    /** Cash and debt refunds are done at once; card and transfer ones until a manager marks them sent. */
     refundStatus?: 'PENDING_PAYOUT' | 'PAID_OUT';
+    refundAccount?: string | null;
+    paidOutAt?: string | null;
     createdAt: string;
     ebarimtRefundId?: string | null;
     ebarimtStatus?: string | null;

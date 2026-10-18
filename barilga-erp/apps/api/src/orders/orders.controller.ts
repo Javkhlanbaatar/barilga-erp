@@ -116,6 +116,13 @@ export class OrdersController {
     return this.returns.create(id, dto, user);
   }
 
+  /** The card / bank-transfer refund was sent to the customer. */
+  @Post('returns/:returnId/paid-out')
+  @Roles(...OVERSIGHT_ROLES)
+  refundPaidOut(@Param('returnId') returnId: string, @CurrentUser() user: AuthUser) {
+    return this.returns.markPaidOut(returnId, user);
+  }
+
   @Post(':id/ebarimt')
   @Roles(Role.BORLUULAGCH, Role.ADMIN, Role.MANAGER)
   issueEbarimt(@Param('id') id: string, @CurrentUser() user: AuthUser) {

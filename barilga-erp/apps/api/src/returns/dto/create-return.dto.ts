@@ -1,6 +1,6 @@
 import { PayMethod } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsEnum, IsNumber, IsString, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsEnum, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 
 export class ReturnLineDto {
   @IsString()
@@ -18,6 +18,12 @@ export class CreateReturnDto {
 
   @IsEnum(PayMethod)
   refundMethod!: PayMethod;
+
+  /** Bank transfer refunds: bank, account number and holder the money goes to. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  refundAccount?: string;
 
   @IsArray()
   @ArrayMinSize(1)

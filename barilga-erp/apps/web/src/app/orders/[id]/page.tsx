@@ -37,7 +37,8 @@ export default function OrderDetailPage() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnReason, setReturnReason] = useState('');
-  const [refundMethod, setRefundMethod] = useState<'CASH' | 'QPAY' | 'CARD' | 'TRANSFER' | 'CREDIT'>('CASH');
+  const [refundMethod, setRefundMethod] = useState<'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT'>('CASH');
+  const [refundAccount, setRefundAccount] = useState('');
   const [returnQty, setReturnQty] = useState<Record<string, number>>({});
   const [saving, setSaving] = useState(false);
   const [vehicleNumber, setVehicleNumber] = useState('');
@@ -183,8 +184,11 @@ export default function OrderDetailPage() {
     for (const item of order.items) next[item.id] = 0;
     setReturnQty(next);
     setReturnReason('');
-    // While goods are still owed for, a return lowers the debt (no money is handed back).
-    setRefundMethod(order && owedOnOrder(order) > 0 ? 'CREDIT' : 'CASH');
+    setRefundAccount('');
+    // While goods are still owed for, a return lowers the debt (no money is handed back). Otherwise the money
+    // goes back the way it came: cash for cash sales, a bank transfer for QPay / transfer / card sales.
+    const paidBy = (order.payments ?? []).filter((p) => p.status === 'PAID').map((p) => p.method);
+    setRefundMethod(owedOnOrder(order) > 0 ? 'CREDIT' : paidBy.includes('CASH') || !paidBy.length ? 'CASH' : paidBy.includes('CARD') ? 'CARD' : 'TRANSFER');
     setReturnOpen(true);
   }
 
@@ -204,10 +208,16 @@ export default function OrderDetailPage() {
     try {
       await api(`/orders/${order.id}/return`, {
         method: 'POST',
-        body: JSON.stringify({ reason: returnReason, refundMethod, items }),
+        body: JSON.stringify({ reason: returnReason, refundMethod, items, ...(refundMethod === 'TRANSFER' ? { refundAccount } : {}) }),
       });
       setReturnOpen(false);
-      setToast('Буцаалт бүртгэгдлээ — мөнгийг систем автоматаар олгохгүй');
+      setToast(
+        refundMethod === 'CASH'
+          ? 'Буцаалт бүртгэгдлээ — кассаас бэлэн мөнгийг өгнө үү'
+          : refundMethod === 'CREDIT'
+            ? 'Буцаалт бүртгэгдлээ — өрөөс хасагдлаа'
+            : 'Буцаалт бүртгэгдлээ — мөнгийг шилжүүлээд «Шилжүүлсэн» гэж тэмдэглэнэ',
+      );
       window.setTimeout(() => setToast(''), 4000);
       await load();
     } catch (err) {
@@ -216,6 +226,16 @@ export default function OrderDetailPage() {
       setToast(message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function markRefundSent(id: string) {
+    if (!window.confirm('Харилцагч руу мөнгийг шилжүүлсэн үү?')) return;
+    try {
+      await api(`/orders/returns/${id}/paid-out`, { method: 'POST', body: '{}' });
+      await load();
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
     }
   }
 
@@ -547,11 +567,19 @@ export default function OrderDetailPage() {
             <div className="pt-2">
               <h4 className="text-sm font-semibold">Буцаалт</h4>
               {(order.returns ?? []).map((r) => (
-                <p key={r.id} className="text-xs text-slate-400">
-                  {tugrik(r.refundAmount)} {PAY_LABEL[r.refundMethod] ?? r.refundMethod} — {r.reason}
-                  {features.enabled('EBARIMT') && r.ebarimtRefundId ? ` · И-баримт ${r.ebarimtRefundId}` : ''}
-                  {r.refundStatus === 'PAID_OUT' ? ' · мөнгө буцаагдсан' : ' · мөнгө буцаагдаагүй (гараар олгоно)'}
-                </p>
+                <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                  <p>
+                    {tugrik(r.refundAmount)} {r.refundMethod === 'CREDIT' ? 'өрөөс хассан' : (PAY_LABEL[r.refundMethod] ?? r.refundMethod)} — {r.reason}
+                    {r.refundAccount ? ` · данс: ${r.refundAccount}` : ''}
+                    {features.enabled('EBARIMT') && r.ebarimtRefundId ? ` · И-баримт ${r.ebarimtRefundId}` : ''}
+                    {r.refundMethod === 'CREDIT' ? '' : r.refundStatus === 'PAID_OUT' ? ' · ✓ мөнгө буцаагдсан' : ' · ⏳ мөнгө хараахан буцаагдаагүй'}
+                  </p>
+                  {r.refundStatus === 'PENDING_PAYOUT' && canDispatch && (
+                    <button className="btn-ghost px-2 py-0.5 text-xs" onClick={() => void markRefundSent(r.id)}>
+                      Шилжүүлсэн
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -717,52 +745,146 @@ export default function OrderDetailPage() {
 
       {returnOpen && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={submitReturn} className="card w-full max-w-lg space-y-3 max-h-[90vh] overflow-auto">
-            <h3 className="font-semibold text-lg">Буцаалт</h3>
+          <form onSubmit={submitReturn} className="card w-full max-w-2xl space-y-4 max-h-[90vh] overflow-auto">
+            <div>
+              <h3 className="font-semibold text-lg">Буцаалт — {order.orderNumber}</h3>
+              <p className="text-xs text-slate-400">1. Буцаах бараа, тоогоо сонгоно · 2. Шалтгаан · 3. Мөнгийг яаж буцаах</p>
+            </div>
             {error && <p className="text-red-400 text-sm">{error}</p>}
-            {order.items.map((item) => {
-              const remaining = Number(item.quantity) - (returnedByItem[item.id] ?? 0);
-              if (remaining <= 0) {
-                return (
-                  <p key={item.id} className="text-xs text-slate-500">
-                    {item.product.nameMn} — бүрэн буцаагдсан
-                  </p>
-                );
-              }
-              return (
-                <label key={item.id} className="block text-xs text-slate-400">
-                  {item.product.nameMn} (үлдсэн {remaining})
-                  <input
-                    type="number"
-                    min={0}
-                    max={remaining}
-                    step={0.001}
-                    className="mt-1 w-full"
-                    value={returnQty[item.id] ?? 0}
-                    onChange={(e) => setReturnQty({ ...returnQty, [item.id]: Number(e.target.value) })}
-                  />
-                </label>
-              );
-            })}
+
+            <table className="w-full text-sm">
+              <thead className="text-left text-[11px] text-slate-400">
+                <tr>
+                  <th className="pb-1">Бараа</th>
+                  <th className="pb-1 text-right">Зарсан</th>
+                  <th className="pb-1 text-right">Буцаасан</th>
+                  <th className="pb-1 text-center">Буцаах тоо</th>
+                  <th className="pb-1 text-right">Дүн</th>
+                </tr>
+              </thead>
+              <tbody>
+                {order.items.map((item) => {
+                  const sold = Number(item.quantity);
+                  const done = returnedByItem[item.id] ?? 0;
+                  const remaining = Math.round((sold - done) * 1000) / 1000;
+                  const q = returnQty[item.id] ?? 0;
+                  const set = (v: number) => setReturnQty({ ...returnQty, [item.id]: Math.max(0, Math.min(remaining, Math.round(v * 1000) / 1000)) });
+                  return (
+                    <tr key={item.id} className={`border-t border-slate-800 align-middle ${remaining <= 0 ? 'opacity-40' : ''}`}>
+                      <td className="py-2 pr-2">
+                        <p className="font-medium">{item.product.nameMn}</p>
+                        <p className="text-[11px] text-slate-500">
+                          {item.product.sku} · {tugrik(item.unitPrice)} / {item.product.unit}
+                        </p>
+                      </td>
+                      <td className="text-right">{sold}</td>
+                      <td className="text-right text-slate-400">{done || '—'}</td>
+                      <td className="text-center">
+                        {remaining <= 0 ? (
+                          <span className="text-xs text-slate-500">бүгд буцсан</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1">
+                            <button type="button" className="btn-ghost px-2 py-0.5" onClick={() => set(q - 1)}>
+                              −
+                            </button>
+                            <input
+                              type="number"
+                              min={0}
+                              max={remaining}
+                              step="any"
+                              className="w-16 text-center"
+                              value={q}
+                              onChange={(e) => set(Number(e.target.value))}
+                            />
+                            <button type="button" className="btn-ghost px-2 py-0.5" onClick={() => set(q + 1)}>
+                              +
+                            </button>
+                            <button type="button" className="text-[11px] text-amber-brand hover:underline" onClick={() => set(remaining)}>
+                              бүгд ({remaining})
+                            </button>
+                          </span>
+                        )}
+                      </td>
+                      <td className="text-right font-semibold">{q > 0 ? tugrik(Math.round(item.unitPrice * q)) : '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-slate-700">
+                  <td colSpan={4} className="pt-2 text-right font-semibold">
+                    Буцаах дүн
+                  </td>
+                  <td className="pt-2 text-right text-lg font-bold text-amber-brand">
+                    {tugrik(order.items.reduce((s, i) => s + Math.round(i.unitPrice * (returnQty[i.id] ?? 0)), 0))}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+
             <label className="block text-xs text-slate-400">
               Шалтгаан
-              <input className="mt-1 w-full" required minLength={3} value={returnReason} onChange={(e) => setReturnReason(e.target.value)} />
+              <input
+                className="mt-1 w-full"
+                required
+                minLength={3}
+                list="return-reasons"
+                placeholder="Сонгох эсвэл бичих"
+                value={returnReason}
+                onChange={(e) => setReturnReason(e.target.value)}
+              />
+              <datalist id="return-reasons">
+                <option value="Илүү авсан" />
+                <option value="Гэмтэлтэй бараа" />
+                <option value="Буруу бараа олгосон" />
+                <option value="Харилцагч бодлоо өөрчилсөн" />
+              </datalist>
             </label>
-            <label className="block text-xs text-slate-400">
-              Буцаалтын төлбөрийн хэлбэр
+
+            <div className="text-xs text-slate-400">
+              Мөнгийг яаж буцаах вэ
               {owedOnOrder(order) > 0 ? (
                 <p className="mt-1 text-amber-300">
-                  Энэ захиалгад {tugrik(owedOnOrder(order))} өр байгаа тул буцаалт өрөөс хасагдана (мөнгө олгохгүй).
+                  Энэ захиалгад {tugrik(owedOnOrder(order))} өр байгаа тул буцаалт өрөөс хасагдана (мөнгө өгөхгүй).
                 </p>
               ) : (
-                <select className="mt-1 w-full" value={refundMethod} onChange={(e) => setRefundMethod(e.target.value as 'CASH' | 'QPAY' | 'CARD' | 'TRANSFER')}>
-                  <option value="CASH">Бэлэн</option>
-                  <option value="CARD">Карт</option>
-                  <option value="QPAY">QPay</option>
-                  <option value="TRANSFER">Банкны шилжүүлэг</option>
-                </select>
+                <div className="mt-1 grid gap-2 sm:grid-cols-3">
+                  {(
+                    [
+                      ['CASH', 'Бэлнээр', 'Кассаас одоо өгнө'],
+                      ['TRANSFER', 'Банкны шилжүүлгээр', 'QPay, шилжүүлгээр төлсөн бол'],
+                      ['CARD', 'Картаар', 'Картын терминалаар буцаана'],
+                    ] as const
+                  ).map(([m, label, hint]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setRefundMethod(m)}
+                      className={`rounded-lg border p-2 text-left ${refundMethod === m ? 'border-amber-500 bg-amber-950/40 text-white' : 'border-slate-700 hover:bg-steel-800'}`}
+                    >
+                      <span className="block text-sm font-semibold">{label}</span>
+                      <span className="block text-[11px] text-slate-400">{hint}</span>
+                    </button>
+                  ))}
+                </div>
               )}
-            </label>
+            </div>
+            {refundMethod === 'TRANSFER' && owedOnOrder(order) <= 0 && (
+              <label className="block text-xs text-slate-400">
+                Мөнгө шилжүүлэх данс
+                <input
+                  className="mt-1 w-full"
+                  required
+                  minLength={6}
+                  placeholder="Банк, дансны дугаар, эзэмшигчийн нэр — ж: Хаан банк 5000123456 Бат"
+                  value={refundAccount}
+                  onChange={(e) => setRefundAccount(e.target.value)}
+                />
+                <span className="mt-1 block text-[11px] text-slate-500">
+                  Буцаалт «мөнгө хараахан буцаагдаагүй» төлөвтэй үүснэ. Менежер шилжүүлээд «Шилжүүлсэн» дарна (сануулгад харагдана).
+                </span>
+              </label>
+            )}
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setReturnOpen(false)}>
                 Болих

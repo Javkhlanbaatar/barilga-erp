@@ -371,6 +371,11 @@ model SalesReturn {
   refundAmount    Int          @map("refund_amount")
   refundMethod    PayMethod    @map("refund_method")
   refundStatus    RefundStatus @default(PENDING_PAYOUT) @map("refund_status")
+  /// Bank transfer refunds: where to send the money (bank, account number, holder).
+  refundAccount   String?      @map("refund_account")
+  /// When and by whom a pending refund was actually paid out.
+  paidOutAt       DateTime?    @map("paid_out_at")
+  paidOutById     String?      @map("paid_out_by_id")
   createdById     String       @map("created_by_id")
   createdBy       User         @relation("ReturnCreatedBy", fields: [createdById], references: [id])
   ebarimtRefundId String?      @map("ebarimt_refund_id")

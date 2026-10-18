@@ -24,6 +24,7 @@ const NOUNS: Record<string, string> = {
   Adjustment: 'Нэмэгдэл/суутгал',
   Entry: 'Бичилт',
   'Supplier partner': 'Нийлүүлэгч',
+  Return: 'Буцаалт',
 };
 
 /** Exact (or prefix) English messages → Mongolian. */
