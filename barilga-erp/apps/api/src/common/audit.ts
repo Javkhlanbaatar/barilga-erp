@@ -74,6 +74,7 @@ const FIELD_MN: Record<string, string> = {
   receipt: 'баримт',
   issueNote: 'зарлагын баримт',
   picklist: 'бэлтгэх хуудас',
+  hidden: 'харагдах хэсэг',
 };
 
 /** "нэр, РД" from ["name", "regNumber"]. */

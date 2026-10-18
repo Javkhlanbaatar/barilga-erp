@@ -1,6 +1,7 @@
 'use client';
 
 import { mediaUrl, tugrik } from '@/lib/api';
+import { BlankRowsControl, EditText, FlagPart, Part, SignatureNames, shown, useDesign } from '@/components/doc-design';
 import type { CompanySettings, DocTemplate } from '@/lib/types';
 
 /** The order fields an invoice needs — both the staff order and the buyer's public view provide them. */
@@ -97,9 +98,23 @@ export function paidAndDue<P extends { status: string; amountMnt: number }>(orde
   return { live, paid, due: Math.max(0, order.totalMnt - paid) };
 }
 
-/** Free text under the heading or above the signatures. */
-export function DocNote({ text, className = '' }: { text?: string; className?: string }) {
-  return text ? <p className={`whitespace-pre-line text-xs ${className}`}>{text}</p> : null;
+/** Free text under the heading or above the signatures (typed in place in the template editor). */
+export function DocNote({ field, t, className = '' }: { field: 'headerNote' | 'footerNote'; t?: DocTemplate; className?: string }) {
+  const design = useDesign();
+  const text = (design?.t ?? t)?.[field];
+  if (!design && !text) return null;
+  return (
+    <Part k={field} label={field === 'headerNote' ? 'Дээд текст' : 'Доод текст'} t={t}>
+      <p className={`text-xs ${className}`}>
+        <EditText
+          field={field}
+          t={t}
+          multiline
+          placeholder={field === 'headerNote' ? 'Гарчгийн доор гарах текст…' : 'Доод талд гарах текст (нөхцөл, анхааруулга)…'}
+        />
+      </p>
+    </Part>
+  );
 }
 
 /** A line to fill in by hand. */
@@ -127,19 +142,24 @@ export function BlankRows({ n, cols }: { n: number; cols: number }) {
   );
 }
 
-/** Signature lines (and an optional stamp box) at the foot of a document. */
-export function Signatures({ names, stamp, signer }: { names: string[]; stamp?: boolean; signer?: string }) {
-  if (!names.length && !stamp) return null;
+/** Signature lines (and the stamp box) at the foot of a document; both can be switched off. */
+export function Signatures({ t, fallback, signer }: { t?: DocTemplate; fallback?: string[]; signer?: string }) {
+  const design = useDesign();
+  const tpl = design?.t ?? t;
+  const names = tpl?.signatures ?? fallback ?? [];
+  if (!design && (!names.length || !shown(tpl, 'signatures')) && !tpl?.stamp) return null;
   return (
     <div className="flex items-end justify-between gap-6 pt-8 text-xs">
-      <div className="grid flex-1 gap-6" style={{ gridTemplateColumns: `repeat(${Math.max(1, names.length)}, minmax(0, 1fr))` }}>
-        {names.map((n, i) => (
-          <p key={n}>
-            {n}: ______________________{i === 0 && signer ? ` /${signer}/` : ''}
-          </p>
-        ))}
+      <div className="flex-1">
+        <Part k="signatures" label="Гарын үсэг" t={t}>
+          <div className="grid gap-6" style={{ gridTemplateColumns: `repeat(${Math.max(1, names.length + (design ? 1 : 0))}, minmax(0, 1fr))` }}>
+            <SignatureNames names={names} signer={signer} />
+          </div>
+        </Part>
       </div>
-      {stamp && <div className="grid h-20 w-20 shrink-0 place-items-center rounded-full border border-dashed border-slate-500 text-[10px] text-slate-500">Тэмдэг</div>}
+      <FlagPart field="stamp" label="Тэмдэг" t={t}>
+        <div className="grid h-20 w-20 shrink-0 place-items-center rounded-full border border-dashed border-slate-500 text-[10px] text-slate-500">Тэмдэг</div>
+      </FlagPart>
     </div>
   );
 }
@@ -156,121 +176,152 @@ export function InvoiceDoc({
   template?: DocTemplate;
 }) {
   const { paid, due } = paidAndDue(order);
-  const t = template;
+  const design = useDesign();
+  const t = design?.t ?? template;
   // A walk-in sale has no real buyer: print dotted lines so the company name, РД… are written by hand.
   const unknownBuyer = !order.customerName?.trim() || order.customerName.trim() === 'Энгийн харилцагч';
-  const blankBuyer = Boolean(t?.blankBuyer) || unknownBuyer;
+  const blankBuyer = Boolean(t?.blankBuyer) || (unknownBuyer && !design);
   return (
     <div className="relative space-y-5">
-      <Watermark company={company} />
+      <Part k="watermark" label="Усан тэмдэг (лого)" t={template}>
+        <Watermark company={company} />
+      </Part>
       <div className="flex items-start justify-between gap-6">
-        <SellerBlock company={company} />
+        <Part k="seller" label="Компани" required t={template}>
+          <SellerBlock company={company} />
+        </Part>
         <div className="text-right">
-          <h1 className="text-2xl font-bold tracking-wide">{t?.title || 'НЭХЭМЖЛЭХ'}</h1>
-          <p className="text-sm">№ {invoice?.invoiceNumber ?? order.orderNumber}</p>
-          {invoice && <p className="text-xs">Захиалга: {order.orderNumber}</p>}
-          <p className="text-xs">Огноо: {dateTime(invoice?.createdAt ?? order.createdAt)}</p>
-          {invoice?.dueDate && <p className="text-xs font-semibold">Төлөх хугацаа: {dateOnly(invoice.dueDate)}</p>}
+          <Part k="title" label="Гарчиг" required t={template}>
+            <h1 className="text-2xl font-bold tracking-wide">
+              <EditText field="title" fallback="НЭХЭМЖЛЭХ" t={template} />
+            </h1>
+          </Part>
+          <Part k="number" label="Дугаар, огноо" required t={template}>
+            <p className="text-sm">№ {invoice?.invoiceNumber ?? order.orderNumber}</p>
+            {invoice && <p className="text-xs">Захиалга: {order.orderNumber}</p>}
+            <p className="text-xs">Огноо: {dateTime(invoice?.createdAt ?? order.createdAt)}</p>
+          </Part>
+          {invoice?.dueDate && (
+            <Part k="dueDate" label="Төлөх хугацаа" t={template}>
+              <p className="text-xs font-semibold">Төлөх хугацаа: {dateOnly(invoice.dueDate)}</p>
+            </Part>
+          )}
         </div>
       </div>
 
-      <DocNote text={t?.headerNote} />
+      <DocNote field="headerNote" t={template} />
 
       <div className="grid grid-cols-2 gap-4 text-xs">
-        <div className="rounded border border-slate-400 p-3">
-          <p className="mb-1 font-semibold">Нэхэмжлэгч</p>
-          <p>{company.name || '—'}</p>
-          {company.bankAccounts.map((b) => (
-            <p key={b.accountNumber}>
-              {b.bankName}: <span className="font-mono">{b.accountNumber}</span>
-              {b.accountName ? ` (${b.accountName})` : ''}
+        <Part k="bank" label="Нэхэмжлэгч, данс" t={template}>
+          <div className="h-full rounded border border-slate-400 p-3">
+            <p className="mb-1 font-semibold">Нэхэмжлэгч</p>
+            <p>{company.name || '—'}</p>
+            {company.bankAccounts.map((b) => (
+              <p key={b.accountNumber}>
+                {b.bankName}: <span className="font-mono">{b.accountNumber}</span>
+                {b.accountName ? ` (${b.accountName})` : ''}
+              </p>
+            ))}
+          </div>
+        </Part>
+        <Part k="buyer" label="Төлөгч" t={template}>
+          <div className="h-full rounded border border-slate-400 p-3">
+            <p className="mb-1 font-semibold">
+              Төлөгч{' '}
+              <FlagPart field="blankBuyer" label="Үргэлж хоосон (гараар)" t={template} inline indicator>
+                <span className="text-[10px] font-normal text-slate-500">(гараар бөглөнө)</span>
+              </FlagPart>
             </p>
-          ))}
-        </div>
-        <div className="rounded border border-slate-400 p-3">
-          <p className="mb-1 font-semibold">Төлөгч</p>
-          {blankBuyer ? (
-            <div className="space-y-2 pt-1">
-              <Blank label="Байгууллага / нэр" wide />
-              <Blank label="РД" wide />
-              <Blank label="Утас" wide />
-              <Blank label="Хаяг" wide />
-            </div>
-          ) : (
-            <>
-              <p>{order.customerName}</p>
-              {order.customerRegNumber && <p>РД: {order.customerRegNumber}</p>}
-              <p>Утас: {order.customerPhone}</p>
-              {order.deliveryAddress && <p>Хаяг: {order.deliveryAddress}</p>}
-            </>
-          )}
-        </div>
+            {blankBuyer ? (
+              <div className="space-y-2 pt-1">
+                <Blank label="Байгууллага / нэр" wide />
+                <Blank label="РД" wide />
+                <Blank label="Утас" wide />
+                <Blank label="Хаяг" wide />
+              </div>
+            ) : (
+              <>
+                <p>{order.customerName}</p>
+                {order.customerRegNumber && <p>РД: {order.customerRegNumber}</p>}
+                <p>Утас: {order.customerPhone}</p>
+                {order.deliveryAddress && <p>Хаяг: {order.deliveryAddress}</p>}
+              </>
+            )}
+          </div>
+        </Part>
       </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th className="w-8">№</th>
-            <th>Барааны нэр</th>
-            <th>Код</th>
-            <th>Нэгж</th>
-            <th className="text-right">Тоо</th>
-            <th className="text-right">Нэгж үнэ</th>
-            <th className="text-right">Дүн</th>
-          </tr>
-        </thead>
-        <tbody>
-          {order.items.map((i, idx) => (
-            <tr key={i.id}>
-              <td>{idx + 1}</td>
-              <td>{i.product.nameMn}</td>
-              <td className="font-mono">{i.product.sku}</td>
-              <td>{i.product.unit}</td>
-              <td className="text-right">{qty(i.quantity)}</td>
-              <td className="text-right">{tugrik(i.unitPrice)}</td>
-              <td className="text-right">{tugrik(i.lineTotal)}</td>
-            </tr>
-          ))}
-          <BlankRows n={t?.blankRows ?? 0} cols={7} />
-          <FeeRows order={order} cols={7} />
-          <tr>
-            <td colSpan={6} className="text-right font-bold">
-              Нийт дүн
-            </td>
-            <td className="text-right font-bold">{tugrik(order.totalMnt)}</td>
-          </tr>
-          {paid > 0 && (
+      <Part k="items" label="Бараа, дүн" required t={template}>
+        <table>
+          <thead>
             <tr>
-              <td colSpan={6} className="text-right">
-                Төлсөн
-              </td>
-              <td className="text-right">{tugrik(paid)}</td>
+              <th className="w-8">№</th>
+              <th>Барааны нэр</th>
+              <th>Код</th>
+              <th>Нэгж</th>
+              <th className="text-right">Тоо</th>
+              <th className="text-right">Нэгж үнэ</th>
+              <th className="text-right">Дүн</th>
             </tr>
-          )}
-          <tr>
-            <td colSpan={6} className="text-right font-bold">
-              Төлөх үлдэгдэл
-            </td>
-            <td className="text-right font-bold">{tugrik(due)}</td>
-          </tr>
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {order.items.map((i, idx) => (
+              <tr key={i.id}>
+                <td>{idx + 1}</td>
+                <td>{i.product.nameMn}</td>
+                <td className="font-mono">{i.product.sku}</td>
+                <td>{i.product.unit}</td>
+                <td className="text-right">{qty(i.quantity)}</td>
+                <td className="text-right">{tugrik(i.unitPrice)}</td>
+                <td className="text-right">{tugrik(i.lineTotal)}</td>
+              </tr>
+            ))}
+            <BlankRows n={t?.blankRows ?? 0} cols={7} />
+            <FeeRows order={order} cols={7} />
+            <tr>
+              <td colSpan={6} className="text-right font-bold">
+                Нийт дүн
+              </td>
+              <td className="text-right font-bold">{tugrik(order.totalMnt)}</td>
+            </tr>
+            {paid > 0 && (
+              <tr>
+                <td colSpan={6} className="text-right">
+                  Төлсөн
+                </td>
+                <td className="text-right">{tugrik(paid)}</td>
+              </tr>
+            )}
+            <tr>
+              <td colSpan={6} className="text-right font-bold">
+                Төлөх үлдэгдэл
+              </td>
+              <td className="text-right font-bold">{tugrik(due)}</td>
+            </tr>
+          </tbody>
+        </table>
+        <BlankRowsControl />
+      </Part>
 
       {invoice?.note && <p className="whitespace-pre-line text-xs">{invoice.note}</p>}
-      {company.invoiceNote && <p className="whitespace-pre-line text-xs">{company.invoiceNote}</p>}
-      {company.bankAccounts.length > 0 && due > 0 && (
-        <p className="text-xs">
-          Гүйлгээний утга: <b>{invoice?.invoiceNumber ?? order.orderNumber}</b>
-        </p>
+      {company.invoiceNote && (
+        <Part k="companyNote" label="Компанийн тэмдэглэл" t={template}>
+          <p className="whitespace-pre-line text-xs">{company.invoiceNote}</p>
+        </Part>
+      )}
+      {company.bankAccounts.length > 0 && (due > 0 || design) && (
+        <Part k="paymentRef" label="Гүйлгээний утга" t={template}>
+          <p className="text-xs">
+            Гүйлгээний утга: <b>{invoice?.invoiceNumber ?? order.orderNumber}</b>
+          </p>
+        </Part>
       )}
 
-      <DocNote text={t?.footerNote} />
-      <Signatures
-        names={t?.signatures ?? ['Нэхэмжилсэн', 'Хүлээн авсан']}
-        stamp={t?.stamp}
-        signer={order.createdBy?.fullName ?? order.createdBy?.name ?? ''}
-      />
-      <p className="pt-4 text-[10px] text-slate-500">Энэ нэхэмжлэх нь И-баримт биш. Албан ёсны баримтыг И-баримтын системээс авна.</p>
+      <DocNote field="footerNote" t={template} />
+      <Signatures t={template} fallback={['Нэхэмжилсэн', 'Хүлээн авсан']} signer={order.createdBy?.fullName ?? order.createdBy?.name ?? ''} />
+      <Part k="disclaimer" label="«И-баримт биш» тайлбар" t={template}>
+        <p className="pt-4 text-[10px] text-slate-500">Энэ нэхэмжлэх нь И-баримт биш. Албан ёсны баримтыг И-баримтын системээс авна.</p>
+      </Part>
     </div>
   );
 }

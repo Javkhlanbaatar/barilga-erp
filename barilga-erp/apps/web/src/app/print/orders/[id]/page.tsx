@@ -2,10 +2,11 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
-import { api, tugrik } from '@/lib/api';
-import { Blank, BlankRows, DocNote, FeeRows, InvoiceDoc, InvoiceMeta, LogoMark, SellerBlock, Signatures, Watermark, paidAndDue } from '@/components/invoice-doc';
+import { api } from '@/lib/api';
+import { InvoiceDoc, InvoiceMeta } from '@/components/invoice-doc';
+import { IssueNote, Picklist, Receipt } from '@/components/print-docs';
 import { TOP_ROLES, hasRole } from '@/lib/rbac';
-import { companionLines, type AuthUser, type CompanySettings, type DocTemplate, type Order } from '@/lib/types';
+import type { AuthUser, CompanySettings, DocTemplate, Order } from '@/lib/types';
 
 type Doc = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
 type Layout = { paper: 'A4' | 'A5' | '80MM'; orientation: 'portrait' | 'landscape'; copies: number };
@@ -18,13 +19,6 @@ const DOCS: Array<[Doc, string]> = [
   ['picklist', 'Бэлтгэх хуудас'],
 ];
 
-const DELIVERY_MN: Record<string, string> = {
-  OUR_DELIVERY: 'Манай хүргэлт',
-  DELIVERY: 'Манай хүргэлт',
-  SELF_PICKUP: 'Өөрөө авах',
-  CUSTOMER_DRIVER: 'Харилцагчийн жолооч',
-};
-const PAY_MN: Record<string, string> = { CASH: 'Бэлэн', CARD: 'Карт', QPAY: 'QPay', CREDIT: 'Дараа төлөх', TRANSFER: 'Шилжүүлэг', OFFSET: 'Тооцоонд хасагдсан' };
 
 /** Printable width (mm) inside the page margins, and the CSS @page size, per paper layout. */
 function pageGeometry(l: Layout) {
@@ -34,16 +28,6 @@ function pageGeometry(l: Layout) {
   return { width: landscape ? 273 : 186, page: `A4 ${l.orientation}`, margin: '12mm', small: false };
 }
 
-const qty = (v: number | string) => Number(v).toLocaleString('mn-MN', { maximumFractionDigits: 3 });
-const dateTime = (iso?: string | null) =>
-  new Intl.DateTimeFormat('mn-MN', {
-    timeZone: 'Asia/Ulaanbaatar',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(iso ? new Date(iso) : new Date());
 
 /**
  * Printable invoice (нэхэмжлэх), receipt (баримт), goods issue note (зарлагын баримт) or picking sheet for one
@@ -114,7 +98,7 @@ function PrintOrder() {
 
   const layout = layouts[doc];
   const geo = pageGeometry(layout);
-  const base: DocTemplate = templates?.[doc] ?? { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: [], stamp: false, showPrices: true };
+  const base: DocTemplate = templates?.[doc] ?? { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: [], stamp: false, showPrices: true, hidden: [] };
   const tpl: DocTemplate = blank ? { ...base, blankBuyer: true, blankRows: Math.max(base.blankRows, 5) } : base;
   const body = (
     <>
@@ -192,249 +176,6 @@ function PrintOrder() {
           Баримт дээр дарж бичгийг засна. Засвар хадгалагдахгүй — зөвхөн энэ удаагийн хэвлэлтэд.
         </p>
       )}
-    </div>
-  );
-}
-
-function Receipt({ order, company, t }: { order: Order; company: CompanySettings; t: DocTemplate }) {
-  const { live, paid, due } = paidAndDue(order);
-  return (
-    <div className="relative font-mono text-[12px] leading-5">
-      <Watermark company={company} />
-      <div className="flex justify-center">
-        <LogoMark company={company} className="h-10" />
-      </div>
-      <p className="text-center text-sm font-bold">{company.name || 'Борлуулалтын баримт'}</p>
-      {t.title && <p className="text-center font-bold">{t.title}</p>}
-      {company.regNumber && <p className="text-center">РД: {company.regNumber}</p>}
-      {company.phone && <p className="text-center">{company.phone}</p>}
-      <p className="my-1 border-t border-dashed border-black" />
-      <p>Баримт: {order.orderNumber}</p>
-      <p>Огноо: {dateTime(order.createdAt)}</p>
-      <p>Кассчин: {order.createdBy?.fullName ?? order.createdBy?.name ?? ''}</p>
-      {t.blankBuyer ? <Blank label="Харилцагч" wide /> : <p>Харилцагч: {order.customerName}</p>}
-      {t.headerNote && <p className="whitespace-pre-line">{t.headerNote}</p>}
-      <p className="my-1 border-t border-dashed border-black" />
-      {order.items.map((i) => (
-        <div key={i.id}>
-          <p>{i.product.nameMn}</p>
-          {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
-            <p key={c} className="pl-2">+ {c}</p>
-          ))}
-          <p className="flex justify-between">
-            <span>
-              {qty(i.quantity)} × {tugrik(i.unitPrice)}
-            </span>
-            <span>{tugrik(i.lineTotal)}</span>
-          </p>
-        </div>
-      ))}
-      {order.deliveryFeeMnt !== 0 && (
-        <p className="flex justify-between">
-          <span>Хүргэлт</span>
-          <span>{tugrik(order.deliveryFeeMnt)}</span>
-        </p>
-      )}
-      {order.unloadingFeeMnt !== 0 && (
-        <p className="flex justify-between">
-          <span>Буулгалт</span>
-          <span>{tugrik(order.unloadingFeeMnt)}</span>
-        </p>
-      )}
-      {order.timeAdjustmentMnt !== 0 && (
-        <p className="flex justify-between">
-          <span>Цагийн нөхцөл</span>
-          <span>{tugrik(order.timeAdjustmentMnt)}</span>
-        </p>
-      )}
-      <p className="my-1 border-t border-dashed border-black" />
-      <p className="flex justify-between font-bold">
-        <span>НИЙТ</span>
-        <span>{tugrik(order.totalMnt)}</span>
-      </p>
-      {live
-        .filter((p) => p.status === 'PAID' && p.amountMnt > 0)
-        .map((p) => (
-          <p key={p.id} className="flex justify-between">
-            <span>{PAY_MN[p.method ?? p.provider ?? ''] ?? p.method}</span>
-            <span>{tugrik(p.amountMnt)}</span>
-          </p>
-        ))}
-      {due > 0 && (
-        <p className="flex justify-between">
-          <span>Үлдэгдэл</span>
-          <span>{tugrik(due)}</span>
-        </p>
-      )}
-      {paid >= order.totalMnt && <p className="text-center">Төлбөр бүрэн төлөгдсөн</p>}
-      {order.lottery && <p className="mt-1">И-баримт сугалаа: {order.lottery}</p>}
-      <p className="my-1 border-t border-dashed border-black" />
-      {company.receiptFooter && <p className="whitespace-pre-line text-center">{company.receiptFooter}</p>}
-      {t.footerNote && <p className="whitespace-pre-line text-center">{t.footerNote}</p>}
-      {t.signatures.map((s) => (
-        <p key={s} className="pt-3">
-          {s}: ____________
-        </p>
-      ))}
-      <p className="text-center">Баярлалаа!</p>
-    </div>
-  );
-}
-
-function Picklist({ order, company, t }: { order: Order; company: CompanySettings; t: DocTemplate }) {
-  return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-xl font-bold">{t.title || 'БАРАА БЭЛТГЭХ ХУУДАС'}</h1>
-          <p className="text-sm">
-            Захиалга № {order.orderNumber} · {dateTime(order.createdAt)}
-          </p>
-        </div>
-        <div className="text-right text-xs">
-          <p className="font-semibold">{company.name}</p>
-          <p>Агуулах: {order.warehouse?.name ?? '—'}</p>
-          <p>Хэвлэсэн: {dateTime()}</p>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-4 text-xs">
-        <div className="rounded border border-slate-400 p-3">
-          <p>
-            Харилцагч: <b>{order.customerName}</b> · {order.customerPhone}
-          </p>
-          <p>Хүргэлт: {DELIVERY_MN[order.deliveryMethod] ?? order.deliveryMethod}</p>
-          {order.deliveryAddress && <p>Хаяг: {order.deliveryAddress}</p>}
-        </div>
-        <div className="rounded border border-slate-400 p-3">
-          <p>
-            Нийт жин: {qty(order.totalWeightKg)} кг · Эзлэхүүн: {qty(order.totalVolumeM3)} м³
-          </p>
-          {order.vehicleNumber && (
-            <p>
-              Машин: {order.vehicleNumber} {order.driverPhone ? `· ${order.driverPhone}` : ''}
-            </p>
-          )}
-          {order.notes && <p>Тэмдэглэл: {order.notes}</p>}
-        </div>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th className="w-10">✓</th>
-            <th className="w-8">№</th>
-            <th>Код</th>
-            <th>Барааны нэр</th>
-            <th className="text-right">Тоо</th>
-            <th>Нэгж</th>
-            <th>Бэлдсэн</th>
-          </tr>
-        </thead>
-        <tbody>
-          {order.items.map((i, idx) => (
-            <tr key={i.id}>
-              <td className="text-center text-lg">{i.pickedAt ? '☑' : '☐'}</td>
-              <td>{idx + 1}</td>
-              <td className="font-mono">{i.product.sku}</td>
-              <td>
-                {i.product.nameMn}
-                {i.sourceType === 'EXTERNAL_SUPPLIER' ? ' (нийлүүлэгчээс)' : ''}
-                {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
-                  <p key={c} className="font-semibold">+ дагалдах: {c}</p>
-                ))}
-              </td>
-              <td className="text-right text-base font-bold">{qty(i.quantity)}</td>
-              <td>{i.product.unit}</td>
-              <td className="w-32">{i.pickedBy?.fullName ?? ''}</td>
-            </tr>
-          ))}
-          <BlankRows n={t.blankRows} cols={7} />
-        </tbody>
-      </table>
-      <DocNote text={t.footerNote} />
-      <Signatures names={t.signatures} stamp={t.stamp} />
-    </div>
-  );
-}
-
-/** Goods issue note: what leaves the warehouse for this order, numbered like the invoice. */
-function IssueNote({ order, company, t }: { order: Order; company: CompanySettings; t: DocTemplate }) {
-  const goods = order.items.reduce((sum, i) => sum + i.lineTotal, 0);
-  const prices = t.showPrices;
-  const cols = prices ? 7 : 5;
-  return (
-    <div className="relative space-y-3">
-      <Watermark company={company} />
-      <div className="flex items-start justify-between gap-4">
-        <SellerBlock company={company} />
-        <div className="text-right">
-          <h1 className="text-xl font-bold tracking-wide">{t.title || 'ЗАРЛАГЫН БАРИМТ'}</h1>
-          <p className="text-sm">№ {order.orderNumber}</p>
-          <p className="text-xs">Огноо: {dateTime(order.completedAt ?? order.createdAt)}</p>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <p>
-          Зарлагадсан агуулах: <b>{order.warehouse?.name ?? '—'}</b>
-        </p>
-        {t.blankBuyer ? (
-          <Blank label="Хүлээн авагч" wide />
-        ) : (
-          <p>
-            Хүлээн авагч: <b>{order.customerName}</b>
-            {order.customerRegNumber ? ` (РД ${order.customerRegNumber})` : ''} · {order.customerPhone}
-          </p>
-        )}
-        <p>Хүргэлт: {DELIVERY_MN[order.deliveryMethod] ?? order.deliveryMethod}</p>
-        {order.vehicleNumber && (
-          <p>
-            Машин: {order.vehicleNumber}
-            {order.driverPhone ? ` · ${order.driverPhone}` : ''}
-          </p>
-        )}
-      </div>
-      <DocNote text={t.headerNote} />
-      <table>
-        <thead>
-          <tr>
-            <th className="w-8">№</th>
-            <th>Барааны нэр</th>
-            <th>Код</th>
-            <th>Нэгж</th>
-            <th className="text-right">Тоо</th>
-            {prices && <th className="text-right">Нэгж үнэ</th>}
-            {prices && <th className="text-right">Дүн</th>}
-          </tr>
-        </thead>
-        <tbody>
-          {order.items.map((i, idx) => (
-            <tr key={i.id}>
-              <td>{idx + 1}</td>
-              <td>
-                {i.product.nameMn}
-                {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
-                  <p key={c} className="text-[10px]">+ дагалдах: {c}</p>
-                ))}
-              </td>
-              <td className="font-mono">{i.product.sku}</td>
-              <td>{i.product.unit}</td>
-              <td className="text-right font-semibold">{qty(i.quantity)}</td>
-              {prices && <td className="text-right">{tugrik(i.unitPrice)}</td>}
-              {prices && <td className="text-right">{tugrik(i.lineTotal)}</td>}
-            </tr>
-          ))}
-          <BlankRows n={t.blankRows} cols={cols} />
-          {prices && (
-            <tr>
-              <td colSpan={6} className="text-right font-bold">
-                Барааны дүн
-              </td>
-              <td className="text-right font-bold">{tugrik(goods)}</td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-      <DocNote text={t.footerNote} />
-      <Signatures names={t.signatures} stamp={t.stamp} />
     </div>
   );
 }

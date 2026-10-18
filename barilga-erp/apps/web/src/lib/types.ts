@@ -594,6 +594,8 @@ export type DocTemplate = {
   signatures: string[];
   stamp: boolean;
   showPrices: boolean;
+  /** Optional parts switched off in the template editor (e.g. "cashier", "watermark"). */
+  hidden: string[];
 };
 export type PrintDocKey = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
 

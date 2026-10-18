@@ -59,6 +59,14 @@ export class DocTemplateDto {
   @IsOptional()
   @IsBoolean()
   showPrices?: boolean;
+
+  /** Optional parts switched off in the template editor (part keys such as "cashier", "watermark"). */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(40)
+  @IsString({ each: true })
+  @MaxLength(30, { each: true })
+  hidden?: string[];
 }
 
 export class DocTemplatesDto {
@@ -77,13 +85,14 @@ export type DocTemplate = {
   signatures: string[];
   stamp: boolean;
   showPrices: boolean;
+  hidden: string[];
 };
 
 export const DEFAULT_TEMPLATE: Record<PrintDoc, DocTemplate> = {
-  invoice: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: ['Нэхэмжилсэн', 'Хүлээн авсан'], stamp: true, showPrices: true },
-  receipt: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: [], stamp: false, showPrices: true },
-  issueNote: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: ['Олгосон (нярав)', 'Хүлээн авсан', 'Шалгасан'], stamp: false, showPrices: true },
-  picklist: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: ['Бэлтгэсэн', 'Шалгасан', 'Хүлээн авсан'], stamp: false, showPrices: false },
+  invoice: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: ['Нэхэмжилсэн', 'Хүлээн авсан'], stamp: true, showPrices: true, hidden: [] },
+  receipt: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: [], stamp: false, showPrices: true, hidden: [] },
+  issueNote: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: ['Олгосон (нярав)', 'Хүлээн авсан', 'Шалгасан'], stamp: false, showPrices: true, hidden: [] },
+  picklist: { title: '', headerNote: '', footerNote: '', blankBuyer: false, blankRows: 0, signatures: ['Бэлтгэсэн', 'Шалгасан', 'Хүлээн авсан'], stamp: false, showPrices: false, hidden: [] },
 };
 
 export { PRINT_DOCS };
