@@ -12,6 +12,7 @@ export function productSearchWhere(raw?: string): Prisma.ProductWhereInput | und
   return {
     OR: [
       { sku: { contains: q, mode: 'insensitive' } },
+      { barcode: { contains: q } },
       { nameMn: { contains: q, mode: 'insensitive' } },
       { nameEn: { contains: q, mode: 'insensitive' } },
       { description: { contains: q, mode: 'insensitive' } },
@@ -20,7 +21,11 @@ export function productSearchWhere(raw?: string): Prisma.ProductWhereInput | und
 }
 
 type ProductDb = {
-  product: { findMany(args: { select: { id: true; sku: true; nameMn: true; nameEn: true; description: true } }): Promise<Array<{ id: string; sku: string; nameMn: string; nameEn: string; description: string | null }>> };
+  product: {
+    findMany(args: {
+      select: { id: true; sku: true; barcode: true; nameMn: true; nameEn: true; description: true };
+    }): Promise<Array<{ id: string; sku: string; barcode: string | null; nameMn: string; nameEn: string; description: string | null }>>;
+  };
 };
 
 /**
@@ -31,7 +36,9 @@ type ProductDb = {
 export async function productSearchFilter(db: ProductDb, raw?: string): Promise<Prisma.ProductWhereInput | undefined> {
   const q = raw?.trim();
   if (!q) return undefined;
-  const rows = await db.product.findMany({ select: { id: true, sku: true, nameMn: true, nameEn: true, description: true } });
-  const ids = rows.filter((p) => matchesSearch([p.sku, p.nameMn, p.nameEn, p.description ?? ''].join(' '), q)).map((p) => p.id);
+  const rows = await db.product.findMany({ select: { id: true, sku: true, barcode: true, nameMn: true, nameEn: true, description: true } });
+  const ids = rows
+    .filter((p) => p.barcode === q || matchesSearch([p.sku, p.nameMn, p.nameEn, p.description ?? ''].join(' '), q))
+    .map((p) => p.id);
   return { id: { in: ids } };
 }

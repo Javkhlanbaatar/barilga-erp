@@ -250,6 +250,7 @@ export default function CheckoutPOS() {
     const code = raw.trim();
     if (!code) return;
     const match =
+      productsRef.current.find((p) => p.barcode === code) ??
       productsRef.current.find((p) => p.sku.toLowerCase() === code.toLowerCase()) ??
       (productsRef.current.filter((p) => productMatchesQuery(p, code)).length === 1
         ? productsRef.current.find((p) => productMatchesQuery(p, code))

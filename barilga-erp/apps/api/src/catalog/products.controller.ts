@@ -29,6 +29,7 @@ import { InventoryService } from '../inventory/inventory.service';
 import { isManagerRole } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
+import { nextInStoreBarcode, normalizeBarcode } from './barcode';
 import { productSearchFilter, productSearchTerm } from './product-search';
 
 const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -85,7 +86,7 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(...CATALOG_WRITE_ROLES)
   async create(@Body() dto: CreateProductDto, @CurrentUser() user: AuthUser) {
-    const { stockQty, warehouseId, companions, ...rest } = dto;
+    const { stockQty, warehouseId, companions, barcode, ...rest } = dto;
     try {
       // The product starts at 0; any starting quantity is booked as an OPENING movement in one warehouse
       // so the ledger and the balances always agree.
@@ -94,6 +95,8 @@ export class ProductsController {
           data: {
             ...rest,
             stockQty: 0,
+            // No code on the goods: give it an in-store one so it can be labelled and scanned.
+            barcode: normalizeBarcode(barcode) ?? (await nextInStoreBarcode(tx)),
             companions: companionsValue(companions) ?? Prisma.DbNull,
             category: dto.category?.trim() || 'General',
             imageUrl: dto.imageUrl || null,
@@ -111,7 +114,9 @@ export class ProductsController {
         return tx.product.findUniqueOrThrow({ where: { id: created.id } });
       });
     } catch (err) {
-      if (isUniqueViolation(err)) {
+if (isUniqueViolation(err)) {
+        const target = String((err as Prisma.PrismaClientKnownRequestError).meta?.target ?? '');
+        if (target.includes('barcode')) throw new ConflictException('Ийм баркодтой бараа бүртгэлтэй байна / Barcode already in use');
         throw new ConflictException(`SKU ${dto.sku} already exists`);
       }
       throw err;
@@ -162,7 +167,7 @@ export class ProductsController {
   async update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: AuthUser) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Product not found');
-    const { stockQty, companions, ...rest } = dto;
+    const { stockQty, companions, barcode, ...rest } = dto;
     // The form always sends the quantity back; only a real change is a stock adjustment.
     const wantsStockChange = stockQty !== undefined && Number(existing.stockQty) !== stockQty;
     try {
@@ -209,6 +214,8 @@ export class ProductsController {
           where: { id },
           data: {
             ...rest,
+            // Clearing the code gives the product a fresh in-store one rather than leaving it unscannable.
+            ...(barcode !== undefined ? { barcode: normalizeBarcode(barcode) ?? (await nextInStoreBarcode(tx)) } : {}),
             ...(companions !== undefined ? { companions: companionsValue(companions) ?? Prisma.DbNull } : {}),
             ...(dto.category !== undefined ? { category: dto.category.trim() || 'General' } : {}),
             ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl || null } : {}),
@@ -217,11 +224,25 @@ export class ProductsController {
         });
       });
     } catch (err) {
-      if (isUniqueViolation(err)) {
+if (isUniqueViolation(err)) {
+        const target = String((err as Prisma.PrismaClientKnownRequestError).meta?.target ?? '');
+        if (target.includes('barcode')) throw new ConflictException('Ийм баркодтой бараа бүртгэлтэй байна / Barcode already in use');
         throw new ConflictException(`SKU ${dto.sku ?? existing.sku} already exists`);
       }
       throw err;
     }
+  }
+
+  /** Gives every product that has no barcode an in-store one (run once after importing old goods). */
+  @Post('barcodes/fill')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...CATALOG_WRITE_ROLES)
+  async fillBarcodes() {
+    const missing = await this.prisma.product.findMany({ where: { barcode: null }, orderBy: { sku: 'asc' }, select: { id: true } });
+    for (let i = 0; i < missing.length; i++) {
+      await this.prisma.product.update({ where: { id: missing[i].id }, data: { barcode: await nextInStoreBarcode(this.prisma) } });
+    }
+    return { assigned: missing.length };
   }
 
   @Delete(':id')

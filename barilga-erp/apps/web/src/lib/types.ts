@@ -72,6 +72,8 @@ export type Vehicle = {
 export type Product = {
   id: string;
   sku: string;
+  /** Scanned at the till: manufacturer code or an in-store 200… EAN-13. */
+  barcode?: string | null;
   nameMn: string;
   nameEn: string;
   unit: string;
@@ -100,9 +102,10 @@ export function companionLines(companions: Companion[] | null | undefined, quant
 }
 
 export function productMatchesQuery(
-  p: { sku?: string; nameMn?: string; nameEn?: string; description?: string | null },
+  p: { sku?: string; nameMn?: string; nameEn?: string; description?: string | null; barcode?: string | null },
   q: string,
 ) {
+  if (p.barcode && p.barcode === q.trim()) return true;
   // Same rule as the server's product search: either alphabet, any case.
   return matchesSearch([p.sku, p.nameMn, p.nameEn, p.description ?? ''].join(' '), q);
 }

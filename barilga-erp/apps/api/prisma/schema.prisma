@@ -218,6 +218,9 @@ model VehicleType {
 model Product {
   id             String              @id @default(uuid())
   sku            String              @unique
+  /// Scanned at the till. A manufacturer code (EAN/UPC) when the goods have one; otherwise an in-store
+  /// EAN-13 starting with 200 is assigned automatically so every product can be labelled and scanned.
+  barcode        String?             @unique
   nameMn         String
   nameEn         String
   unit           String

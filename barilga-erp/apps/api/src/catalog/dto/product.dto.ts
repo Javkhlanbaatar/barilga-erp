@@ -8,9 +8,11 @@ import {
   IsOptional,
   IsString,
   Max,
+  Matches,
   MaxLength,
   Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 
@@ -41,6 +43,14 @@ export class CompanionDto {
 export class CreateProductDto {
   @IsString()
   sku!: string;
+
+  /** Manufacturer barcode; empty = an in-store EAN-13 is assigned. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.replace(/\s+/g, '') : value))
+  @ValidateIf((_o, v) => v !== '' && v !== null)
+  @Matches(/^[0-9A-Za-z-]{4,32}$/, { message: 'Баркод 4–32 тэмдэгт (тоо, латин үсэг) / Barcode must be 4–32 letters or digits' })
+  barcode?: string | null;
+
   @IsString()
   nameMn!: string;
   @IsString()
@@ -94,6 +104,14 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   sku?: string;
+
+  /** Manufacturer barcode; empty = an in-store EAN-13 is assigned. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.replace(/\s+/g, '') : value))
+  @ValidateIf((_o, v) => v !== '' && v !== null)
+  @Matches(/^[0-9A-Za-z-]{4,32}$/, { message: 'Баркод 4–32 тэмдэгт (тоо, латин үсэг) / Barcode must be 4–32 letters or digits' })
+  barcode?: string | null;
+
   @IsOptional()
   @IsString()
   nameMn?: string;

@@ -28,6 +28,7 @@ const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; featu
   { href: '/admin/features', label: 'Модулиуд', roles: ['ADMIN'] },
   { href: '/admin/settings', label: 'Компанийн мэдээлэл', roles: ['ADMIN'] },
   { href: '/admin', label: 'Хяналт самбар', roles: ['ADMIN', 'MANAGER'] },
+  { href: '/devices', label: 'Төхөөрөмж шалгах', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {

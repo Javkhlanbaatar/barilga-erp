@@ -49,12 +49,21 @@ const CATEGORY_LABEL: Record<string, string> = {
   Other: 'Бусад',
 };
 
+/** Category as shown: the built-in English keys in Mongolian, anything typed by staff as typed. */
+const categoryLabel = (c?: string | null) => CATEGORY_LABEL[c ?? 'General'] ?? c ?? 'Ерөнхий';
+/** Typing "Цемент" saves the existing "Cement" category instead of starting a second one. */
+const categoryKey = (label: string) => {
+  const t = label.trim();
+  return Object.entries(CATEGORY_LABEL).find(([, l]) => l.toLowerCase() === t.toLowerCase())?.[0] ?? (t || 'General');
+};
+
 const emptyForm = {
+  barcode: '',
   sku: '',
   nameMn: '',
   nameEn: '',
   unit: 'pcs',
-  category: 'General',
+  category: 'Ерөнхий',
   priceMnt: 0,
   weightKg: 0,
   lengthM: 0,
@@ -100,6 +109,8 @@ export default function InventoryPage() {
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState<StockFilter>('ALL');
   const [query, setQuery] = useState('');
+  const [category, setCategory] = useState('');
+  const [picked, setPicked] = useState<string[]>([]);
   const [warehouseId, setWarehouseId] = useState('');
   const [adjusting, setAdjusting] = useState<Product | null>(null);
   const [adjustForm, setAdjustForm] = useState({ warehouseId: '', counted: '', reason: '' });
@@ -202,10 +213,11 @@ export default function InventoryPage() {
     setEditing(row);
     setForm({
       sku: row.sku,
+      barcode: row.barcode ?? '',
       nameMn: row.nameMn,
       nameEn: row.nameEn,
       unit: row.unit,
-      category: row.category ?? 'General',
+      category: categoryLabel(row.category),
       priceMnt: Number(row.priceMnt),
       weightKg: Number(row.weightKg),
       lengthM: Number(row.lengthM),
@@ -236,7 +248,7 @@ export default function InventoryPage() {
         minStockLevel: Number(form.minStockLevel),
         imageUrl: form.imageUrl || null,
         description: form.description.trim() || null,
-        category: form.category.trim() || 'General',
+        category: categoryKey(form.category),
         companions: form.companions
           .filter((c) => c.name.trim() && Number(c.qtyPerUnit) > 0)
           .map((c) => ({ name: c.name.trim(), qtyPerUnit: Number(c.qtyPerUnit), unit: c.unit.trim() || 'ш' })),
@@ -307,9 +319,21 @@ export default function InventoryPage() {
         category: p.category ?? 'General',
         stockStatus: p.status,
       }));
-  const rows = (filter === 'ALL' ? allRows : allRows.filter((row) => row.stockStatus === filter)).filter((row) =>
-    productMatchesQuery(row, query),
+  const rows = (filter === 'ALL' ? allRows : allRows.filter((row) => row.stockStatus === filter)).filter(
+    (row) => productMatchesQuery(row, query) && (!category || (row.category ?? 'General') === category),
   );
+  const categories = [...new Set(allRows.map((r) => r.category ?? 'General'))].sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b)));
+  const missingBarcodes = catalog.filter((p) => !p.barcode).length;
+
+  async function fillBarcodes() {
+    try {
+      const r = await api<{ assigned: number }>('/products/barcodes/fill', { method: 'POST', body: '{}' });
+      flash('ok', `${r.assigned} бараанд баркод олголоо`);
+      await load();
+    } catch (err) {
+      flash('error', err instanceof Error ? err.message : 'Баркод олгож чадсангүй');
+    }
+  }
   const negativeCount =
     report?.summary.negativeStock ?? allRows.filter((r) => r.stockStatus === 'NEGATIVE_STOCK').length;
 
@@ -385,16 +409,42 @@ export default function InventoryPage() {
         </div>
       )}
 
-      <label className="block text-xs text-slate-400 mb-3">
-        Нэр, тайлбар, SKU-гаар хайх
-        <input
-          className="mt-1 w-full max-w-md"
-          value={query}
-          autoComplete="off"
-          placeholder="жишээ: суурь, цемент, CEM-42"
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </label>
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <label className="block flex-1 text-xs text-slate-400">
+          Нэр, тайлбар, SKU, баркодоор хайх
+          <input
+            className="mt-1 w-full max-w-md"
+            value={query}
+            autoComplete="off"
+            placeholder="жишээ: суурь, цемент, CEM-42, 2000000000015"
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </label>
+        <label className="text-xs text-slate-400">
+          Ангилал
+          <select className="mt-1 block" value={category} onChange={(e) => setCategory(e.target.value)}>
+            <option value="">Бүгд</option>
+            {categories.map((c) => (
+              <option key={c} value={c}>
+                {categoryLabel(c)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <a
+          className="btn-ghost text-sm"
+          href={`/print/labels${picked.length ? `?ids=${picked.join(',')}` : ''}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Баркод хэвлэх{picked.length ? ` (${picked.length})` : ''}
+        </a>
+        {canEditCatalog && missingBarcodes > 0 && (
+          <button className="btn-ghost text-sm" onClick={() => void fillBarcodes()} title="Баркодгүй бараанд 200…-аар эхэлсэн дотоод баркод олгоно">
+            Баркодгүйд олгох ({missingBarcodes})
+          </button>
+        )}
+      </div>
 
       <div className="flex flex-wrap gap-2 mb-4">
         {(
@@ -449,13 +499,24 @@ export default function InventoryPage() {
                 <td className="p-3">
                   <ProductImage src={row.imageUrl} alt={row.nameMn} className="h-12 w-12 rounded-md" />
                 </td>
-                <td className="font-mono text-xs">{row.sku}</td>
+                <td className="font-mono text-xs">
+                  <label className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={picked.includes(row.id)}
+                      onChange={(e) => setPicked(e.target.checked ? [...picked, row.id] : picked.filter((x) => x !== row.id))}
+                      title="Баркод хэвлэхэд сонгох"
+                    />
+                    {row.sku}
+                  </label>
+                  {row.barcode && <span className="block text-[10px] text-slate-500">{row.barcode}</span>}
+                </td>
                 <td>
                   <p className="font-medium">{row.nameMn}</p>
                   <p className="text-xs text-slate-500">{row.nameEn}</p>
                   {row.description ? <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{row.description}</p> : null}
                 </td>
-                <td>{CATEGORY_LABEL[row.category ?? 'General'] ?? row.category}</td>
+                <td>{categoryLabel(row.category)}</td>
                 <td className="text-right">{tugrik(Number(row.priceMnt ?? 0))}</td>
                 <td className={`text-right font-semibold ${row.stockStatus === 'NEGATIVE_STOCK' ? 'text-rose-300' : ''}`}>
                   {Number(row.stockQty)}
@@ -547,17 +608,29 @@ export default function InventoryPage() {
               </label>
               <label className="text-xs text-slate-400">
                 Ангилал
-                <select
+                <input
                   className="mt-1 w-full"
+                  list="product-categories"
+                  placeholder="Сонгох эсвэл шинээр бичих"
                   value={form.category}
                   onChange={(e) => setForm({ ...form, category: e.target.value })}
-                >
-                  {CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {CATEGORY_LABEL[c] ?? c}
-                    </option>
+                />
+                <datalist id="product-categories">
+                  {[...new Set([...CATEGORIES, ...categories])].map((c) => (
+                    <option key={c} value={categoryLabel(c)} />
                   ))}
-                </select>
+                </datalist>
+              </label>
+              <label className="text-xs text-slate-400 col-span-2">
+                Баркод
+                <input
+                  className="mt-1 w-full font-mono"
+                  value={form.barcode}
+                  inputMode="numeric"
+                  placeholder="Сканнердах эсвэл бичих. Хоосон бол автоматаар үүснэ (200…)"
+                  onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                  onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
+                />
               </label>
               <label className="text-xs text-slate-400">
                 Хэмжих нэгж
