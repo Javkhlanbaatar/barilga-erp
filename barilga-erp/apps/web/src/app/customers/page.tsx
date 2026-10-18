@@ -9,6 +9,7 @@ import { hasRole, homeForRole, OVERSIGHT_ROLES, POS_ROLES } from '@/lib/rbac';
 import { AccountPanel } from '@/components/account-panel';
 import { PartnerTradePanel } from '@/components/partner-trade';
 import { useFeatures } from '@/lib/features';
+import { useCan } from '@/lib/permissions';
 import { AuthUser, Customer, CustomerDetail, CustomerType, ORDER_STATUS_LABEL, PriceList } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
@@ -98,6 +99,7 @@ export default function CustomersPage() {
   const [detailTab, setDetailTab] = useState<'account' | 'trade'>('account');
 
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
+  const can = useCan();
   const features = useFeatures();
   const pricing = features.enabled('PRICE_LISTS');
   const [priceLists, setPriceLists] = useState<PriceList[]>([]);
@@ -332,7 +334,7 @@ export default function CustomersPage() {
                       </li>
                     ))}
                   </ul>
-                  {features.enabled('CREDIT_SALES') && (
+                  {features.enabled('CREDIT_SALES') && can('PAY_DEBT') && (
                     <PayDebt customerId={detail.id} owedTotal={detail.credit.owedMnt} onDone={() => void openDetail(detail)} />
                   )}
                 </div>
@@ -402,7 +404,7 @@ export default function CustomersPage() {
             <AccountPanel
               key={detail.id}
               customerId={detail.id}
-              canManage={isOversight}
+              canManage={can('PARTNER_LEDGER')}
               partnerIsSupplier={Boolean(detail.sellsToUs || detail.barterContract) && features.enabled('STOCK_RECEIPTS')}
             />
           ) : (
@@ -457,7 +459,7 @@ export default function CustomersPage() {
             </label>
             {isOversight && (
               <fieldset className="rounded-lg border border-slate-700 p-2 space-y-1 text-sm">
-                <legend className="px-1 text-xs text-slate-400">Харилцагчийн төрөл (менежер)</legend>
+                <legend className="px-1 text-xs text-slate-400">Харилцааны төрөл (менежер)</legend>
                 <label className="flex items-center gap-2">
                   <input type="checkbox" checked={form.buysFromUs} onChange={(e) => setForm({ ...form, buysFromUs: e.target.checked })} />
                   Манайхаас бараа авдаг

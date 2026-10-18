@@ -1,6 +1,7 @@
 'use client';
 
-import { isManager } from '@/lib/rbac';
+import { homeForRole, isManager } from '@/lib/rbac';
+import { can } from '@/lib/permissions';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ReportsNav } from '@/components/reports-nav';
@@ -51,6 +52,11 @@ export default function DailyReportPage() {
     const parsed = JSON.parse(raw) as AuthUser;
     if (parsed.role === 'ACHIGCH_BELTGEGCH') {
       router.replace('/warehouse/tickets');
+      return;
+    }
+    // The admin can take this report away from one person; managers still have the other reports.
+    if (!can(parsed, 'REPORT_SALES')) {
+      router.replace(isManager(parsed.role) ? '/reports' : homeForRole(parsed.role));
       return;
     }
     setUser(parsed);
@@ -251,7 +257,7 @@ export default function DailyReportPage() {
             <article className="card overflow-auto mb-5">
               <h3 className="font-semibold mb-3">И-Баримт</h3>
               <p className="text-sm text-slate-400 mb-3">
-                Амжилттай {report.ebarimt.issued} · Амжилтгүй {report.ebarimt.failed} · Хүлээгдэж {report.ebarimt.pending}
+                Амжилттай {report.ebarimt.issued} · Амжилтгүй {report.ebarimt.failed} · Хүлээгдэж буй {report.ebarimt.pending}
               </p>
               {report.ebarimt.receipts.length === 0 ? (
                 <p className="text-slate-500 text-sm">Энэ хугацаанд олгосон баримт алга.</p>
@@ -293,7 +299,7 @@ export default function DailyReportPage() {
                 <thead className="text-left text-slate-400 border-b border-slate-700">
                   <tr>
                     <th className="py-2 pr-3">Бараа</th>
-                    <th className="py-2 pr-3">SKU</th>
+                    <th className="py-2 pr-3">Код</th>
                     <th className="py-2 pr-3 text-right">Тоо</th>
                     <th className="py-2 text-right">Дүн</th>
                   </tr>

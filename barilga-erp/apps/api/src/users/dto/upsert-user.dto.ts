@@ -102,3 +102,14 @@ export class UpdateUserStatusDto {
   @IsBoolean()
   isActive!: boolean;
 }
+
+/** Rights given to / taken from one person (keys from auth/permissions.ts; unknown keys are dropped). */
+export class UserPermissionsDto {
+  @IsArray()
+  @IsString({ each: true })
+  grant!: string[];
+
+  @IsArray()
+  @IsString({ each: true })
+  revoke!: string[];
+}

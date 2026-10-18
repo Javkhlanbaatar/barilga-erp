@@ -118,7 +118,8 @@ describe('payroll', () => {
     await w.hr.setBaseSalary(w.cashier.id, 1_900_000, manager);
     const pRow = row(first, w.picker2.id);
     await w.hr.markPaid(pRow.id, admin);
-    await w.hr.setBaseSalary(w.picker2.id, 9_000_000, admin);
+    await assert.rejects(() => w.hr.setBaseSalary(w.picker2.id, 9_000_000, admin, { fromMonth: '2026-10' }), BadRequestException, 'a paid month is not re-priced');
+    await w.hr.setBaseSalary(w.picker2.id, 9_000_000, admin, { fromMonth: '2026-11' });
     await assert.rejects(
       () => w.hr.addAdjustment({ userId: w.picker2.id, periodMonth: '2026-10', amountMnt: 5, reason: 'Шагнал' }, manager),
       BadRequestException,
@@ -126,5 +127,73 @@ describe('payroll', () => {
     const again = row(await w.hr.payroll(manager, '2026-10'), w.picker2.id);
     assert.equal(again.netSalary, pRow.netSalary, 'paid amount does not move');
     assert.equal(again.status, 'PAID');
+    assert.equal(row(await w.hr.payroll(manager, '2026-11'), w.picker2.id).baseSalary, 9_000_000, 'the new salary applies from its month');
+  });
+
+  it('a salary change applies from its month on; earlier unpaid months keep the old amount', async () => {
+    const w = await world();
+    await w.hr.setBaseSalary(w.cashier.id, 1_500_000, admin, { fromMonth: '2026-09', reason: 'Ажилд орсон' });
+    await w.hr.setBaseSalary(w.cashier.id, 1_800_000, admin, { fromMonth: '2026-11', reason: 'Цалин нэмэв' });
+    assert.equal(row(await w.hr.payroll(admin, '2026-10'), w.cashier.id).baseSalary, 1_500_000);
+    assert.equal(row(await w.hr.payroll(admin, '2026-11'), w.cashier.id).baseSalary, 1_800_000);
+    const history: any[] = await w.hr.salaryHistory(w.cashier.id, admin);
+    assert.deepEqual(history.map((h) => [h.fromMonth, h.baseSalaryMnt]), [['2026-11', 1_800_000], ['2026-09', 1_500_000]]);
+    // A salary set before history was kept still applies to every month.
+    assert.equal(row(await w.hr.payroll(admin, '2026-10'), w.picker2.id).baseSalary, 2_000_000);
+  });
+
+  it('nobody raises their own salary; only the admin sets the general manager’s', async () => {
+    const w = await world();
+    const gm: any = await w.db.user.create({ data: { username: 'gm', fullName: 'Ерөнхий', role: 'SUPER_MANAGER', isActive: true, baseSalaryMnt: null } });
+    const asGm: any = { id: gm.id, role: Role.SUPER_MANAGER, name: 'GM' };
+    await assert.rejects(() => w.hr.setBaseSalary(gm.id, 9_000_000, asGm), ForbiddenException);
+    const other: any = await w.db.user.create({ data: { username: 'gm2', fullName: 'Ерөнхий 2', role: 'SUPER_MANAGER', isActive: true, baseSalaryMnt: null } });
+    await assert.rejects(() => w.hr.setBaseSalary(other.id, 9_000_000, asGm), ForbiddenException);
+    await w.hr.setBaseSalary(w.cashier.id, 1_700_000, asGm);
+    await w.hr.setBaseSalary(gm.id, 3_000_000, admin);
+  });
+
+  it('a check-in left open on an earlier day is closed at the end of the shift; times can be corrected with a reason', async () => {
+    const w = await world();
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const open = await w.db.attendance.create({ data: { userId: w.cashier.id, checkIn: yesterday, status: 'ON_TIME' } });
+    await w.hr.checkIn(admin, { userId: w.cashier.id } as any);
+    const closed: any = w.db.attendance.rows.find((r: any) => r.id === open.id);
+    assert.ok(closed.checkOut, 'yesterday is closed');
+    assert.match(closed.notes, /Гарсан цаг бүртгээгүй/);
+    await assert.rejects(() => w.hr.checkIn(admin, { userId: w.cashier.id } as any), BadRequestException, 'today is still one check-in');
+    const fixed: any = await w.hr.fixAttendance(open.id, { checkOut: new Date(yesterday.getTime() + 3 * 3_600_000).toISOString(), reason: 'Эрт явсан' } as any, admin);
+    assert.equal(fixed.checkOut.getTime(), yesterday.getTime() + 3 * 3_600_000);
+    assert.equal(w.db.editAudit.rows.filter((r: any) => r.entityType === 'ATTENDANCE').length, 1);
+    await assert.rejects(() => w.hr.fixAttendance(open.id, { checkOut: new Date(yesterday.getTime() - 60_000).toISOString(), reason: 'буруу' } as any, admin), BadRequestException);
+    await assert.rejects(() => w.hr.fixAttendance(open.id, { checkOut: null, reason: 'дахин нээх' } as any, admin), BadRequestException, 'an earlier day is not re-opened');
+  });
+
+  it('the month counts a late arrival once per day, from the first check-in; a partial settings change keeps the rest', async () => {
+    const w = await world();
+    await w.hr.saveAttendanceSettings({ shiftStart: '09:00', graceMinutes: 15, shiftEnd: '18:00', overtimeAfterHours: 8.5 } as any, admin);
+    const at = (d: string, hm: string) => new Date(`${d}T${hm}:00.000+08:00`);
+    const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(Date.now() - 2 * 86_400_000));
+    const d = month; // two days ago
+    // on time, lunch break, back in the afternoon; another day late and staying until 18:30
+    await w.db.attendance.create({ data: { userId: w.cashier.id, checkIn: at(d, '09:05'), checkOut: at(d, '13:00'), status: 'ON_TIME' } });
+    await w.db.attendance.create({ data: { userId: w.cashier.id, checkIn: at(d, '14:00'), checkOut: at(d, '17:30'), status: 'LATE' } });
+    const d2 = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(Date.now() - 86_400_000));
+    await w.db.attendance.create({ data: { userId: w.cashier.id, checkIn: at(d2, '09:40'), checkOut: at(d2, '18:30'), status: 'OVERTIME' } });
+    const months = [...new Set([d.slice(0, 7), d2.slice(0, 7)])];
+    let late = 0;
+    let over = 0;
+    let present = 0;
+    for (const m of months) {
+      const p = (await w.hr.attendanceMonth(admin, m)).people.find((x: any) => x.id === w.cashier.id)!;
+      late += p.lateDays;
+      over += p.overtimeDays;
+      present += p.presentDays;
+    }
+    assert.equal(present, 2);
+    assert.equal(late, 1, 'only the 09:40 day is late');
+    assert.equal(over, 1, 'only the day ending 18:30 is overtime');
+    const s: any = await w.hr.saveAttendanceSettings({ graceMinutes: 10 } as any, admin);
+    assert.deepEqual([s.shiftStart, s.graceMinutes, s.shiftEnd, s.overtimeAfterHours], ['09:00', 10, '18:00', 8.5]);
   });
 });

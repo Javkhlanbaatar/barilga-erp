@@ -139,7 +139,7 @@ function AccountAct() {
           </tbody>
         </table>
         <p className="text-sm">
-          {day(asOf)}-ны байдлаар{' '}
+          {day(asOf)} өдрийн байдлаар{' '}
           {closing > 0 ? (
             <>
               <b>{partner.name}</b> нь <b>{company.name || 'манай байгууллага'}</b>-д <b>{tugrik(closing)}</b> төлөх үлдэгдэлтэй.

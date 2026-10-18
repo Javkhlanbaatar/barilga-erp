@@ -8,6 +8,7 @@ import { InvoicePanel } from '@/components/invoice-panel';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
+import { useCan } from '@/lib/permissions';
 import { AuthUser, DELIVERY_LABEL, ORDER_STATUS_LABEL, companionLines, ebarimtStatusLabel, isHiredTransport, Order, PaymentSplit, VEHICLE_LABEL } from '@/lib/types';
 import { POS_ROLES, TRANSPORT_ROLES, hasRole, isManager } from '@/lib/rbac';
 
@@ -47,15 +48,18 @@ export default function OrderDetailPage() {
   const [supplierName, setSupplierName] = useState('');
   const [supplierReason, setSupplierReason] = useState('');
   const features = useFeatures();
+  // Rights in force for this person (role + what the admin gave or took); the server checks them again.
+  const can = useCan();
   const canDispatch = isManager(user?.role);
   const canTransport = hasRole(user?.role, TRANSPORT_ROLES);
-  const canOverrideFees = user?.role === 'BORLUULAGCH';
+  // The server lets only cashiers change fees (even the admin is refused), so the role stays part of it.
+  const canOverrideFees = user?.role === 'BORLUULAGCH' && can('FEE_OVERRIDE');
   // The mock "mark paid" button exists only for local development: it is compiled out of production
   // builds and additionally depends on the server saying simulation is enabled (dev + QPay mock).
   const [simulateEnabled, setSimulateEnabled] = useState(false);
   const canSimulatePaid =
     process.env.NODE_ENV !== 'production' && simulateEnabled && isManager(user?.role);
-  const canCancelRole = hasRole(user?.role, POS_ROLES);
+  const canCancelRole = can('ORDER_CANCEL');
   const isCashier = user?.role === 'BORLUULAGCH';
 
   async function load() {
@@ -197,7 +201,7 @@ export default function OrderDetailPage() {
       : 0;
   const canTakePayment = hasRole(user?.role, POS_ROLES);
   const canReturn =
-    hasRole(user?.role, POS_ROLES) &&
+    can('RETURN_CREATE') &&
     (order.status === 'COMPLETED' || order.status === 'READY_FOR_LOADING');
 
   function openReturn() {
@@ -473,7 +477,7 @@ export default function OrderDetailPage() {
                 key={m}
                 className="btn-ghost text-sm"
                 onClick={async () => {
-                  if (!window.confirm(`${tugrik(waitingMnt)}-ийг ${PAY_LABEL[m]}-ээр авсан уу? QPay нэхэмжлэх хүчингүй болно.`)) return;
+                  if (!window.confirm(`${tugrik(waitingMnt)}-ийг ${{ CASH: 'бэлнээр', CARD: 'картаар', TRANSFER: 'шилжүүлгээр' }[m]} авсан уу? Хүлээгдэж буй QPay / шилжүүлгийн төлбөр хүчингүй болно.`)) return;
                   try {
                     setOrder(await api<Order>(`/orders/${order.id}/pay-remaining`, { method: 'POST', body: JSON.stringify({ method: m }) }));
                   } catch (err) {
@@ -481,7 +485,7 @@ export default function OrderDetailPage() {
                   }
                 }}
               >
-                {PAY_LABEL[m]}-ээр авсан
+                {{ CASH: 'Бэлнээр', CARD: 'Картаар', TRANSFER: 'Шилжүүлгээр' }[m]} авсан
               </button>
             ))}
           </div>
@@ -491,9 +495,18 @@ export default function OrderDetailPage() {
         <GatherPanel orderId={order.id} />
       )}
       {features.enabled('CREDIT_SALES') && order.status !== 'CANCELLED' && (
-        <CreditPanel order={order} onPaid={setOrder} />
+        can('PAY_DEBT') ? (
+          <CreditPanel order={order} onPaid={setOrder} />
+        ) : (
+          owedOnOrder(order) > 0 && (
+            <div className="card mb-6 border-amber-700/60 text-sm">
+              Үлдэгдэл өр: <b className="text-amber-300">{tugrik(owedOnOrder(order))}</b>.{' '}
+              <span className="text-slate-400">Өрийн төлбөр авах эрх танд байхгүй.</span>
+            </div>
+          )
+        )
       )}
-      {features.enabled('INVOICES') && <InvoicePanel order={order} canManage={canDispatch} onOrder={setOrder} />}
+      {features.enabled('INVOICES') && <InvoicePanel order={order} canManage={can('INVOICE_CANCEL')} onOrder={setOrder} />}
       <div className="grid gap-6 md:grid-cols-2">
         <div className="card space-y-4">
           {justPaid && (
@@ -638,7 +651,7 @@ export default function OrderDetailPage() {
 
           {canEditFees && (
             <div className="border-t border-slate-700 pt-3 space-y-2">
-              <h4 className="text-sm font-semibold">Борлуулагч — төлбөр засаж оруулах</h4>
+              <h4 className="text-sm font-semibold">Кассчин — төлбөр засаж оруулах</h4>
               <input type="number" value={delivery} onChange={(e) => setDelivery(Number(e.target.value))} />
               <input type="number" value={unloading} onChange={(e) => setUnloading(Number(e.target.value))} />
               <input type="number" value={timeAdj} onChange={(e) => setTimeAdj(Number(e.target.value))} />

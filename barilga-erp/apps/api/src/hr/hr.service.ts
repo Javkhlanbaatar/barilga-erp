@@ -5,16 +5,33 @@ import { WEBSHOP_USERNAME } from '../auth/rbac';
 import { isManagerRole, isTopRole, seesAllWarehouses, warehouseWhere } from '../inventory/warehouse-scope';
 import { FeaturesService } from '../features/features.service';
 import { audit } from '../common/audit';
+import { assertCan } from '../auth/permissions';
 import { PrismaService } from '../prisma/prisma.service';
-import { PayrollAdjustmentDto, PayrollSettingsDto, StaffPunchDto } from './dto/hr.dto';
+import { AttendanceFixDto, AttendanceSettingsDto, PayrollAdjustmentDto, PayrollSettingsDto, StaffPunchDto } from './dto/hr.dto';
 
 const UB_TZ = 'Asia/Ulaanbaatar';
-const SHIFT_START_MINUTES = 9 * 60;
-const LATE_AFTER_MINUTES = 9 * 60 + 15;
-const SHIFT_END_MINUTES = 18 * 60;
-const OVERTIME_MINUTES = 8 * 60 + 30;
 
 const PAYROLL_KEY = 'PAYROLL';
+const ATTENDANCE_KEY = 'ATTENDANCE';
+
+/** The working day used to mark late arrivals and overtime (admin sets it on the attendance page). */
+export type AttendanceSettings = {
+  /** "09:00" — the shift starts. */
+  shiftStart: string;
+  /** Minutes after the start still counted as on time. */
+  graceMinutes: number;
+  /** "18:00" — leaving later is overtime. */
+  shiftEnd: string;
+  /** Hours worked in a day beyond which it is overtime, whatever the clock says. */
+  overtimeAfterHours: number;
+};
+
+export const DEFAULT_ATTENDANCE_SETTINGS: AttendanceSettings = { shiftStart: '09:00', graceMinutes: 15, shiftEnd: '18:00', overtimeAfterHours: 8.5 };
+
+const hhmm = (s: string) => {
+  const [h, m] = s.split(':').map(Number);
+  return h * 60 + m;
+};
 
 export type PayrollSettings = {
   /** Base salary for each role when an employee has none of their own. */
@@ -129,7 +146,7 @@ export class HrService {
   }
 
   async board(actor: AuthUser) {
-    this.assertManager(actor);
+    assertCan(actor, 'ATTENDANCE_MANAGE');
     const staff = await this.prisma.user.findMany({
       where: { AND: [{ isActive: true, username: { not: WEBSHOP_USERNAME } }, await this.staffScope(actor)] },
       orderBy: { fullName: 'asc' },
@@ -139,7 +156,9 @@ export class HrService {
       where: { checkOut: null, userId: { in: staff.map((s) => s.id) } },
       orderBy: { checkIn: 'desc' },
     });
-    const openByUser = new Map(openRows.map((row) => [row.userId, row]));
+    // Rows come newest first: keep the newest open check-in per person.
+    const openByUser = new Map<string, (typeof openRows)[number]>();
+    for (const row of openRows) if (!openByUser.has(row.userId)) openByUser.set(row.userId, row);
     const today = ymdInUlaanbaatar();
     const start = new Date(`${today}T00:00:00.000+08:00`);
     const end = new Date(`${today}T23:59:59.999+08:00`);
@@ -161,25 +180,36 @@ export class HrService {
   }
 
   async checkIn(actor: AuthUser, dto: StaffPunchDto) {
-    this.assertManager(actor);
+    assertCan(actor, 'ATTENDANCE_MANAGE');
     await this.assertStaffInScope(actor, dto.userId);
     const staff = await this.prisma.user.findUnique({ where: { id: dto.userId } });
     if (!staff || !staff.isActive) throw new NotFoundException('Staff member not found');
     const checkIn = new Date();
-    const minutes = minutesInUlaanbaatar(checkIn);
-    const status =
-      minutes > LATE_AFTER_MINUTES && minutes < SHIFT_END_MINUTES
-        ? AttendanceStatus.LATE
-        : AttendanceStatus.ON_TIME;
+    const settings = await this.attendanceSettings();
+    const status = this.statusFor(checkIn, null, settings);
     const alreadyIn = () => new BadRequestException(`${staff.fullName} is already checked in`);
+    const today = ymdInUlaanbaatar(checkIn);
     // Check and insert in one SERIALIZABLE transaction: a double click sends two requests that would both
     // see "no open check-in" and both insert. Postgres aborts one of them (P2034), reported as already in.
     let row;
     try {
       row = await this.prisma.$transaction(
         async (tx) => {
-          const open = await tx.attendance.findFirst({ where: { userId: staff.id, checkOut: null } });
-          if (open) throw alreadyIn();
+          const open = await tx.attendance.findFirst({ where: { userId: staff.id, checkOut: null }, orderBy: { checkIn: 'desc' } });
+          if (open && ymdInUlaanbaatar(open.checkIn) === today) throw alreadyIn();
+          if (open) {
+            // Forgot to check out on an earlier day: that day is closed at the end of the shift (or left as
+            // it was if they came after it) and marked, so the manager can correct it on the attendance page.
+            const day = ymdInUlaanbaatar(open.checkIn);
+            const end = new Date(`${day}T${settings.shiftEnd}:00.000+08:00`);
+            await tx.attendance.update({
+              where: { id: open.id },
+              data: {
+                checkOut: end > open.checkIn ? end : open.checkIn,
+                notes: `${open.notes ? `${open.notes} · ` : ''}Гарсан цаг бүртгээгүй — ажлын төгсгөлөөр хаав`,
+              },
+            });
+          }
           return tx.attendance.create({
             data: {
               userId: staff.id,
@@ -202,7 +232,7 @@ export class HrService {
   }
 
   async checkOut(actor: AuthUser, dto: StaffPunchDto) {
-    this.assertManager(actor);
+    assertCan(actor, 'ATTENDANCE_MANAGE');
     await this.assertStaffInScope(actor, dto.userId);
     const open = await this.prisma.attendance.findFirst({
       where: { userId: dto.userId, checkOut: null },
@@ -214,11 +244,7 @@ export class HrService {
     }
     const checkOut = new Date();
     const workedMin = Math.round((checkOut.getTime() - open.checkIn.getTime()) / 60_000);
-    const outMinutes = minutesInUlaanbaatar(checkOut);
-    let status = open.status;
-    if (outMinutes > SHIFT_END_MINUTES || workedMin > OVERTIME_MINUTES) {
-      status = AttendanceStatus.OVERTIME;
-    }
+    const status = this.statusFor(open.checkIn, checkOut, await this.attendanceSettings());
     const row = await this.prisma.attendance.update({
       where: { id: open.id },
       data: { checkOut, status },
@@ -227,6 +253,133 @@ export class HrService {
       `Check-out ${open.user.fullName} (${open.userId}) status=${status} workedMin=${workedMin} by ${actor.fullName ?? actor.name} (${actor.id})`,
     );
     return row;
+  }
+
+  async attendanceSettings(): Promise<AttendanceSettings> {
+    const row = await this.prisma.appSetting.findUnique({ where: { key: ATTENDANCE_KEY } });
+    return { ...DEFAULT_ATTENDANCE_SETTINGS, ...((row?.value ?? {}) as Partial<AttendanceSettings>) };
+  }
+
+  async saveAttendanceSettings(dto: AttendanceSettingsDto, user: AuthUser) {
+    if (user.role !== Role.ADMIN) throw new ForbiddenException('Only admin can change the working day');
+    const before = await this.attendanceSettings();
+    const next: AttendanceSettings = {
+      shiftStart: dto.shiftStart ?? before.shiftStart,
+      graceMinutes: dto.graceMinutes ?? before.graceMinutes,
+      shiftEnd: dto.shiftEnd ?? before.shiftEnd,
+      overtimeAfterHours: dto.overtimeAfterHours ?? before.overtimeAfterHours,
+    };
+    if (hhmm(next.shiftEnd) <= hhmm(next.shiftStart)) throw new BadRequestException('Ажлын өдрийн төгсгөл эхлэлээс хойш байх ёстой / shiftEnd must be after shiftStart');
+    await this.prisma.appSetting.upsert({
+      where: { key: ATTENDANCE_KEY },
+      create: { key: ATTENDANCE_KEY, value: next as unknown as Prisma.InputJsonValue, updatedById: user.id },
+      update: { value: next as unknown as Prisma.InputJsonValue, updatedById: user.id },
+    });
+    await audit(this.prisma, { entityType: 'SETTINGS', entityId: ATTENDANCE_KEY, summary: 'Ажлын цагийн тохиргоо', before, after: next, actorId: user.id });
+    return next;
+  }
+
+  /**
+   * A check-out time put in afterwards, or a wrong time corrected (forgotten check-out, check-in pressed late).
+   * The old and new times and the reason go to the edits report. A month already paid is not changed.
+   */
+  async fixAttendance(id: string, dto: AttendanceFixDto, actor: AuthUser) {
+    assertCan(actor, 'ATTENDANCE_MANAGE');
+    const row = await this.prisma.attendance.findUnique({ where: { id }, include: { user: { select: { fullName: true } } } });
+    if (!row) throw new NotFoundException('Attendance record not found');
+    await this.assertStaffInScope(actor, row.userId);
+    if (row.userId === actor.id && actor.role !== Role.ADMIN) throw new ForbiddenException('Өөрийн ирцийг засахгүй / You cannot change your own attendance');
+    const checkIn = dto.checkIn ? new Date(dto.checkIn) : row.checkIn;
+    const checkOut = dto.checkOut === null ? null : dto.checkOut ? new Date(dto.checkOut) : row.checkOut;
+    if (checkOut && checkOut <= checkIn) throw new BadRequestException('Гарсан цаг ирсэн цагаас хойш байх ёстой / checkOut must be after checkIn');
+    if (checkOut && checkOut.getTime() - checkIn.getTime() > 24 * 3_600_000) throw new BadRequestException('Нэг бүртгэл 24 цагаас урт байж болохгүй / A record cannot be longer than 24 hours');
+    if (checkOut && checkOut > new Date()) throw new BadRequestException('Ирээдүйн цаг оруулахгүй / Time is in the future');
+    if (checkIn > new Date()) throw new BadRequestException('Ирээдүйн цаг оруулахгүй / Time is in the future');
+    if (!checkOut) {
+      // "Still at work" only for today's record, and a person has one open check-in at a time.
+      if (ymdInUlaanbaatar(checkIn) !== ymdInUlaanbaatar()) throw new BadRequestException('Зөвхөн өнөөдрийн бүртгэлийг «ажил дээр» гэж үлдээнэ / Only today can stay open');
+      const otherOpen = await this.prisma.attendance.count({ where: { userId: row.userId, checkOut: null, id: { not: id } } });
+      if (otherOpen) throw new BadRequestException('Энэ ажилтан өөр нээлттэй бүртгэлтэй / Another check-in is still open');
+    }
+    for (const when of [row.checkIn, checkIn]) await this.assertMonthOpen(row.userId, ymdInUlaanbaatar(when).slice(0, 7));
+    const settings = await this.attendanceSettings();
+    const updated = await this.prisma.attendance.update({
+      where: { id },
+      data: { checkIn, checkOut, status: this.statusFor(checkIn, checkOut, settings) },
+    });
+    await audit(this.prisma, {
+      entityType: 'ATTENDANCE',
+      entityId: id,
+      summary: `${row.user.fullName}: ирц засав (${ymdInUlaanbaatar(row.checkIn)})`,
+      before: { checkIn: row.checkIn.toISOString(), checkOut: row.checkOut?.toISOString() ?? null },
+      after: { checkIn: checkIn.toISOString(), checkOut: checkOut?.toISOString() ?? null },
+      reason: dto.reason.trim(),
+      actorId: actor.id,
+    });
+    return updated;
+  }
+
+  private statusFor(checkIn: Date, checkOut: Date | null, s: AttendanceSettings) {
+    const inMin = minutesInUlaanbaatar(checkIn);
+    let status: AttendanceStatus = inMin > hhmm(s.shiftStart) + s.graceMinutes && inMin < hhmm(s.shiftEnd) ? AttendanceStatus.LATE : AttendanceStatus.ON_TIME;
+    if (checkOut) {
+      const worked = (checkOut.getTime() - checkIn.getTime()) / 60_000;
+      const sameDay = ymdInUlaanbaatar(checkOut) === ymdInUlaanbaatar(checkIn);
+      if (worked > s.overtimeAfterHours * 60 || !sameDay || minutesInUlaanbaatar(checkOut) > hhmm(s.shiftEnd)) status = AttendanceStatus.OVERTIME;
+    }
+    return status;
+  }
+
+  /**
+   * The month per person: days present, late days, hours, and check-ins never closed — for the manager and
+   * for paying by attendance.
+   */
+  async attendanceMonth(actor: AuthUser, periodMonth?: string) {
+    assertCan(actor, 'ATTENDANCE_MANAGE');
+    const period = periodMonth || periodMonthNow();
+    const { start, end } = monthBounds(period);
+    const staff = await this.prisma.user.findMany({
+      where: { AND: [{ username: { not: WEBSHOP_USERNAME } }, { createdAt: { lt: end } }, await this.staffScope(actor)] },
+      orderBy: { fullName: 'asc' },
+      select: { id: true, fullName: true, role: true, isActive: true },
+    });
+    const rows = await this.prisma.attendance.findMany({
+      where: { userId: { in: staff.map((s) => s.id) }, checkIn: { gte: start, lt: end } },
+      orderBy: { checkIn: 'asc' },
+    });
+    const [settings, day] = await Promise.all([this.payrollSettings(), this.attendanceSettings()]);
+    const workingDays = countWorkingDays(period, settings.workDaysPerWeek);
+    const today = ymdInUlaanbaatar();
+    const worked = (r: { checkIn: Date; checkOut: Date | null }) => (r.checkOut ? Math.round((r.checkOut.getTime() - r.checkIn.getTime()) / 60_000) : 0);
+    const people = staff
+      .map((s) => {
+        const mine = rows.filter((r) => r.userId === s.id);
+        // A day is late when its first arrival is after the start + grace (a second check-in after lunch is
+        // not lateness), and overtime when the day's hours or its last departure go past the working day.
+        const byDay = new Map<string, typeof mine>();
+        for (const r of mine) byDay.set(ymdInUlaanbaatar(r.checkIn), [...(byDay.get(ymdInUlaanbaatar(r.checkIn)) ?? []), r]);
+        let lateDays = 0;
+        let overtimeDays = 0;
+        for (const list of byDay.values()) {
+          if (minutesInUlaanbaatar(list[0].checkIn) > hhmm(day.shiftStart) + day.graceMinutes) lateDays++;
+          const total = list.reduce((m, r) => m + worked(r), 0);
+          const lastOut = list.map((r) => r.checkOut).filter((d): d is Date => Boolean(d)).sort((a, b) => b.getTime() - a.getTime())[0];
+          if (total > day.overtimeAfterHours * 60 || (lastOut && minutesInUlaanbaatar(lastOut) > hhmm(day.shiftEnd))) overtimeDays++;
+        }
+        const minutes = mine.reduce((m, r) => m + worked(r), 0);
+        const unclosed = mine.filter((r) => !r.checkOut && ymdInUlaanbaatar(r.checkIn) < today);
+        return {
+          ...s,
+          presentDays: byDay.size,
+          lateDays,
+          overtimeDays,
+          hours: Math.round(minutes / 6) / 10,
+          unclosed: unclosed.map((r) => ({ id: r.id, checkIn: r.checkIn })),
+          records: mine.map((r) => ({ id: r.id, checkIn: r.checkIn, checkOut: r.checkOut, status: r.status, notes: r.notes })),
+        };
+      })
+      .filter((p) => p.isActive || p.records.length > 0);
+    return { periodMonth: period, workingDays, people };
   }
 
   /** Payroll rates set by admin. Tax and social-insurance rates start at 0: confirm them with the accountant. */
@@ -261,22 +414,73 @@ export class HrService {
     return next;
   }
 
-  /** Admin sets one employee's monthly base salary; null goes back to the default for their role. */
-  async setBaseSalary(userId: string, baseSalaryMnt: number | null, user: AuthUser) {
+  /**
+   * Sets one employee's monthly base salary from a month on (default: this month); earlier months keep what
+   * they had. null = no own salary from then (the role default when the formula is on, otherwise 0). Nobody
+   * sets their own salary except the admin, and only the admin sets the general manager's or another admin's.
+   */
+  async setBaseSalary(userId: string, baseSalaryMnt: number | null, user: AuthUser, opts: { fromMonth?: string; reason?: string } = {}) {
     this.assertPayroller(user, 'set salaries');
     const staff = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!staff) throw new NotFoundException('Staff member not found');
-    await this.prisma.user.update({ where: { id: userId }, data: { baseSalaryMnt } });
-    this.log.log(`Base salary of ${staff.fullName} set to ${baseSalaryMnt ?? 'role default'} by ${user.id}`);
+    if (user.role !== Role.ADMIN) {
+      if (userId === user.id) throw new ForbiddenException('Өөрийн цалинг өөрөө өөрчлөхгүй / You cannot set your own salary');
+      if (isTopRole(staff.role)) throw new ForbiddenException('Ерөнхий менежер, админы цалинг зөвхөн админ тогтооно / Only admin sets this salary');
+    }
+    const fromMonth = opts.fromMonth || periodMonthNow();
+    monthBounds(fromMonth);
+    const paid = await this.prisma.payroll.findUnique({ where: { userId_periodMonth: { userId, periodMonth: fromMonth } } });
+    if (paid?.status === PayrollStatus.PAID) {
+      throw new BadRequestException(`${fromMonth} сарын цалин олгогдсон — дараагийн сараас тогтооно уу / That month is already paid`);
+    }
+    const before = await this.baseOn(userId, fromMonth, staff.baseSalaryMnt);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.salaryRate.upsert({
+        where: { userId_fromMonth: { userId, fromMonth } },
+        create: { userId, fromMonth, baseSalaryMnt, reason: opts.reason?.trim() || null, createdById: user.id },
+        update: { baseSalaryMnt, reason: opts.reason?.trim() || null, createdById: user.id },
+      });
+      // The user row mirrors the salary in force this month (shown in lists).
+      const current = await tx.salaryRate.findFirst({ where: { userId, fromMonth: { lte: periodMonthNow() } }, orderBy: { fromMonth: 'desc' } });
+      await tx.user.update({ where: { id: userId }, data: { baseSalaryMnt: current ? current.baseSalaryMnt : null } });
+    });
+    this.log.log(`Base salary of ${staff.fullName} from ${fromMonth} set to ${baseSalaryMnt ?? 'none'} by ${user.id}`);
     await audit(this.prisma, {
       entityType: 'SALARY',
       entityId: userId,
-      summary: `${staff.fullName}: үндсэн цалин`,
-      before: { amountMnt: staff.baseSalaryMnt },
+      summary: `${staff.fullName}: үндсэн цалин ${fromMonth} сараас`,
+      before: { amountMnt: before },
       after: { amountMnt: baseSalaryMnt },
+      reason: opts.reason?.trim() || undefined,
       actorId: user.id,
     });
-    return { userId, baseSalaryMnt };
+    return { userId, fromMonth, baseSalaryMnt };
+  }
+
+  /** Salary history of one person (newest first). */
+  async salaryHistory(userId: string, user: AuthUser) {
+    this.assertManager(user);
+    await this.assertStaffInScope(user, userId);
+    const rows = await this.prisma.salaryRate.findMany({
+      where: { userId },
+      orderBy: { fromMonth: 'desc' },
+      include: { createdBy: { select: { fullName: true } } },
+    });
+    return rows
+      .sort((a, b) => b.fromMonth.localeCompare(a.fromMonth))
+      .map((r) => (r.fromMonth === '2000-01' && r.createdById === r.userId ? { ...r, createdBy: null, carriedOver: true } : r));
+  }
+
+  /** Own base salary in force in a month: the latest rate from that month or before; none = not set. */
+  private async baseOn(userId: string, periodMonth: string, legacy: number | null) {
+    const rates = await this.prisma.salaryRate.findMany({ where: { userId }, orderBy: { fromMonth: 'desc' } });
+    return HrService.pickBase(rates, periodMonth, legacy);
+  }
+
+  static pickBase(rates: Array<{ fromMonth: string; baseSalaryMnt: number | null }>, periodMonth: string, legacy: number | null) {
+    if (!rates.length) return legacy; // salaries set before history was kept
+    const r = rates.filter((x) => x.fromMonth <= periodMonth).sort((a, b) => b.fromMonth.localeCompare(a.fromMonth))[0];
+    return r ? r.baseSalaryMnt : null;
   }
 
   /** A one-off bonus (+) or deduction (−) for an unpaid month. */
@@ -285,8 +489,8 @@ export class HrService {
     monthBounds(dto.periodMonth);
     if (!dto.amountMnt) throw new BadRequestException('Дүн 0 байж болохгүй / Amount cannot be 0');
     await this.assertStaffInScope(user, dto.userId);
-    if (dto.userId === user.id && !isTopRole(user.role)) {
-      throw new ForbiddenException('Өөртөө нэмэгдэл/суутгал бичихгүй / You cannot adjust your own pay');
+    if (dto.userId === user.id && user.role !== Role.ADMIN) {
+      throw new ForbiddenException('Өөртөө урамшуулал/суутгал бичихгүй / You cannot adjust your own pay');
     }
     const staff = await this.prisma.user.findUnique({ where: { id: dto.userId } });
     if (!staff) throw new NotFoundException('Staff member not found');
@@ -311,8 +515,8 @@ export class HrService {
     const row = await this.prisma.payrollAdjustment.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Adjustment not found');
     await this.assertStaffInScope(user, row.userId);
-    if (row.userId === user.id && !isTopRole(user.role)) {
-      throw new ForbiddenException('Өөртөө нэмэгдэл/суутгал бичихгүй / You cannot adjust your own pay');
+    if (row.userId === user.id && user.role !== Role.ADMIN) {
+      throw new ForbiddenException('Өөртөө урамшуулал/суутгал бичихгүй / You cannot adjust your own pay');
     }
     await this.assertMonthOpen(row.userId, row.periodMonth);
     await this.prisma.payrollAdjustment.delete({ where: { id } });
@@ -351,22 +555,30 @@ export class HrService {
     const formula = await this.formulaOn();
     // Someone who left during the month is still paid for it: deactivated people with attendance or a
     // payroll row in the month are included.
-    const [leaverAttendance, leaverRows] = await Promise.all([
+    const [leaverAttendance, leaverRows, monthAdjustments] = await Promise.all([
       this.prisma.attendance.findMany({ where: { checkIn: { gte: start, lt: end } }, select: { userId: true } }),
-      this.prisma.payroll.findMany({ where: { periodMonth: period }, select: { userId: true } }),
+      this.prisma.payroll.findMany({ where: { periodMonth: period }, select: { userId: true, status: true } }),
+      this.prisma.payrollAdjustment.findMany({ where: { periodMonth: period }, select: { userId: true } }),
     ]);
     const workedThisMonth = [...new Set([...leaverAttendance, ...leaverRows].map((r) => r.userId))];
+    // Signs that someone really was there that month (a draft row made by just opening the month is not one).
+    const inMonth = [
+      ...new Set([...leaverAttendance, ...monthAdjustments, ...leaverRows.filter((r) => r.status === PayrollStatus.PAID)].map((r) => r.userId)),
+    ];
     const staff = await this.prisma.user.findMany({
       where: {
         AND: [
           { username: { not: WEBSHOP_USERNAME } },
           { OR: [{ isActive: true }, { id: { in: workedThisMonth } }] },
+          // Someone registered after the month is not in it.
+          { OR: [{ createdAt: { lt: end } }, { id: { in: inMonth } }] },
           await this.staffScope(user),
         ],
       },
       orderBy: { fullName: 'asc' },
     });
     const ids = staff.map((m) => m.id);
+    const allRates = await this.prisma.salaryRate.findMany({ where: { userId: { in: ids } } });
 
     const [tickets, sales, refunds, attendance, adjustments] = await Promise.all([
       this.prisma.order.groupBy({
@@ -413,7 +625,12 @@ export class HrService {
 
     const rows = [];
     for (const member of staff) {
-      const base = member.baseSalaryMnt ?? (formula ? (settings.defaultBaseMnt[member.role] ?? 0) : 0);
+      const own = HrService.pickBase(
+        allRates.filter((r) => r.userId === member.id),
+        period,
+        member.baseSalaryMnt,
+      );
+      const base = own ?? (formula ? (settings.defaultBaseMnt[member.role] ?? 0) : 0);
       const workedDays = daysBy.get(member.id)?.size ?? 0;
       const earnedBase =
         formula && settings.prorateByAttendance && workingDays > 0
@@ -459,7 +676,7 @@ export class HrService {
       const payroll = await this.prisma.payroll.findUniqueOrThrow({ where: { userId_periodMonth: { userId: member.id, periodMonth: period } } });
       rows.push({
         ...payroll,
-        customBase: member.baseSalaryMnt !== null,
+        customBase: own !== null,
         bonusMnt: mine.filter((a) => a.amountMnt > 0).reduce((s, a) => s + a.amountMnt, 0),
         deductionMnt: mine.filter((a) => a.amountMnt < 0).reduce((s, a) => s - a.amountMnt, 0),
         adjustments: mine.map((a) => ({ id: a.id, amountMnt: a.amountMnt, reason: a.reason, createdAt: a.createdAt, by: a.createdBy?.fullName ?? '' })),

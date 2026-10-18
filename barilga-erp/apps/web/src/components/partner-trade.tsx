@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
 import { api, tugrik } from '@/lib/api';
 import { downloadCsv } from '@/lib/csv';
+import { useCan } from '@/lib/permissions';
 import { ORDER_STATUS_LABEL, type PartnerTrade } from '@/lib/types';
 
 const ymd = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(d);
@@ -14,6 +15,8 @@ const qty = (n: number) => n.toLocaleString('mn-MN', { maximumFractionDigits: 3 
  * paid) and — for managers — what we bought from them (goods receipts), plus both directions per product.
  */
 export function PartnerTradePanel({ customerId }: { customerId: string }) {
+  /** Pricing a receipt line later needs the cost right. */
+  const canCost = useCan()('RECEIPT_COST_EDIT');
   const [from, setFrom] = useState(() => {
     const d = new Date();
     d.setUTCDate(d.getUTCDate() - 90);
@@ -93,7 +96,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
             p.supplierInvoiceNo ?? '',
             i.nameMn,
             i.quantity,
-            i.unitCostMnt ?? 'үнэгүй',
+            i.unitCostMnt ?? 'үнэ ороогүй',
             i.lineMnt ?? '',
           ]),
         ),
@@ -139,7 +142,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
           {data.purchasesShown && (
             <>
               <Tile label={`Бид авсан (${t.purchasesCount})`} value={tugrik(t.purchasesMnt)} cls="text-sky-300" />
-              <Tile label="Үнэгүй мөр" value={String(t.unpricedLines)} cls={t.unpricedLines > 0 ? 'text-amber-300' : ''} />
+              <Tile label="Үнэ ороогүй мөр" value={String(t.unpricedLines)} cls={t.unpricedLines > 0 ? 'text-amber-300' : ''} />
             </>
           )}
         </div>
@@ -232,7 +235,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
                     <td className="text-xs text-slate-400">{p.supplierInvoiceNo ?? '—'}</td>
                     <td className="text-right pr-2">
                       {tugrik(p.totalMnt)}
-                      {p.unpricedLines > 0 && <span className="ml-1 text-[11px] text-amber-300">+{p.unpricedLines} үнэгүй</span>}
+                      {p.unpricedLines > 0 && <span className="ml-1 text-[11px] text-amber-300">+{p.unpricedLines} үнэ ороогүй</span>}
                     </td>
                   </tr>
                   {open === p.id && (
@@ -240,7 +243,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
                       <td colSpan={5} className="px-4 py-2">
                         <ItemList
                           items={p.items.map((i) => ({ nameMn: i.nameMn, sku: i.sku, unit: i.unit, quantity: i.quantity, price: i.unitCostMnt, total: i.lineMnt }))}
-                          onPrice={(n) => void price(p.id, p.items[n])}
+                          onPrice={canCost ? (n) => void price(p.id, p.items[n]) : undefined}
                         />
                       </td>
                     </tr>
@@ -315,7 +318,7 @@ function ItemList({
             <td className="text-right whitespace-nowrap">
               {qty(i.quantity)} {i.unit}
             </td>
-            <td className="text-right whitespace-nowrap text-slate-400">× {i.price == null ? 'үнэгүй' : tugrik(i.price)}</td>
+            <td className="text-right whitespace-nowrap text-slate-400">× {i.price == null ? 'үнэ ороогүй' : tugrik(i.price)}</td>
             <td className="text-right whitespace-nowrap">{i.total == null ? '—' : tugrik(i.total)}</td>
             {onPrice && (
               <td className="text-right whitespace-nowrap">

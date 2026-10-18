@@ -94,7 +94,7 @@ export class CashService {
     if (!s) throw new BadRequestException('Касс нээгээгүй байна / No open drawer');
     if (kind === CashMovementKind.OUT) {
       const { expectedCashMnt } = await this.summary(s);
-      if (amountMnt > expectedCashMnt) throw new BadRequestException(`Кассанд ${expectedCashMnt}₮ байх ёстой / Not that much cash in the drawer`);
+      if (amountMnt > expectedCashMnt) throw new BadRequestException(`Кассанд зөвхөн ${expectedCashMnt}₮ байна / Not that much cash in the drawer`);
     }
     await this.prisma.cashMovement.create({ data: { sessionId: s.id, kind, amountMnt, reason: reason.trim(), createdById: user.id } });
     this.log.log(`Cash ${kind} ${amountMnt}₮ (${reason}) by ${user.id}`);

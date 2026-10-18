@@ -184,6 +184,11 @@ model User {
   accountEntries       AccountEntry[]             @relation("AccountEntryBy")
   editAudits           EditAudit[]                @relation("EditAuditBy")
   invoices             Invoice[]                  @relation("InvoiceBy")
+  salaryRates          SalaryRate[]               @relation("SalaryRateOf")
+  salaryRatesSet       SalaryRate[]               @relation("SalaryRateBy")
+  /// Rights added to or taken from this person on top of their role: { "grant": [...], "revoke": [...] }
+  /// (keys from auth/permissions.ts). Empty = exactly what the role allows.
+  permissions          Json?                      @map("permissions")
 
   @@map("sys_users")
 }
@@ -231,7 +236,10 @@ model Product {
   priceMnt       Int
   weightKg       Decimal             @db.Decimal(12, 3)
   lengthM        Decimal             @db.Decimal(10, 2)
-  volumeM3       Decimal             @db.Decimal(10, 3)
+  volumeM3       Decimal             @db.Decimal(14, 6)
+  /// Package width and height (m), when known; with the length they give the volume.
+  widthM         Decimal?            @map("width_m") @db.Decimal(10, 2)
+  heightM        Decimal?            @map("height_m") @db.Decimal(10, 2)
   stockQty       Decimal             @map("stock_quantity") @db.Decimal(12, 3)
   minStockLevel  Decimal             @default(0) @map("min_stock_level") @db.Decimal(12, 3)
   imageUrl       String?             @map("image_url")
@@ -279,7 +287,7 @@ model Order {
 
   totalWeightKg   Decimal      @db.Decimal(12, 3)
   maxLengthM      Decimal      @db.Decimal(10, 2)
-  totalVolumeM3   Decimal      @db.Decimal(12, 3)
+  totalVolumeM3   Decimal      @db.Decimal(14, 6)
   assignedVehicle VehicleCode?
   driverName      String?      @map("driver_name")
   vehicleNumber   String?      @map("vehicle_number")
@@ -352,7 +360,7 @@ model OrderItem {
   unitPrice            Int
   weightKg             Decimal                    @db.Decimal(12, 3)
   lengthM              Decimal                    @db.Decimal(10, 2)
-  volumeM3             Decimal                    @db.Decimal(10, 3)
+  volumeM3             Decimal                    @db.Decimal(14, 6)
   lineTotal            Int
   sourceType           SourceType                 @default(INTERNAL) @map("source_type")
   supplierName         String?                    @map("supplier_name")
@@ -600,6 +608,25 @@ model Attendance {
 
   @@index([userId, checkIn])
   @@map("hr_attendance")
+}
+
+/// A person's monthly base salary from a month on (until a later row). Changing a salary never rewrites
+/// earlier months.
+model SalaryRate {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  user          User     @relation("SalaryRateOf", fields: [userId], references: [id])
+  /// First month (YYYY-MM) it applies to.
+  fromMonth     String   @map("from_month")
+  /// null = no own salary from this month (the role default when the payroll formula is on, otherwise 0).
+  baseSalaryMnt Int?     @map("base_salary_mnt")
+  reason        String?
+  createdById   String   @map("created_by_id")
+  createdBy     User     @relation("SalaryRateBy", fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, fromMonth])
+  @@map("hr_salary_rates")
 }
 
 model Payroll {

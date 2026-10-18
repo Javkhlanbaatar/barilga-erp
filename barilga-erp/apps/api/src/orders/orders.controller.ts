@@ -4,6 +4,7 @@ import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Permission } from '../auth/permissions';
 import { FULFILLMENT_ROLES, OVERSIGHT_ROLES, POS_ROLES, RETURN_ROLES, TRANSPORT_ROLES } from '../auth/rbac';
 import { CreateReturnDto } from '../returns/dto/create-return.dto';
 import { ReturnsService } from '../returns/returns.service';
@@ -91,7 +92,7 @@ export class OrdersController {
   }
 
   @Post(':id/override-fees')
-  @Roles(Role.BORLUULAGCH)
+  @Permission('FEE_OVERRIDE')
   override(@Param('id') id: string, @Body() dto: OverrideFeesDto, @CurrentUser() user: AuthUser) {
     return this.orders.overrideFees(id, dto, user);
   }
@@ -112,13 +113,13 @@ export class OrdersController {
 
   /** Only for orders with no recorded payment; paid orders need a refund process that is not defined yet. */
   @Post(':id/cancel')
-  @Roles(...POS_ROLES)
+  @Permission('ORDER_CANCEL')
   cancel(@Param('id') id: string, @Body() dto: CancelOrderDto, @CurrentUser() user: AuthUser) {
     return this.orders.cancel(id, user, dto?.reason);
   }
 
   @Post(':id/return')
-  @Roles(...RETURN_ROLES)
+  @Permission('RETURN_CREATE')
   createReturn(@Param('id') id: string, @Body() dto: CreateReturnDto, @CurrentUser() user: AuthUser) {
     return this.returns.create(id, dto, user);
   }
@@ -167,7 +168,7 @@ export class OrdersController {
 
   /** Record a payment against what is owed on an order released on account. */
   @Post(':id/settle-credit')
-  @Roles(...POS_ROLES)
+  @Permission('PAY_DEBT')
   settleCredit(@Param('id') id: string, @Body() dto: SettleCreditDto, @CurrentUser() user: AuthUser) {
     return this.orders.settleCredit(id, dto.method, dto.amountMnt, user);
   }

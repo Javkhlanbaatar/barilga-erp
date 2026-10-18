@@ -50,7 +50,7 @@ export function CashierSummary() {
               <div>
                 <p className="text-amber-brand text-[10px] tracking-[0.2em] uppercase">Кассын хураангуй</p>
                 <h3 className="text-lg font-bold">Өнөөдрийн борлуулалт</h3>
-                <p className="text-xs text-slate-400 mt-1">{todayYmd()} · Asia/Ulaanbaatar</p>
+                <p className="text-xs text-slate-400 mt-1">{todayYmd()} · Улаанбаатарын цагаар</p>
               </div>
               <button type="button" className="btn-ghost text-xs px-3 py-1" onClick={() => setOpen(false)}>
                 Хаах

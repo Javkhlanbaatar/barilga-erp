@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api } from '@/lib/api';
 import { AuthUser, ROLE_LABEL, Role, StaffUser, Warehouse } from '@/lib/types';
-import { homeForRole } from '@/lib/rbac';
+import { hasRole, homeForRole } from '@/lib/rbac';
+import type { PermissionInfo } from '@/lib/permissions';
 
 const ROLES: Role[] = ['ADMIN', 'SUPER_MANAGER', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'];
 
@@ -49,6 +50,74 @@ function roleBadge(role: Role) {
   );
 }
 
+/** One right for one person: as the role has it, given on top, or taken away. */
+type Choice = 'default' | 'grant' | 'revoke';
+
+/** The role's own answer (the general manager also has what a branch manager has; same rule as the API). */
+function byRole(role: Role, info: PermissionInfo) {
+  return hasRole(role, info.roles);
+}
+
+/** What the admin set for this person that still changes something for their current role. */
+function overrideCounts(row: StaffUser, catalog: PermissionInfo[]) {
+  const set = row.permissions ?? { grant: [], revoke: [] };
+  if (!catalog.length) return { grant: set.grant.length, revoke: set.revoke.length };
+  return {
+    grant: catalog.filter((p) => p.grantable && !byRole(row.role, p) && set.grant.includes(p.key)).length,
+    revoke: catalog.filter((p) => byRole(row.role, p) && set.revoke.includes(p.key)).length,
+  };
+}
+
+/** Rights in the order the server lists them, under their group headings. */
+function groupRights(catalog: PermissionInfo[]) {
+  const groups = new Map<string, PermissionInfo[]>();
+  for (const p of catalog) groups.set(p.group, [...(groups.get(p.group) ?? []), p]);
+  return [...groups];
+}
+
+/** One line of the rights window: the right, whether the role has it, and the 3-way choice. */
+function RightRow({ info, role, value, onChange }: { info: PermissionInfo; role: Role; value: Choice; onChange: (c: Choice) => void }) {
+  const fromRole = byRole(role, info);
+  const options: Array<[Choice, string]> = [['default', 'Анхдагч']];
+  if (!fromRole && info.grantable) options.push(['grant', 'Нэмэх']);
+  if (fromRole) options.push(['revoke', 'Хасах']);
+  const has = value === 'grant' ? true : value === 'revoke' ? false : fromRole;
+  const active: Record<Choice, string> = {
+    default: 'bg-slate-600 text-white',
+    grant: 'bg-emerald-600 text-white',
+    revoke: 'bg-red-600 text-white',
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+      <div className="min-w-0 flex-1">
+        <p className={value === 'default' ? '' : 'font-medium text-amber-100'}>{info.label}</p>
+        <p className="text-[11px]">
+          {fromRole ? (
+            <span className="text-emerald-300">✓ албан тушаалаар байгаа</span>
+          ) : (
+            <span className="text-slate-500">— байхгүй</span>
+          )}
+          {!fromRole && !info.grantable && <span className="text-slate-500"> · өөр албан тушаалд өгөхгүй</span>}
+        </p>
+      </div>
+      <div className="flex gap-1">
+        {options.map(([c, label]) => (
+          <button
+            key={c}
+            type="button"
+            aria-pressed={value === c}
+            className={`rounded-md px-2.5 py-1 text-xs ${value === c ? `${active[c]} font-semibold` : 'btn-ghost'}`}
+            onClick={() => onChange(c)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <span className={`w-14 text-right text-[11px] ${has ? 'text-emerald-300' : 'text-slate-500'}`}>{has ? 'Эрхтэй' : 'Эрхгүй'}</span>
+    </div>
+  );
+}
+
 export default function AdminUsersPage() {
   const router = useRouter();
   const [me, setMe] = useState<AuthUser | null>(null);
@@ -62,6 +131,11 @@ export default function AdminUsersPage() {
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  // Rights window: the catalog from the server, whose rights are open, and the choice per right.
+  const [catalog, setCatalog] = useState<PermissionInfo[]>([]);
+  const [rightsFor, setRightsFor] = useState<StaffUser | null>(null);
+  const [choices, setChoices] = useState<Record<string, Choice>>({});
+  const [rightsError, setRightsError] = useState('');
 
   const flash = useCallback((kind: Toast['kind'], text: string) => {
     setToast({ kind, text });
@@ -71,12 +145,15 @@ export default function AdminUsersPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [staff, wh] = await Promise.all([
+      const [staff, wh, rights] = await Promise.all([
         api<StaffUser[]>('/users'),
         api<Warehouse[]>('/inventory/warehouses'),
+        // The users list still works if this fails; the rights window tries again.
+        api<PermissionInfo[]>('/auth/permissions').catch(() => [] as PermissionInfo[]),
       ]);
       setUsers(staff);
       setWarehouses(wh);
+      if (rights.length) setCatalog(rights);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Хэрэглэгчдийг ачаалж чадсангүй';
       flash('error', message);
@@ -123,7 +200,7 @@ export default function AdminUsersPage() {
   }
 
   function validate(): string | null {
-    if (form.fullName.trim().length < 2) return 'Овог нэрээ оруулна уу';
+    if (form.fullName.trim().length < 2) return 'Овог нэр оруулна уу';
     if (!USERNAME_RE.test(form.username.trim())) {
       return 'Нэвтрэх нэр 3–32 тэмдэгт: латин үсэг, тоо, цэг, зураас, доогуур зураас';
     }
@@ -217,7 +294,51 @@ export default function AdminUsersPage() {
     }
   }
 
+  async function openRights(row: StaffUser) {
+    setRightsFor(row);
+    setRightsError('');
+    let list = catalog;
+    if (!list.length) {
+      try {
+        list = await api<PermissionInfo[]>('/auth/permissions');
+        setCatalog(list);
+      } catch (err) {
+        setRightsError(err instanceof Error ? err.message : 'Эрхийн жагсаалтыг ачаалж чадсангүй');
+      }
+    }
+    const set = row.permissions ?? { grant: [], revoke: [] };
+    const next: Record<string, Choice> = {};
+    for (const p of list) {
+      const fromRole = byRole(row.role, p);
+      next[p.key] =
+        fromRole && set.revoke.includes(p.key) ? 'revoke' : !fromRole && p.grantable && set.grant.includes(p.key) ? 'grant' : 'default';
+    }
+    setChoices(next);
+  }
+
+  async function saveRights() {
+    if (!rightsFor) return;
+    const grant = Object.keys(choices).filter((k) => choices[k] === 'grant');
+    const revoke = Object.keys(choices).filter((k) => choices[k] === 'revoke');
+    setSaving(true);
+    setRightsError('');
+    try {
+      await api(`/users/${rightsFor.id}/permissions`, { method: 'PATCH', body: JSON.stringify({ grant, revoke }) });
+      flash('ok', `${rightsFor.fullName || rightsFor.username}: эрх хадгалагдлаа`);
+      setRightsFor(null);
+      await load();
+    } catch (err) {
+      setRightsError(err instanceof Error ? err.message : 'Эрхийг хадгалж чадсангүй');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (!me) return <div className="p-8 text-slate-400">Уншиж байна…</div>;
+
+  const changed = Object.values(choices);
+  const grantCount = changed.filter((c) => c === 'grant').length;
+  const revokeCount = changed.filter((c) => c === 'revoke').length;
 
   return (
     <Shell>
@@ -243,7 +364,7 @@ export default function AdminUsersPage() {
             <tr>
               <th className="p-3">Овог нэр</th>
               <th>Нэвтрэх нэр</th>
-              <th>Эрх</th>
+              <th>Албан тушаал</th>
               <th>Агуулах</th>
               <th>Төлөв</th>
               <th className="pr-3 text-right">Үйлдэл</th>
@@ -252,6 +373,7 @@ export default function AdminUsersPage() {
           <tbody>
             {users.map((row) => {
               const active = row.isActive !== false && row.active !== false;
+              const extra = row.role === 'ADMIN' ? null : overrideCounts(row, catalog);
               return (
                 <tr key={row.id} className={`border-t border-slate-800 ${active ? '' : 'opacity-60'}`}>
                   <td className="p-3">
@@ -259,7 +381,17 @@ export default function AdminUsersPage() {
                     <p className="text-xs text-slate-500">{row.email || '—'}</p>
                   </td>
                   <td className="font-mono text-xs">{row.username}</td>
-                  <td>{roleBadge(row.role)}</td>
+                  <td>
+                    {roleBadge(row.role)}
+                    {extra && (extra.grant > 0 || extra.revoke > 0) && (
+                      <span
+                        className="ml-1 inline-flex rounded-full border border-fuchsia-700 bg-fuchsia-950/50 px-2 py-0.5 text-[11px] font-semibold text-fuchsia-200"
+                        title="Албан тушаалынхаас гадна нэмсэн / хассан эрх"
+                      >
+                        +{extra.grant} / −{extra.revoke}
+                      </span>
+                    )}
+                  </td>
                   <td className="text-xs text-slate-300">
                     {row.role === 'ADMIN' || row.role === 'SUPER_MANAGER' ? 'Бүгд' : (row.warehouse?.name ?? 'Үндсэн (томилоогүй)')}
                     {(row.managedWarehouses ?? []).length > 0 && (
@@ -282,6 +414,11 @@ export default function AdminUsersPage() {
                       <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
                         Засах
                       </button>
+                      {row.role !== 'ADMIN' && (
+                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => void openRights(row)}>
+                          Эрх
+                        </button>
+                      )}
                       {active && row.id !== me?.id && (
                         <button className="btn-danger text-xs px-3 py-1" onClick={() => setDeleting(row)}>
                           Идэвхгүй болгох
@@ -348,7 +485,7 @@ export default function AdminUsersPage() {
               />
             </label>
             <label className="block text-xs text-slate-400">
-              Эрх
+              Албан тушаал
               <select
                 className="mt-1 w-full"
                 value={form.role}
@@ -377,7 +514,7 @@ export default function AdminUsersPage() {
                 ))}
               </select>
               <span className="mt-1 block text-[11px] text-slate-500">
-                Борлуулагч, агуулахын ажилтан зөвхөн өөрийн дэлгүүр/агуулахыг харна; томилоогүй бол үндсэн дэлгүүрийг.
+                Кассчин, агуулахын ажилтан зөвхөн өөрийн дэлгүүр/агуулахыг харна; томилоогүй бол үндсэн дэлгүүрийг.
                 Админ, ерөнхий менежер бүгдийг харна.
               </span>
             </label>
@@ -416,6 +553,65 @@ export default function AdminUsersPage() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {rightsFor && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+          <div className="card flex max-h-[90vh] w-full max-w-3xl flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-semibold text-lg">Эрх — {rightsFor.fullName || rightsFor.name || rightsFor.username}</h3>
+              {roleBadge(rightsFor.role)}
+            </div>
+            <ul className="list-disc space-y-0.5 pl-4 text-xs text-slate-400">
+              <li>Хадгалмагц шууд хүчинтэй болно; ажилтан дахин нэвтрэх шаардлагагүй.</li>
+              <li>«Анхдагч» — албан тушаалынх нь дагуу. «Нэмэх» — албан тушаалд нь байхгүй эрхийг өгнө. «Хасах» — байгаа эрхийг авна.</li>
+              <li>Админ үргэлж бүх эрхтэй — түүнийг хязгаарлахгүй.</li>
+              <li>Цалин, мөнгө гаргах, цуцлах зэрэг эрхийг өөр албан тушаалд өгөхгүй, зөвхөн хасна.</li>
+              <li>Өөрчлөлт бүр «Тайлан → Засварын түүх»-д бичигдэнэ.</li>
+            </ul>
+            <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
+              {groupRights(catalog).map(([group, items]) => (
+                <section key={group}>
+                  <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-brand">{group}</h4>
+                  <div className="divide-y divide-slate-800 rounded-lg border border-slate-700">
+                    {items.map((p) => (
+                      <RightRow
+                        key={p.key}
+                        info={p}
+                        role={rightsFor.role}
+                        value={choices[p.key] ?? 'default'}
+                        onChange={(c) => setChoices({ ...choices, [p.key]: c })}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+              {!catalog.length && !rightsError && <p className="text-sm text-slate-500">Уншиж байна…</p>}
+            </div>
+            {rightsError && <p className="text-red-400 text-sm">{rightsError}</p>}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-700 pt-3">
+              <span className="text-xs text-slate-400">
+                {grantCount || revokeCount ? `Нэмсэн ${grantCount}, хассан ${revokeCount}` : 'Бүгд албан тушаалын анхдагчаар'}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="btn-ghost text-sm"
+                  disabled={!grantCount && !revokeCount}
+                  onClick={() => setChoices(Object.fromEntries(Object.keys(choices).map((k) => [k, 'default' as Choice])))}
+                >
+                  Бүгдийг анхдагч болгох
+                </button>
+                <button type="button" className="btn-ghost" onClick={() => setRightsFor(null)}>
+                  Болих
+                </button>
+                <button className="btn-primary" disabled={saving || !catalog.length} onClick={() => void saveRights()}>
+                  {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

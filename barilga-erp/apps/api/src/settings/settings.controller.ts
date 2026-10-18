@@ -21,6 +21,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CATALOG_READ_ROLES, TOP_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Permission } from '../auth/permissions';
 import { CompanySettingsDto } from './company.dto';
 import { DocTemplatesDto } from './doc-template.dto';
 import { PrintSettingsDto } from './print.dto';
@@ -107,7 +108,7 @@ export class SettingsController {
 
   /** Wording of printed documents: admin and the general manager (Ерөнхий менежер). */
   @Put('documents')
-  @Roles(...TOP_ROLES)
+  @Permission('DOC_TEMPLATE_EDIT')
   setDocuments(@Body() dto: DocTemplatesDto, @CurrentUser() user: AuthUser) {
     return this.settings.setDocuments(dto, user.id);
   }

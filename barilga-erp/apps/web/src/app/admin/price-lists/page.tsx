@@ -5,7 +5,9 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
-import { hasRole, homeForRole, OVERSIGHT_ROLES, TOP_ROLES } from '@/lib/rbac';
+import { categoryLabel, unitLabel } from '@/lib/catalog';
+import { can, useCan } from '@/lib/permissions';
+import { hasRole, homeForRole, OVERSIGHT_ROLES } from '@/lib/rbac';
 import { AuthUser, PriceList } from '@/lib/types';
 
 type Row = {
@@ -44,7 +46,8 @@ export default function PriceListsPage() {
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-  const [canEdit, setCanEdit] = useState(false);
+  // Prices are shared by every shop: admin and the general manager by default, or whoever the admin allows.
+  const canEdit = useCan()('PRICE_LIST_WRITE');
   const [pct, setPct] = useState('10');
   const [sendOpen, setSendOpen] = useState(false);
   const [email, setEmail] = useState('');
@@ -68,12 +71,12 @@ export default function PriceListsPage() {
       return;
     }
     const me = JSON.parse(raw) as AuthUser;
-    if (!hasRole(me.role, OVERSIGHT_ROLES)) {
+    // Same rule as the API: managers see the lists; changing them needs the price-list right.
+    if (!hasRole(me.role, OVERSIGHT_ROLES) && !can(me, 'PRICE_LIST_WRITE')) {
       router.replace(homeForRole(me.role));
       return;
     }
     setReady(true);
-    setCanEdit(hasRole(me.role, TOP_ROLES));
     void loadLists()
       .then((rows) => rows[0] && setSelected(rows[0].id))
       .catch((err) => setMessage({ ok: false, text: err instanceof Error ? err.message : 'Ачаалж чадсангүй' }));
@@ -85,8 +88,9 @@ export default function PriceListsPage() {
 
   const rows = useMemo(() => {
     const term = q.trim().toLowerCase();
+    // The category matches by its key ("Cement") and by its Mongolian name ("Цемент").
     return (detail?.products ?? []).filter(
-      (p) => !term || matchesSearch(`${p.sku} ${p.nameMn} ${p.category}`, term),
+      (p) => !term || matchesSearch(`${p.sku} ${p.nameMn} ${p.category} ${categoryLabel(p.category)}`, term),
     );
   }, [detail, q]);
 
@@ -247,7 +251,7 @@ export default function PriceListsPage() {
         <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Борлуулалт</p>
         <h2 className="text-xl font-bold">Үнийн жагсаалт</h2>
         <p className="text-slate-400 text-sm mt-1">
-          Өртгийн үнэ, бартерын үнэ г.м. Харилцагчид жагсаалт оноовол ПОС тэр үнээр тооцно. Жагсаалтад үнэгүй бараа жижиглэн үнээр зарагдана.
+          Өртгийн үнэ, бартерын үнэ г.м. Харилцагчид жагсаалт оноовол ПОС тэр үнээр тооцно. Жагсаалтад үнэ оруулаагүй бараа жижиглэн үнээр зарагдана.
         </p>
       </div>
 
@@ -269,12 +273,14 @@ export default function PriceListsPage() {
         <a className="btn-ghost text-sm ml-auto" href="/print/price-list?id=retail" target="_blank" rel="noreferrer">
           Жижиглэн үнийн жагсаалт хэвлэх
         </a>
-        <form onSubmit={createList} className="flex gap-1">
-          <input className="w-48" placeholder="Шинэ жагсаалтын нэр" value={newName} onChange={(e) => setNewName(e.target.value)} />
-          <button className="btn-primary text-sm" disabled={busy || newName.trim().length < 2}>
-            Нэмэх
-          </button>
-        </form>
+        {canEdit && (
+          <form onSubmit={createList} className="flex gap-1">
+            <input className="w-48" placeholder="Шинэ жагсаалтын нэр" value={newName} onChange={(e) => setNewName(e.target.value)} />
+            <button className="btn-primary text-sm" disabled={busy || newName.trim().length < 2}>
+              Нэмэх
+            </button>
+          </form>
+        )}
       </div>
 
       {message && <p className={`text-sm mb-3 ${message.ok ? 'text-emerald-300' : 'text-red-400'}`}>{message.text}</p>}
@@ -284,26 +290,31 @@ export default function PriceListsPage() {
           <div className="flex flex-wrap items-center gap-2 p-3 border-b border-slate-800">
             <h3 className="font-semibold mr-2">{detail.name}</h3>
             {!detail.isActive && <span className="text-xs text-slate-400">(идэвхгүй — харилцагчид жижиглэн үнээр авна)</span>}
-            <input className="w-56" placeholder="Бараа шүүх…" value={q} onChange={(e) => setQ(e.target.value)} />
-            <button className="btn-ghost text-xs px-3 py-1" onClick={fillFromCost}>
-              Хоосныг өртгөөр бөглөх
-            </button>
-            <span className="flex items-center gap-1 text-xs text-slate-400">
-              Жижиглэнгээс −
-              <input className="w-14 text-right" inputMode="decimal" value={pct} onChange={(e) => setPct(e.target.value)} />%
-              <button className="btn-ghost text-xs px-2 py-1" onClick={() => fillFromRetail(false)} title="Зөвхөн хоосон мөрийг">
-                хоосныг
-              </button>
-              <button className="btn-ghost text-xs px-2 py-1" onClick={() => fillFromRetail(true)} title="Харагдаж буй бүх мөрийг дарж бичнэ">
-                бүгдийг
-              </button>
-            </span>
-            <button className="btn-ghost text-xs px-3 py-1" onClick={() => void toggleActive()}>
-              {detail.isActive ? 'Идэвхгүй болгох' : 'Идэвхжүүлэх'}
-            </button>
-            <button className="btn-primary text-sm ml-auto" disabled={busy || changes.length === 0} onClick={() => void save()}>
-              {busy ? 'Хадгалж байна…' : `Хадгалах${changes.length ? ` (${changes.length})` : ''}`}
-            </button>
+            <input className="w-56" placeholder="Бараа шүүх (нэр, код, ангилал)…" value={q} onChange={(e) => setQ(e.target.value)} />
+            {canEdit && (
+              <>
+                <button className="btn-ghost text-xs px-3 py-1" onClick={fillFromCost}>
+                  Хоосныг өртгөөр бөглөх
+                </button>
+                <span className="flex items-center gap-1 text-xs text-slate-400">
+                  Жижиглэнгээс −
+                  <input className="w-14 text-right" inputMode="decimal" value={pct} onChange={(e) => setPct(e.target.value)} />%
+                  <button className="btn-ghost text-xs px-2 py-1" onClick={() => fillFromRetail(false)} title="Зөвхөн хоосон мөрийг">
+                    хоосныг
+                  </button>
+                  <button className="btn-ghost text-xs px-2 py-1" onClick={() => fillFromRetail(true)} title="Харагдаж буй бүх мөрийг дарж бичнэ">
+                    бүгдийг
+                  </button>
+                </span>
+                <button className="btn-ghost text-xs px-3 py-1" onClick={() => void toggleActive()}>
+                  {detail.isActive ? 'Идэвхгүй болгох' : 'Идэвхжүүлэх'}
+                </button>
+                <button className="btn-primary text-sm ml-auto" disabled={busy || changes.length === 0} onClick={() => void save()}>
+                  {busy ? 'Хадгалж байна…' : `Хадгалах${changes.length ? ` (${changes.length})` : ''}`}
+                </button>
+              </>
+            )}
+            {!canEdit && <span className="ml-auto text-xs text-slate-500">Үнэ засах эрхгүй — зөвхөн харна.</span>}
           </div>
           <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 p-3 text-xs">
             <span className="text-slate-400">Хэвлэх / илгээх:</span>
@@ -375,7 +386,7 @@ export default function PriceListsPage() {
                   <tr key={r.productId} className="border-t border-slate-800">
                     <td className="p-2 font-mono text-[11px] text-slate-400">{r.sku}</td>
                     <td>
-                      {r.nameMn} <span className="text-xs text-slate-500">{r.unit}</span>
+                      {r.nameMn} <span className="text-xs text-slate-500">{unitLabel(r.unit)}</span>
                     </td>
                     <td className="text-right">{tugrik(r.retailMnt)}</td>
                     <td className="text-right text-slate-400">{r.lastCostMnt === null ? '—' : tugrik(r.lastCostMnt)}</td>
@@ -386,6 +397,7 @@ export default function PriceListsPage() {
                         min={0}
                         step={1}
                         placeholder="жижиглэн"
+                        readOnly={!canEdit}
                         value={value}
                         onChange={(e) => setDraft({ ...draft, [r.productId]: e.target.value })}
                       />

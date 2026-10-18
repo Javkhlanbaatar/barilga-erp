@@ -179,7 +179,7 @@ export default function WarehouseTicketsPage() {
           <span className="font-semibold text-white">{o.driverPhone?.trim() || '—'}</span>
         </p>
         {o.trackingToken && (
-          <p className="text-xs text-slate-400 break-all">Tracking: {orderTrackingUrl(o.trackingToken) || `/track/${o.trackingToken}`}</p>
+          <p className="text-xs text-slate-400 break-all">Хяналтын холбоос: {orderTrackingUrl(o.trackingToken) || `/track/${o.trackingToken}`}</p>
         )}
         {!(o.vehicleNumber && o.driverPhone) && (
           <p className="text-amber-300 text-xs">

@@ -89,7 +89,7 @@ export default function FulfillmentReportPage() {
         <div>
           <h2 className="text-xl font-bold">Бэлтгэлийн тайлан</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Хүлээлт = төлсөнөөс «Би бэлдье» хүртэл · Бэлтгэл = «Би бэлдье»-ээс «Бэлдэж дууслаа» хүртэл
+            Хүлээлт = төлснөөс «Би бэлдье» хүртэл · Бэлтгэл = «Би бэлдье»-ээс «Бэлдэж дууслаа» хүртэл
           </p>
         </div>
         <button className="btn-ghost print:hidden" onClick={() => window.print()}>

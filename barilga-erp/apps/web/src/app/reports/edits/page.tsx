@@ -35,12 +35,22 @@ const TYPE_LABEL: Record<string, string> = {
   DOC_TEMPLATE: 'Баримтын загвар',
   MODULE: 'Модуль',
   WAREHOUSE: 'Дэлгүүр / агуулах',
+  USER_PERMISSIONS: 'Хүний эрх',
+  ATTENDANCE: 'Ирц',
+  RECEIPT_PARTNER: 'Орлогын нийлүүлэгч',
 };
+
+const hm = (v: unknown) =>
+  typeof v === 'string' ? new Intl.DateTimeFormat('mn-MN', { timeZone: 'Asia/Ulaanbaatar', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(v)) : '—';
 
 const MONEY_KEYS = ['unitCostMnt', 'amountMnt', 'priceMnt'];
 
 /** Money changes as "old → new"; other changes are described in the summary. */
 function change(e: Edit) {
+  // Attendance corrections: old and new times.
+  if ('checkIn' in e.before || 'checkIn' in e.after) {
+    return `${hm(e.before.checkIn)}–${hm(e.before.checkOut)} → ${hm(e.after.checkIn)}–${hm(e.after.checkOut)}`;
+  }
   const key = MONEY_KEYS.find((k) => k in e.before || k in e.after);
   if (!key) return '';
   const fmt = (v: unknown) => (v === null || v === undefined ? '—' : tugrik(Number(v)));
@@ -90,7 +100,7 @@ export default function EditsReportPage() {
       <ReportsNav />
       <div className="mb-4">
         <h2 className="text-xl font-bold">Засварын түүх</h2>
-        <p className="text-slate-400 text-sm mt-1">Худалдан авсан үнэ, харилцагчийн тооцооны мөрийг дараа нь өөрчилсөн бүх тохиолдол.</p>
+        <p className="text-slate-400 text-sm mt-1">Үнэ, тооцоо, цалин, эрх, тохиргоо, баримтын загварыг дараа нь өөрчилсөн бүх тохиолдол.</p>
       </div>
       <div className="flex flex-wrap items-end gap-3 mb-4 print:hidden">
         <label className="text-xs text-slate-400">

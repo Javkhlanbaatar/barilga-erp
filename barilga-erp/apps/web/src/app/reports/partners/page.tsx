@@ -136,7 +136,7 @@ export default function PartnerReportsPage() {
     if (tab === 'purchases' && purchases)
       downloadCsv(
         `hudaldan-avalt-${startDate}-${endDate}`,
-        ['Нийлүүлэгч', 'Бүртгэлтэй', 'Орлого', 'Барааны дүн', 'Үнэгүй мөр', 'Бусад (үйлчилгээ)', 'Нийт'],
+        ['Нийлүүлэгч', 'Бүртгэлтэй', 'Орлого', 'Барааны дүн', 'Үнэ ороогүй мөр', 'Бусад (үйлчилгээ)', 'Нийт'],
         purchases.suppliers.map((s) => [s.name, s.registered ? 'тийм' : 'үгүй', s.receipts, s.goodsMnt, s.unpricedLines, s.otherMnt, s.totalMnt]),
       );
   }
@@ -240,7 +240,7 @@ export default function PartnerReportsPage() {
             {aging.customers.length === 0 && <p className="p-3 text-sm text-slate-500">Төлөгдөөгүй авлага алга.</p>}
           </div>
           <p className="mt-2 text-xs text-slate-500">
-            {aging.asOf}-ны байдлаар. Нэхэмжлэхтэй захиалга төлөх хугацаа нь дууссан өдрөөс, бусад нь бараа авсан өдрөөс тоологдоно. Захиалгагүй
+            {aging.asOf} өдрийн байдлаар. Нэхэмжлэхтэй захиалга төлөх хугацаа нь дууссан өдрөөс, бусад нь бараа авсан өдрөөс тоологдоно. Захиалгагүй
             бичсэн авлага (тээврийн хөлс г.м.) энд орохгүй — «Харилцагчийн тооцоо» тайланд харагдана.
           </p>
         </>
@@ -298,7 +298,7 @@ export default function PartnerReportsPage() {
             <Tile label="Бусад (үйлчилгээ г.м.)" value={purchases.totals.otherMnt} />
             <Tile label="Нийт" value={purchases.totals.goodsMnt + purchases.totals.otherMnt} />
             <article className="card py-3">
-              <p className="text-[10px] uppercase text-slate-400">Үнэгүй мөр</p>
+              <p className="text-[10px] uppercase text-slate-400">Үнэ ороогүй мөр</p>
               <p className={`text-lg font-bold ${purchases.totals.unpricedLines ? 'text-amber-300' : ''}`}>{purchases.totals.unpricedLines}</p>
             </article>
           </section>
@@ -309,7 +309,7 @@ export default function PartnerReportsPage() {
                   <th className="p-2">Нийлүүлэгч</th>
                   <th className="text-right">Орлого</th>
                   <th className="text-right">Барааны дүн</th>
-                  <th className="text-right">Үнэгүй мөр</th>
+                  <th className="text-right">Үнэ ороогүй мөр</th>
                   <th className="text-right">Бусад</th>
                   <th className="text-right pr-3">Нийт</th>
                 </tr>

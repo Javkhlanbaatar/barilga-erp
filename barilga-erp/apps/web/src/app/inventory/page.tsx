@@ -13,8 +13,10 @@ import {
   productMatchesQuery,
   productStockStatus,
 } from '@/lib/types';
+import { CATEGORIES, UNITS, categoryKey, categoryLabel, missingInfo, unitLabel, withVolume } from '@/lib/catalog';
 import { useFeatures } from '@/lib/features';
-import { OVERSIGHT_ROLES, TOP_ROLES, hasRole } from '@/lib/rbac';
+import { can, savedUser, useCan } from '@/lib/permissions';
+import { OVERSIGHT_ROLES, hasRole } from '@/lib/rbac';
 
 const STATUS_LABEL: Record<StockStatus, string> = {
   IN_STOCK: 'Байгаа',
@@ -34,40 +36,26 @@ const MOVEMENT_LABEL: Record<string, string> = {
   RECONCILE: 'Нийлүүлэгчээр тохируулсан',
 };
 
-type StockFilter = 'ALL' | 'NEGATIVE_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
+/** INCOMPLETE: products still missing a category, weight, length or volume. */
+type StockFilter = 'ALL' | 'NEGATIVE_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'INCOMPLETE';
 
-const CATEGORIES = ['General', 'Cement', 'Steel', 'Masonry', 'Aggregates', 'Wood', 'Hardware', 'Other'];
-
-const CATEGORY_LABEL: Record<string, string> = {
-  General: 'Ерөнхий',
-  Cement: 'Цемент',
-  Steel: 'Төмөр',
-  Masonry: 'Тоосго, блок',
-  Aggregates: 'Дүүргэгч',
-  Wood: 'Мод',
-  Hardware: 'Төмөрлөг, багаж',
-  Other: 'Бусад',
-};
-
-/** Category as shown: the built-in English keys in Mongolian, anything typed by staff as typed. */
-const categoryLabel = (c?: string | null) => CATEGORY_LABEL[c ?? 'General'] ?? c ?? 'Ерөнхий';
-/** Typing "Цемент" saves the existing "Cement" category instead of starting a second one. */
-const categoryKey = (label: string) => {
-  const t = label.trim();
-  return Object.entries(CATEGORY_LABEL).find(([, l]) => l.toLowerCase() === t.toLowerCase())?.[0] ?? (t || 'General');
-};
+/** A saved size or weight for the form: empty when not registered (0). */
+const dim = (v?: number | string | null) => (Number(v) > 0 ? String(Number(v)) : '');
 
 const emptyForm = {
   barcode: '',
   sku: '',
   nameMn: '',
   nameEn: '',
-  unit: 'pcs',
-  category: 'Ерөнхий',
+  unit: 'ш',
+  category: '',
   priceMnt: 0,
-  weightKg: 0,
-  lengthM: 0,
-  volumeM3: 0,
+  // Sizes are typed as text so an empty box stays empty (width / height are optional).
+  weightKg: '',
+  lengthM: '',
+  widthM: '',
+  heightM: '',
+  volumeM3: '',
   stockQty: 0,
   minStockLevel: 0,
   imageUrl: '',
@@ -91,6 +79,19 @@ function Badge({ status }: { status: StockStatus }) {
     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${cls}`}>
       {STATUS_LABEL[status]}
     </span>
+  );
+}
+
+/** "Дутуу: жин, урт" under a product whose registration is not complete; a link to the form for those who can fix it. */
+function MissingNote({ missing, onFix }: { missing: string[]; onFix?: () => void }) {
+  if (!missing.length) return null;
+  const text = `Дутуу: ${missing.join(', ')}`;
+  return onFix ? (
+    <button type="button" className="mt-0.5 block text-left text-[11px] text-amber-300 hover:underline" onClick={onFix} title="Засаж бөглөх">
+      {text}
+    </button>
+  ) : (
+    <p className="mt-0.5 text-[11px] text-amber-300">{text}</p>
   );
 }
 
@@ -118,9 +119,12 @@ export default function InventoryPage() {
   const [openingWarehouse, setOpeningWarehouse] = useState('');
 
   const features = useFeatures();
+  const canDo = useCan();
   const canManage = hasRole(user?.role, OVERSIGHT_ROLES);
-  // The catalog and prices are shared by every shop: only admin and the general manager change them.
-  const canEditCatalog = hasRole(user?.role, TOP_ROLES);
+  // The catalog and prices are shared by every shop: admin and the general manager by default, or whoever the admin allows.
+  const canEditCatalog = canDo('PRODUCT_WRITE');
+  const canAdjust = canDo('STOCK_ADJUST');
+  const showActions = canManage || canEditCatalog || canAdjust;
   const warehouses = report?.warehouses ?? [];
   const severalWarehouses = warehouses.length > 1;
   // Staff assigned to a warehouse only ever see that one (the server enforces it too).
@@ -136,9 +140,7 @@ export default function InventoryPage() {
     setError('');
     try {
       setReport(await api<StockReport>(`/inventory/stock${warehouseId ? `?warehouseId=${warehouseId}` : ''}`));
-      const raw = localStorage.getItem('barilga_user');
-      const role = raw ? (JSON.parse(raw) as AuthUser).role : null;
-      if (hasRole(role, TOP_ROLES)) {
+      if (can(savedUser(), 'PRODUCT_WRITE')) {
         setCatalog(await api<Product[]>('/products/all'));
       }
     } catch (err) {
@@ -216,12 +218,15 @@ export default function InventoryPage() {
       barcode: row.barcode ?? '',
       nameMn: row.nameMn,
       nameEn: row.nameEn,
-      unit: row.unit,
-      category: categoryLabel(row.category),
+      unit: unitLabel(row.unit),
+      // "General" is not a real choice: the box starts empty so a category has to be picked.
+      category: row.category && row.category !== 'General' ? categoryLabel(row.category) : '',
       priceMnt: Number(row.priceMnt),
-      weightKg: Number(row.weightKg),
-      lengthM: Number(row.lengthM),
-      volumeM3: Number(row.volumeM3),
+      weightKg: dim(row.weightKg),
+      lengthM: dim(row.lengthM),
+      widthM: dim(row.widthM),
+      heightM: dim(row.heightM),
+      volumeM3: dim(row.volumeM3),
       stockQty: Number(row.stockQty),
       minStockLevel: Number(row.minStockLevel ?? 0),
       imageUrl: row.imageUrl ?? '',
@@ -235,20 +240,25 @@ export default function InventoryPage() {
 
   async function save(e: FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setError('');
+    const categoryValue = categoryKey(form.category);
+    if (!form.category.trim() || categoryValue === 'General') return setError('Ангиллаа сонгоно уу');
+    if (!(Number(form.weightKg) > 0)) return setError('Жинг кг-аар оруулна уу (0-ээс их)');
+    setSaving(true);
     try {
       const payload = {
         ...form,
         priceMnt: Number(form.priceMnt),
         weightKg: Number(form.weightKg),
-        lengthM: Number(form.lengthM),
-        volumeM3: Number(form.volumeM3),
+        lengthM: Number(form.lengthM) || 0,
+        widthM: form.widthM.trim() ? Number(form.widthM) : null,
+        heightM: form.heightM.trim() ? Number(form.heightM) : null,
+        volumeM3: Number(form.volumeM3) || 0,
         stockQty: Number(form.stockQty),
         minStockLevel: Number(form.minStockLevel),
         imageUrl: form.imageUrl || null,
         description: form.description.trim() || null,
-        category: categoryKey(form.category),
+        category: categoryValue,
         companions: form.companions
           .filter((c) => c.name.trim() && Number(c.qtyPerUnit) > 0)
           .map((c) => ({ name: c.name.trim(), qtyPerUnit: Number(c.qtyPerUnit), unit: c.unit.trim() || 'ш' })),
@@ -319,9 +329,12 @@ export default function InventoryPage() {
         category: p.category ?? 'General',
         stockStatus: p.status,
       }));
-  const rows = (filter === 'ALL' ? allRows : allRows.filter((row) => row.stockStatus === filter)).filter(
-    (row) => productMatchesQuery(row, query) && (!category || (row.category ?? 'General') === category),
-  );
+  const incompleteCount = allRows.filter((row) => missingInfo(row).length > 0).length;
+  const rows = allRows
+    .filter((row) =>
+      filter === 'ALL' ? true : filter === 'INCOMPLETE' ? missingInfo(row).length > 0 : row.stockStatus === filter,
+    )
+    .filter((row) => productMatchesQuery(row, query) && (!category || (row.category ?? 'General') === category));
   const categories = [...new Set(allRows.map((r) => r.category ?? 'General'))].sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b)));
   const missingBarcodes = catalog.filter((p) => !p.barcode).length;
 
@@ -450,9 +463,10 @@ export default function InventoryPage() {
         {(
           [
             ['ALL', 'Бүгд'],
-            ['NEGATIVE_STOCK', 'Хасах / илүү зарагдсан'],
+            ['NEGATIVE_STOCK', 'Хасах үлдэгдэл / илүү зарагдсан'],
             ['LOW_STOCK', 'Дуусч буй'],
             ['OUT_OF_STOCK', 'Дууссан'],
+            ['INCOMPLETE', `Бүртгэл дутуу (${incompleteCount})`],
           ] as Array<[StockFilter, string]>
         ).map(([key, label]) => (
           <button
@@ -460,12 +474,20 @@ export default function InventoryPage() {
             type="button"
             className={filter === key ? 'btn-primary text-xs px-3 py-1' : 'btn-ghost text-xs px-3 py-1'}
             onClick={() => setFilter(key)}
+            title={key === 'INCOMPLETE' ? 'Ангилал, жин, урт эсвэл эзлэхүүн бүртгээгүй бараа' : undefined}
           >
             {label}
             {key === 'NEGATIVE_STOCK' && negativeCount > 0 ? ` (${negativeCount})` : ''}
           </button>
         ))}
       </div>
+
+      {filter === 'INCOMPLETE' && incompleteCount > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-700 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
+          {incompleteCount} барааны ангилал, жин эсвэл хэмжээ бүртгэгдээгүй.
+          {canEditCatalog ? ' Бараа бүрийн «Дутуу» дээр дарж бөглөнө үү.' : ' Бараа бүртгэх эрхтэй ажилтнаар бөглүүлнэ үү.'}
+        </div>
+      )}
 
       {negativeCount > 0 && (
         <div className="mb-4 rounded-xl border border-rose-700 bg-rose-950/40 px-4 py-3 text-sm text-rose-100">
@@ -490,7 +512,7 @@ export default function InventoryPage() {
               <th className="text-right">Үнэ</th>
               <th className="text-right">Үлдэгдэл</th>
               <th>Төлөв</th>
-              {canManage && <th className="pr-3 text-right">Үйлдэл</th>}
+              {showActions && <th className="pr-3 text-right">Үйлдэл</th>}
             </tr>
           </thead>
           <tbody>
@@ -515,11 +537,12 @@ export default function InventoryPage() {
                   <p className="font-medium">{row.nameMn}</p>
                   <p className="text-xs text-slate-500">{row.nameEn}</p>
                   {row.description ? <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{row.description}</p> : null}
+                  <MissingNote missing={missingInfo(row)} onFix={canEditCatalog ? () => openEdit(row) : undefined} />
                 </td>
                 <td>{categoryLabel(row.category)}</td>
                 <td className="text-right">{tugrik(Number(row.priceMnt ?? 0))}</td>
                 <td className={`text-right font-semibold ${row.stockStatus === 'NEGATIVE_STOCK' ? 'text-rose-300' : ''}`}>
-                  {Number(row.stockQty)}
+                  {Number(row.stockQty)} <span className="text-xs font-normal text-slate-400">{unitLabel(row.unit)}</span>
                   {severalWarehouses && !report?.warehouseId && row.warehouses && (
                     <p className="mt-0.5 text-[11px] font-normal text-slate-500">
                       {row.warehouses.map((w) => `${w.code}: ${w.quantity}`).join(' · ')}
@@ -540,7 +563,7 @@ export default function InventoryPage() {
                     </span>
                   </div>
                 </td>
-                {canManage && (
+                {showActions && (
                   <td className="pr-3">
                     <div className="flex justify-end gap-1">
                       {canEditCatalog && (
@@ -548,12 +571,16 @@ export default function InventoryPage() {
                           Засах
                         </button>
                       )}
-                      <button className="btn-ghost text-xs px-3 py-1" onClick={() => openAdjust(row)}>
-                        Тохируулах
-                      </button>
-                      <button className="btn-ghost text-xs px-3 py-1" onClick={() => void openLedger(row)}>
-                        Түүх
-                      </button>
+                      {canAdjust && (
+                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => openAdjust(row)}>
+                          Тохируулах
+                        </button>
+                      )}
+                      {canManage && (
+                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => void openLedger(row)}>
+                          Түүх
+                        </button>
+                      )}
                       {canEditCatalog && row.active !== false && (
                         <button className="btn-danger text-xs px-3 py-1" onClick={() => setDeleting(row)}>
                           Идэвхгүй болгох
@@ -611,14 +638,18 @@ export default function InventoryPage() {
                 <input
                   className="mt-1 w-full"
                   list="product-categories"
+                  required
+                  maxLength={60}
                   placeholder="Сонгох эсвэл шинээр бичих"
                   value={form.category}
                   onChange={(e) => setForm({ ...form, category: e.target.value })}
                 />
                 <datalist id="product-categories">
-                  {[...new Set([...CATEGORIES, ...categories])].map((c) => (
-                    <option key={c} value={categoryLabel(c)} />
-                  ))}
+                  {[...new Set([...CATEGORIES, ...categories])]
+                    .filter((c) => c !== 'General')
+                    .map((c) => (
+                      <option key={c} value={categoryLabel(c)} />
+                    ))}
                 </datalist>
               </label>
               <label className="text-xs text-slate-400 col-span-2">
@@ -627,14 +658,26 @@ export default function InventoryPage() {
                   className="mt-1 w-full font-mono"
                   value={form.barcode}
                   inputMode="numeric"
-                  placeholder="Сканнердах эсвэл бичих. Хоосон бол автоматаар үүснэ (200…)"
+                  placeholder="Уншуулах эсвэл бичих. Хоосон бол автоматаар үүснэ (200…)"
                   onChange={(e) => setForm({ ...form, barcode: e.target.value })}
                   onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
                 />
               </label>
               <label className="text-xs text-slate-400">
                 Хэмжих нэгж
-                <input className="mt-1 w-full" required value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
+                <input
+                  className="mt-1 w-full"
+                  required
+                  maxLength={16}
+                  list="product-units"
+                  value={form.unit}
+                  onChange={(e) => setForm({ ...form, unit: e.target.value })}
+                />
+                <datalist id="product-units">
+                  {UNITS.map((u) => (
+                    <option key={u} value={u} />
+                  ))}
+                </datalist>
               </label>
               <label className="text-xs text-slate-400">
                 Үнэ ₮
@@ -658,7 +701,7 @@ export default function InventoryPage() {
               <fieldset className="col-span-2 rounded border border-slate-700 p-2 text-xs text-slate-400">
                 <legend className="px-1">Дагалдах бараа (жишээ: давирхайн будагт хатаагч)</legend>
                 <p className="mb-2 text-[11px] text-slate-500">
-                  Нэг ширхэг/нэгж зарах бүрд хамт олгох зүйл. Тасалбар, бэлтгэх хуудас, баримт дээр «+ Хатаагч × 2 ш» гэж гарна.
+                  Нэг ширхэг/нэгж зарах бүрт хамт олгох зүйл. Тасалбар, бэлтгэх хуудас, баримт дээр «+ Хатаагч × 2 ш» гэж гарна.
                 </p>
                 {form.companions.map((c, idx) => (
                   <div key={idx} className="mb-1 flex gap-1">
@@ -710,11 +753,14 @@ export default function InventoryPage() {
                   type="number"
                   className="mt-1 w-full"
                   value={form.stockQty}
-                  disabled={modal === 'edit' && severalWarehouses}
+                  disabled={modal === 'edit' && (severalWarehouses || !canAdjust)}
                   onChange={(e) => setForm({ ...form, stockQty: Number(e.target.value) })}
                 />
                 {modal === 'edit' && severalWarehouses && (
                   <span className="mt-1 block text-[11px] text-slate-500">Агуулах бүрийн үлдэгдлийг «Тохируулах» товчоор өөрчилнө.</span>
+                )}
+                {modal === 'edit' && !severalWarehouses && !canAdjust && (
+                  <span className="mt-1 block text-[11px] text-slate-500">Үлдэгдлийг тооллогын эрхтэй хүн өөрчилнө.</span>
                 )}
               </label>
               {modal === 'create' && severalWarehouses && (
@@ -743,10 +789,14 @@ export default function InventoryPage() {
                 Жин (кг)
                 <input
                   type="number"
+                  min={0.001}
+                  max={100000}
                   step="0.001"
+                  required
                   className="mt-1 w-full"
+                  placeholder="заавал"
                   value={form.weightKg}
-                  onChange={(e) => setForm({ ...form, weightKg: Number(e.target.value) })}
+                  onChange={(e) => setForm({ ...form, weightKg: e.target.value })}
                 />
               </label>
               {modal === 'edit' && (
@@ -756,9 +806,47 @@ export default function InventoryPage() {
                     checked={form.active}
                     onChange={(e) => setForm({ ...form, active: e.target.checked })}
                   />
-                  Идэвхтэй (POS-д харагдана)
+                  Идэвхтэй (ПОС-д харагдана)
                 </label>
               )}
+              <fieldset className="col-span-2 rounded border border-slate-700 p-2 text-xs text-slate-400">
+                <legend className="px-1">Хэмжээ (нэг нэгжийн)</legend>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {(
+                    [
+                      ['lengthM', 'Урт (м)'],
+                      ['widthM', 'Өргөн (м)'],
+                      ['heightM', 'Өндөр (м)'],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <label key={key}>
+                      {label}
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.01"
+                        className="mt-1 w-full"
+                        value={form[key]}
+                        onChange={(e) => setForm(withVolume({ ...form, [key]: e.target.value }))}
+                      />
+                    </label>
+                  ))}
+                  <label>
+                    Эзлэхүүн (м³)
+                    <input
+                      type="number"
+                      min={0}
+                      max={1000}
+                      step="0.000001"
+                      className="mt-1 w-full"
+                      value={form.volumeM3}
+                      onChange={(e) => setForm({ ...form, volumeM3: e.target.value })}
+                    />
+                  </label>
+                </div>
+                <p className="mt-1 text-[11px] text-slate-500">Урт, өргөн, өндрийг бөглөхөд эзлэхүүн автоматаар бодогдоно (засаж болно).</p>
+              </fieldset>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
@@ -883,7 +971,7 @@ export default function InventoryPage() {
           <div className="card w-full max-w-md space-y-3">
             <h3 className="font-semibold text-lg">Бараа идэвхгүй болгох</h3>
             <p className="text-sm text-slate-300">
-              <span className="font-semibold text-white">{deleting.nameMn}</span> ({deleting.sku})-г POS-оос хасах уу?
+              <span className="font-semibold text-white">{deleting.nameMn}</span> ({deleting.sku})-г ПОС-оос хасах уу?
               Өмнөх захиалгууд хэвээр үлдэнэ. Дараа нь «Засах»-аас дахин идэвхжүүлж болно.
             </p>
             <div className="flex justify-end gap-2 pt-2">

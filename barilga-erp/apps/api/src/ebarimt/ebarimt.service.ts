@@ -73,7 +73,7 @@ export class EbarimtService {
       throw new BadRequestException('E-Barimt can only be issued after the order is fully paid');
     }
     if (order.billType === BillType.COMPANY && !order.customerRegNumber) {
-      const msg = 'Company receipt requires customerRegNumber (РД)';
+      const msg = 'Байгууллагын баримтад РД оруулна уу / Company receipt requires customerRegNumber (РД)';
       await this.markFailed(order.id, msg, order.ebarimtAttempts);
       if (opts.quiet) return { ok: false as const, error: msg };
       throw new BadRequestException(msg);

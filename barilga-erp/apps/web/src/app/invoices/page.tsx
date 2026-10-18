@@ -67,7 +67,7 @@ export default function InvoicesPage() {
         <div>
           <h2 className="text-xl font-bold">Нэхэмжлэх</h2>
           <p className="text-sm text-slate-400">
-            Шинэ нэхэмжлэхийг ПОС дээр «Нэхэмжлэхээр» гэж, эсвэл захиалгын хуудаснаас үүсгэнэ.
+            Шинэ нэхэмжлэхийг ПОС дээр «Нэхэмжлэх гаргаж хэвлэх»-ийг сонгож, эсвэл захиалгын хуудаснаас үүсгэнэ.
           </p>
         </div>
         <input className="w-64" placeholder="Дугаар, харилцагч, имэйл…" value={q} onChange={(e) => setQ(e.target.value)} />
@@ -107,7 +107,7 @@ export default function InvoicesPage() {
               <th className="p-3">Дугаар</th>
               <th>Огноо</th>
               <th>Харилцагч</th>
-              <th>Хаана илгээсэн</th>
+              <th>Хаашаа илгээсэн</th>
               <th>Төлөх хугацаа</th>
               <th className="text-right">Дүн</th>
               <th className="text-right">Үлдэгдэл</th>

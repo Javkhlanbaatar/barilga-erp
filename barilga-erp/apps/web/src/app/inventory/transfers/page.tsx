@@ -218,7 +218,7 @@ export default function TransfersPage() {
     if (!toId || !fromId) return setFormError('Хаанаас, хаашаа гэдгийг сонгоно уу');
     if (items.length === 0) return setFormError('Дор хаяж нэг бараа нэмнэ үү');
     const bad = lines.find((l) => !(Number(l.quantity) > 0) || (mode === 'send' && l.available !== null && Number(l.quantity) > l.available));
-    if (bad) return setFormError(`${bad.sku}: тоо 0-ээс их${mode === 'send' ? `, үлдэгдэл (${qty(bad.available)})-ээс ихгүй` : ''} байх ёстой`);
+    if (bad) return setFormError(`${bad.sku}: тоо 0-ээс их${mode === 'send' ? `, үлдэгдлээс (${qty(bad.available)}) ихгүй` : ''} байх ёстой`);
     setSaving(true);
     try {
       const created = await api<StockTransfer>(mode === 'request' ? '/inventory/transfers/request' : '/inventory/transfers', {
@@ -754,7 +754,7 @@ export default function TransfersPage() {
                           {short && (
                             <input
                               className="mt-1 block w-full text-xs"
-                              placeholder="Дутуу шалтгаан (урагдсан, ирээгүй…)"
+                              placeholder="Дутуу ирсэн шалтгаан (урагдсан, ирээгүй…)"
                               value={l.reason}
                               onChange={(e) => setActLines(actLines.map((x, i) => (i === idx ? { ...x, reason: e.target.value } : x)))}
                             />

@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, 
 import { Role } from '@prisma/client';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { Roles } from '../auth/roles.decorator';
+import { Permission } from '../auth/permissions';
 import { RolesGuard } from '../auth/roles.guard';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { CreateReceiptDto, EditReceiptCostDto } from './dto/receipt.dto';
@@ -14,7 +14,8 @@ const RECEIPT_ROLES = [Role.ADMIN, Role.MANAGER, Role.ACHIGCH_BELTGEGCH] as cons
 @Controller('inventory/receipts')
 @UseGuards(JwtAuthGuard, RolesGuard, FeatureGuard)
 @RequireFeature('STOCK_RECEIPTS')
-@Roles(...RECEIPT_ROLES)
+// Reading: the receipt roles, or anyone given the right to take goods in.
+@Permission('RECEIPT_CREATE', ...RECEIPT_ROLES)
 export class ReceiptsController {
   constructor(private readonly receipts: ReceiptsService) {}
 
@@ -32,6 +33,7 @@ export class ReceiptsController {
 
   /** Put an existing receipt on a partner's account (or take it off). Managers only. */
   @Patch(':id/partner')
+  @Permission('RECEIPT_COST_EDIT')
   attachPartner(@Param('id') id: string, @Body() body: { supplierCustomerId?: string | null; reason?: string }, @CurrentUser() user: AuthUser) {
     const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
     if (reason.length < 3) throw new BadRequestException('reason is required');
@@ -44,12 +46,14 @@ export class ReceiptsController {
   }
 
   @Post()
+  @Permission('RECEIPT_CREATE')
   create(@Body() dto: CreateReceiptDto, @CurrentUser() user: AuthUser) {
     return this.receipts.create(dto, user);
   }
 
   /** Correct a purchase price later (managers/admin; logged for the admin edit report). */
   @Patch(':id/items/:itemId/cost')
+  @Permission('RECEIPT_COST_EDIT')
   editCost(
     @Param('id') id: string,
     @Param('itemId') itemId: string,

@@ -37,6 +37,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       fullName: user.fullName,
       warehouseId: user.warehouseId,
       warehouseIds: await this.warehouseIds(user.role, user.warehouseId, user.managedWarehouses.map((m) => m.warehouseId)),
+      // Read on every request, so a right given or taken by the admin applies at once.
+      permissions: (user.permissions ?? null) as { grant?: string[]; revoke?: string[] } | null,
     };
   }
 

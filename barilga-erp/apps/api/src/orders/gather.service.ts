@@ -144,7 +144,7 @@ export class GatherService {
             fromWarehouseId: t.from!.id,
             toWarehouseId: plan.dispatchWarehouse.id,
             items: t.items.map((i) => ({ productId: i.product.id, quantity: i.quantity })),
-            notes: `Gather for order ${plan.orderNumber}`,
+            notes: `${plan.orderNumber} захиалгад цуглуулах`,
           },
           user,
           { orderId },

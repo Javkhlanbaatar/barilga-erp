@@ -22,10 +22,10 @@ export class CustomersService {
     const value = reg?.trim().toUpperCase() || null;
     if (type === CustomerType.COMPANY) {
       if (!value || !COMPANY_REG.test(value)) {
-        throw new BadRequestException('A company needs a valid registration number (РД, 7–12 characters)');
+        throw new BadRequestException('Байгууллагын зөв РД оруулна уу (7–12 тэмдэгт) / A company needs a valid registration number (РД, 7–12 characters)');
       }
     } else if (value && !CITIZEN_REG.test(value)) {
-      throw new BadRequestException('Citizen register number must look like УБ12345678');
+      throw new BadRequestException('Иргэний РД УБ12345678 хэлбэртэй байх ёстой / Citizen register number must look like УБ12345678');
     }
     return value;
   }

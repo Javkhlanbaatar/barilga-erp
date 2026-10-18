@@ -2,6 +2,7 @@
 
 import { SellerBlock, Watermark } from '@/components/invoice-doc';
 import { tugrik } from '@/lib/api';
+import { categoryLabel, unitLabel } from '@/lib/catalog';
 import type { CompanySettings } from '@/lib/types';
 
 /** A price list as the customer sees it: no costs, grouped by category. */
@@ -16,10 +17,19 @@ export type PriceSheet = {
 const day = (iso: string) =>
   new Intl.DateTimeFormat('mn-MN', { timeZone: 'Asia/Ulaanbaatar', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
 
+/** Category heading in Mongolian ("Cement" → "Цемент"); a product without one goes under "Бусад". */
+const groupName = (category: string | null) => ((category ?? '').trim() ? categoryLabel(category) : 'Бусад');
+
+/** Items grouped under their Mongolian category, groups in Mongolian alphabetical order (items keep their order). */
+function byCategory(items: PriceSheet['items']) {
+  const groups = new Map<string, PriceSheet['items']>();
+  for (const i of items) groups.set(groupName(i.category), [...(groups.get(groupName(i.category)) ?? []), i]);
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b, 'mn'));
+}
+
 /** The printable / shareable price list document. `showRetail` adds the shelf price next to the list price. */
 export function PriceSheetDoc({ sheet, company, showRetail }: { sheet: PriceSheet; company: CompanySettings; showRetail: boolean }) {
-  const groups = new Map<string, PriceSheet['items']>();
-  for (const i of sheet.items) groups.set(i.category || 'Бусад', [...(groups.get(i.category || 'Бусад') ?? []), i]);
+  const groups = byCategory(sheet.items);
   const cols = showRetail ? 6 : 5;
   let n = 0;
   return (
@@ -47,7 +57,7 @@ export function PriceSheetDoc({ sheet, company, showRetail }: { sheet: PriceShee
           </tr>
         </thead>
         <tbody>
-          {[...groups.entries()].map(([cat, items]) => (
+          {groups.map(([cat, items]) => (
             <GroupRows key={cat} cat={cat} cols={cols}>
               {items.map((i) => {
                 n += 1;
@@ -56,7 +66,7 @@ export function PriceSheetDoc({ sheet, company, showRetail }: { sheet: PriceShee
                     <td>{n}</td>
                     <td className="font-mono">{i.sku}</td>
                     <td>{i.nameMn}</td>
-                    <td>{i.unit}</td>
+                    <td>{unitLabel(i.unit)}</td>
                     {showRetail && <td className="text-right">{i.listed && i.retailMnt !== i.priceMnt ? tugrik(i.retailMnt) : ''}</td>}
                     <td className="text-right font-semibold">{tugrik(i.priceMnt)}</td>
                   </tr>
@@ -88,7 +98,10 @@ function GroupRows({ cat, cols, children }: { cat: string; cols: number; childre
 /** Excel-friendly CSV (UTF-8 with BOM so Cyrillic opens correctly). */
 export function downloadSheetCsv(sheet: PriceSheet, showRetail: boolean) {
   const head = ['Ангилал', 'Код', 'Барааны нэр', 'Нэгж', ...(showRetail ? ['Жижиглэн үнэ'] : []), 'Үнэ'];
-  const rows = sheet.items.map((i) => [i.category, i.sku, i.nameMn, i.unit, ...(showRetail ? [i.retailMnt] : []), i.priceMnt]);
+  // Same order and Mongolian names as the printed sheet.
+  const rows = byCategory(sheet.items).flatMap(([cat, items]) =>
+    items.map((i) => [cat, i.sku, i.nameMn, unitLabel(i.unit), ...(showRetail ? [i.retailMnt] : []), i.priceMnt]),
+  );
   const csv = [head, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
   const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
   const a = document.createElement('a');

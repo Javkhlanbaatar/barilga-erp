@@ -150,7 +150,7 @@ export default function AdminPage() {
         )}
         {delivery && (
         <section className="card">
-          <h3 className="font-semibold mb-3">Машины хязгаар (Porter 1.5т · Dump 5т · Manipulator 10т)</h3>
+          <h3 className="font-semibold mb-3">Машины хязгаар (Портер 1.5т · Өөрөө буулгагч 5т · Манипулятор 10т)</h3>
           {vehicles.map((v, idx) => (
             <div key={v.id} className="grid grid-cols-5 gap-2 items-center mb-2 text-sm">
               <p>{v.nameMn}</p>

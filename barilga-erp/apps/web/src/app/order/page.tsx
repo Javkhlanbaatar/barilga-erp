@@ -74,7 +74,7 @@ export default function PublicOrderPage() {
         setZones(data.zones);
         if (data.zones[0]) setZoneId(data.zones[0].id);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Catalog failed'));
+      .catch((err) => setError(err instanceof Error ? err.message : 'Бараа ачаалж чадсангүй'));
   }, []);
 
   useEffect(() => {
@@ -94,7 +94,7 @@ export default function PublicOrderPage() {
         }),
       })
         .then(setQuote)
-        .catch((err) => setError(err instanceof Error ? err.message : 'Quote failed'));
+        .catch((err) => setError(err instanceof Error ? err.message : 'Үнэ тооцоолж чадсангүй'));
     }, 250);
     return () => clearTimeout(t);
   }, [items, zoneId, deliveryType, time, isUnloading, ourDelivery]);
@@ -134,7 +134,7 @@ export default function PublicOrderPage() {
       });
       router.push(`/track/${order.trackingToken}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Create failed');
+      setError(err instanceof Error ? err.message : 'Захиалга үүсгэж чадсангүй');
     } finally {
       setBusy(false);
     }
@@ -153,10 +153,10 @@ export default function PublicOrderPage() {
         <div>
           <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Barilga</p>
           <h1 className="text-2xl font-bold">Цахим захиалга</h1>
-          <p className="text-slate-400 text-sm">Хүргэлтийн машины дугаар, жолоочийн утсыг энд эсвэл дараа нь tracking холбоосоор оруулна.</p>
+          <p className="text-slate-400 text-sm">Хүргэлтийн машины дугаар, жолоочийн утсыг энд эсвэл дараа нь хяналтын холбоосоор оруулна.</p>
         </div>
         <Link href="/login" className="btn-ghost text-sm">
-          Ажилтны нэвтрэх
+          Ажилтан нэвтрэх
         </Link>
       </header>
       {error && <p className="text-red-400 mb-3">{error}</p>}
@@ -237,7 +237,7 @@ export default function PublicOrderPage() {
                 Жолоочийн утас (заавал биш)
                 <input className="mt-1 w-full" value={driverPhone} onChange={(e) => setDriverPhone(e.target.value)} placeholder="99112233" />
               </label>
-              <p className="text-xs text-slate-500">Хожим tracking холбоосоор нэмж болно.</p>
+              <p className="text-xs text-slate-500">Хожим хяналтын холбоосоор нэмж болно.</p>
             </>
           )}
           <label className="block text-sm">
@@ -250,7 +250,7 @@ export default function PublicOrderPage() {
           </label>
           {b && (
             <div className="text-sm space-y-1">
-              <p>Хэмжээ: {VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</p>
+              <p>Машин: {VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</p>
               <p>Нийт: <span className="font-bold text-amber-brand">{tugrik(b.totalMnt)}</span></p>
             </div>
           )}

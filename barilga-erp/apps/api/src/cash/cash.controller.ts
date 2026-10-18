@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { OVERSIGHT_ROLES, POS_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Permission } from '../auth/permissions';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { CashService } from './cash.service';
 
@@ -67,7 +68,7 @@ export class CashController {
   }
 
   @Post('movements')
-  @Roles(...POS_ROLES)
+  @Permission('CASH_MOVEMENT')
   move(@Body() dto: CashMoveDto, @CurrentUser() user: AuthUser) {
     return this.cash.move(dto.kind, dto.amountMnt, dto.reason, user);
   }

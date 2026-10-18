@@ -3,6 +3,7 @@ import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Permission } from '../auth/permissions';
 import { OVERSIGHT_ROLES, POS_ROLES } from '../auth/rbac';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { CreateInvoiceDto, MarkInvoiceSentDto } from './dto/invoice.dto';
@@ -48,7 +49,7 @@ export class InvoicesController {
   }
 
   @Post(':id/cancel')
-  @Roles(...OVERSIGHT_ROLES)
+  @Permission('INVOICE_CANCEL')
   cancel(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.invoices.cancel(id, user);
   }

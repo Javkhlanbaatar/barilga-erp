@@ -85,7 +85,7 @@ export function Receipt({ order, company, t }: DocProps) {
           [
             ['Хүргэлт', order.deliveryFeeMnt],
             ['Буулгалт', order.unloadingFeeMnt],
-            ['Цагийн нөхцөл', order.timeAdjustmentMnt],
+            ['Цагийн нэмэгдэл/хөнгөлөлт', order.timeAdjustmentMnt],
           ] as Array<[string, number]>
         )
           .filter(([, v]) => v !== 0)

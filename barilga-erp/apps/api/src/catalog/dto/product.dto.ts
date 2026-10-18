@@ -41,7 +41,10 @@ export class CompanionDto {
 }
 
 export class CreateProductDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(1)
+  @MaxLength(64)
   sku!: string;
 
   /** Manufacturer barcode; empty = an in-store EAN-13 is assigned. */
@@ -51,22 +54,49 @@ export class CreateProductDto {
   @Matches(/^[0-9A-Za-z-]{4,32}$/, { message: 'Баркод 4–32 тэмдэгт (тоо, латин үсэг) / Barcode must be 4–32 letters or digits' })
   barcode?: string | null;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(2)
+  @MaxLength(160)
   nameMn!: string;
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MaxLength(160)
   nameEn!: string;
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(1)
+  @MaxLength(16)
   unit!: string;
   @IsInt()
   @Min(0)
   priceMnt!: number;
-  @IsNumber()
+  /** Every product is registered with its weight (delivery vehicle and unloading fee depend on it). */
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: 'Жинг кг-аар, 3 хүртэлх бутархай оронтой оруулна уу / weightKg: a number with at most 3 decimals' })
+  @Min(0.001, { message: 'Жинг кг-аар оруулна уу (0-ээс их) / weightKg must be greater than 0' })
+  @Max(100_000)
   weightKg!: number;
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
   lengthM!: number;
-  @IsNumber()
+  /** Package width / height (m), optional; with the length they give the volume. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  widthM?: number | null;
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  heightM?: number | null;
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0)
+  @Max(1000)
   volumeM3!: number;
   @IsNumber()
+  @Min(0)
   stockQty!: number;
   /** Warehouse that receives the starting quantity (defaults to the user's, then the default warehouse). */
   @IsOptional()
@@ -84,9 +114,12 @@ export class CreateProductDto {
   @Transform(({ value }) => emptyToNull(typeof value === 'string' ? value.trim() : value))
   @IsString()
   description?: string | null;
-  @IsOptional()
-  @IsString()
-  category?: string;
+  /** Required: products are always filed under a category (price sheets and reports group by it). */
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString({ message: 'Ангиллаа сонгоно уу / category is required' })
+  @MinLength(1, { message: 'Ангиллаа сонгоно уу / category is required' })
+  @MaxLength(60)
+  category!: string;
   @IsOptional()
   @IsBoolean()
   active?: boolean;
@@ -126,13 +159,29 @@ export class UpdateProductDto {
   @Min(0)
   priceMnt?: number;
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: 'Жинг кг-аар, 3 хүртэлх бутархай оронтой оруулна уу / weightKg: a number with at most 3 decimals' })
+  @Min(0.001, { message: 'Жинг кг-аар оруулна уу (0-ээс их) / weightKg must be greater than 0' })
+  @Max(100_000)
   weightKg?: number;
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
   lengthM?: number;
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  widthM?: number | null;
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  heightM?: number | null;
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0)
+  @Max(1000)
   volumeM3?: number;
   @IsOptional()
   @IsNumber()
@@ -150,7 +199,10 @@ export class UpdateProductDto {
   @IsString()
   description?: string | null;
   @IsOptional()
-  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString({ message: 'Ангиллаа сонгоно уу / category is required' })
+  @MinLength(1, { message: 'Ангиллаа сонгоно уу / category is required' })
+  @MaxLength(60)
   category?: string;
   @IsOptional()
   @IsBoolean()

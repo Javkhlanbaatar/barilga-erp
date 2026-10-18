@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, tugrik } from '@/lib/api';
+import { useCan } from '@/lib/permissions';
 
 export type CashSummary = {
   openingFloatMnt: number;
@@ -46,6 +47,8 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [closed, setClosed] = useState<CashSession | null>(null);
+  // Taking money out of / putting money into the drawer is a right the admin can take away per person.
+  const can = useCan();
 
   const load = useCallback(async () => {
     try {
@@ -104,9 +107,11 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
             Касс нээлттэй ({time(s.openedAt)}-с) · кассанд байх ёстой <b className="text-emerald-300">{tugrik(sum!.expectedCashMnt)}</b>
           </span>
           <span className="flex gap-2">
-            <button className="btn-ghost text-xs" onClick={() => openModal('move')}>
-              Мөнгө гаргах / нэмэх
-            </button>
+            {can('CASH_MOVEMENT') && (
+              <button className="btn-ghost text-xs" onClick={() => openModal('move')}>
+                Мөнгө гаргах / нэмэх
+              </button>
+            )}
             <button className="btn-primary text-xs" onClick={() => openModal('close')}>
               Касс хаах
             </button>

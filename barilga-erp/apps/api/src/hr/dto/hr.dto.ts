@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { IsBoolean, IsDateString, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator';
 
 export class StaffPunchDto {
   @IsString()
@@ -41,12 +41,46 @@ export class PayrollSettingsDto {
 }
 
 export class BaseSalaryDto {
-  /** null = back to the role default. */
-  @IsOptional()
+  /** null = no own salary from that month (role default with the formula on). Required: an empty body must not wipe a salary. */
+  @ValidateIf((o: BaseSalaryDto) => o.baseSalaryMnt !== null)
   @IsInt()
   @Min(0)
   @Max(100_000_000)
   baseSalaryMnt!: number | null;
+
+  /** First month (YYYY-MM) it applies to; default this month. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d{4}-\d{2}$/, { message: 'periodMonth must be YYYY-MM' })
+  fromMonth?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  reason?: string;
+}
+
+export class AttendanceFixDto {
+  @IsOptional()
+  @IsDateString()
+  checkIn?: string;
+
+  /** null = still at work (re-opens the record). */
+  @ValidateIf((o: AttendanceFixDto) => o.checkOut !== null && o.checkOut !== undefined)
+  @IsDateString()
+  checkOut?: string | null;
+
+  @IsString()
+  @MinLength(3)
+  @MaxLength(200)
+  reason!: string;
+}
+
+export class AttendanceSettingsDto {
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'time must be HH:MM' }) shiftStart?: string;
+  @IsOptional() @IsInt() @Min(0) @Max(180) graceMinutes?: number;
+  @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'time must be HH:MM' }) shiftEnd?: string;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(1) @Max(24) overtimeAfterHours?: number;
 }
 
 export class PayrollAdjustmentDto {

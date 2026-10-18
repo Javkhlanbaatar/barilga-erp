@@ -49,7 +49,7 @@ export default function AdminFeaturesPage() {
 
   async function toggle(row: FeatureSwitch) {
     const next = !row.enabled;
-    if (!next && !window.confirm(`«${row.nameMn}»-г унтраах уу? Бүх ажилтанд энэ модуль хаагдана (өгөгдөл устахгүй).`)) return;
+    if (!next && !window.confirm(`«${row.nameMn}» модулийг унтраах уу? Бүх ажилтанд энэ модуль хаагдана (өгөгдөл устахгүй).`)) return;
     setBusy(row.key);
     try {
       await api(`/features/${row.key}`, { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
@@ -66,7 +66,7 @@ export default function AdminFeaturesPage() {
   return (
     <Shell>
       <div className="mb-4">
-        <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Admin</p>
+        <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Админ</p>
         <h2 className="text-xl font-bold">Модулиуд</h2>
         <p className="text-slate-400 text-sm mt-1">
           Унтраасан модулийг сервер өөрөө хаана (зөвхөн цэснээс нуухгүй). Өгөгдөл хэвээр үлдэнэ; дахин асаахад бүгд буцаж гарна.

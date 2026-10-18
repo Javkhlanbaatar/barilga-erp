@@ -6,10 +6,25 @@ import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { AuthUser, PayrollReport, PayrollRow, PayrollSettings, ROLE_LABEL, Role } from '@/lib/types';
 import { OVERSIGHT_ROLES, TOP_ROLES, hasRole, homeForRole } from '@/lib/rbac';
+import { useCan } from '@/lib/permissions';
 
 const PAYROLL_STATUS_LABEL: Record<string, string> = { DRAFT: 'Ноорог', PAID: 'Олгосон' };
 const ROLES: Role[] = ['ADMIN', 'SUPER_MANAGER', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'];
 const thisMonth = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date()).slice(0, 7);
+const nextMonth = (ym: string) => {
+  const [y, m] = ym.split('-').map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+};
+
+/** One line of GET /hr/payroll/salary/:userId — a base salary in force from `fromMonth` on. */
+type SalaryRate = {
+  id: string;
+  fromMonth: string;
+  baseSalaryMnt: number | null;
+  reason: string | null;
+  createdAt: string;
+  createdBy: { fullName: string } | null;
+};
 
 /**
  * Monthly payroll. By default it is entered by hand: each person's base salary plus the bonuses and
@@ -25,8 +40,14 @@ export default function PayrollPage() {
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
+  const [salaryFor, setSalaryFor] = useState<PayrollRow | null>(null);
+  const canDo = useCan();
   const isAdmin = user?.role === 'ADMIN';
   const canPay = hasRole(user?.role, TOP_ROLES);
+  const maySalary = canPay && canDo('SALARY_SET');
+  const mayAdjust = canDo('PAYROLL_ADJUST');
+  // Same rules as the API: nobody sets their own salary, and only the admin sets an admin's or the general manager's.
+  const maySetSalary = (r: PayrollRow) => maySalary && (isAdmin || (r.user.id !== user?.id && !TOP_ROLES.includes(r.user.role)));
 
   const load = useCallback(async (month: string) => {
     setLoading(true);
@@ -67,15 +88,6 @@ export default function PayrollPage() {
   const markPaid = (r: PayrollRow) =>
     window.confirm(`${r.user.fullName}: гарт олгох ${tugrik(r.netSalary)}-ийг олгосон гэж бүртгэх үү? Дараа нь өөрчлөгдөхгүй.`) &&
     void run(() => api(`/hr/payroll/${r.id}/pay`, { method: 'PATCH', body: '{}' }));
-
-  function setSalary(r: PayrollRow) {
-    const hint = report?.formula ? 'Хоосон = албан тушаалын анхдагч' : 'Хоосон = цалингүй (0)';
-    const raw = window.prompt(`${r.user.fullName}-ийн сарын үндсэн цалин (₮). ${hint}:`, r.customBase ? String(r.baseSalary) : '');
-    if (raw === null) return;
-    const value = raw.trim() === '' ? null : Math.round(Number(raw.replace(/[\s,]/g, '')));
-    if (value !== null && !(value >= 0)) return setError('Цалин буруу байна');
-    void run(() => api(`/hr/payroll/salary/${r.user.id}`, { method: 'PUT', body: JSON.stringify({ baseSalaryMnt: value }) }));
-  }
 
   function downloadCsv() {
     if (!report) return;
@@ -174,10 +186,14 @@ export default function PayrollPage() {
                 formula={formula}
                 cols={cols}
                 canPay={canPay}
+                mayPay={maySalary}
+                mayAdjust={mayAdjust}
+                maySalary={maySetSalary(r)}
                 isMe={r.user.id === user.id}
+                isAdmin={isAdmin}
                 open={open === r.id}
                 onToggle={() => setOpen(open === r.id ? null : r.id)}
-                onSalary={() => setSalary(r)}
+                onSalary={() => setSalaryFor(r)}
                 onPaid={() => markPaid(r)}
                 onAdd={(amountMnt, reason) =>
                   run(() => api('/hr/payroll/adjustments', { method: 'POST', body: JSON.stringify({ userId: r.user.id, periodMonth: period, amountMnt, reason }) }))
@@ -191,9 +207,21 @@ export default function PayrollPage() {
         {loading && <p className="p-3 text-sm text-slate-500">Уншиж байна…</p>}
       </div>
       <p className="mt-2 text-[11px] text-slate-500">
-        Мөр дээр дарж урамшуулал, суутгал нэмнэ. Үндсэн цалинг админ эсвэл ерөнхий менежер тохируулж, «Олгосон» гэж бүртгэнэ; олгосон сар
-        өөрчлөгдөхгүй. Автомат томьёо (захиалга тутмын урамшуулал, %, НДШ, ХХОАТ) хэрэгтэй бол «Модулиуд» хэсгээс асаана.
+        Мөр дээр дарж урамшуулал, суутгал нэмнэ. Үндсэн цалинг аль сараас мөрдөхийг сонгож тогтооно — өмнөх сарууд хэвээр үлдэнэ. «Олгосон»
+        гэж бүртгэсэн сар өөрчлөгдөхгүй. Автомат томьёо (захиалга тутмын урамшуулал, %, НДШ, ХХОАТ) хэрэгтэй бол «Модулиуд» хэсгээс асаана.
       </p>
+      {salaryFor && (
+        <SalaryModal
+          r={salaryFor}
+          period={period}
+          formula={formula}
+          onClose={() => setSalaryFor(null)}
+          onSaved={() => {
+            setSalaryFor(null);
+            void load(period);
+          }}
+        />
+      )}
     </Shell>
   );
 }
@@ -211,8 +239,17 @@ function FragmentRow(props: {
   r: PayrollRow;
   formula: boolean;
   cols: number;
+  /** Admin or general manager (may write bonuses/deductions on their own pay). */
   canPay: boolean;
+  /** May mark a month paid (top role + SALARY_SET). */
+  mayPay: boolean;
+  /** PAYROLL_ADJUST: bonuses and deductions. */
+  mayAdjust: boolean;
+  /** May set this person's base salary. */
+  maySalary: boolean;
   isMe: boolean;
+  /** Only the admin writes bonuses/deductions on their own row. */
+  isAdmin: boolean;
   open: boolean;
   period: string;
   onToggle: () => void;
@@ -223,7 +260,7 @@ function FragmentRow(props: {
 }) {
   const { r, formula, canPay, open } = props;
   const paid = r.status === 'PAID';
-  const canAdjust = !paid && (!props.isMe || canPay);
+  const canAdjust = props.mayAdjust && !paid && (!props.isMe || props.isAdmin);
   const [kind, setKind] = useState<'bonus' | 'deduction'>('bonus');
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
@@ -261,7 +298,7 @@ function FragmentRow(props: {
             </td>
             <td className="text-right whitespace-nowrap">
               {tugrik(r.salesBonus)}
-              {r.salesAmountMnt > 0 && <p className="text-[11px] text-slate-500">{tugrik(r.salesAmountMnt)}-аас</p>}
+              {r.salesAmountMnt > 0 && <p className="text-[11px] text-slate-500">{tugrik(r.salesAmountMnt)}-өөс</p>}
             </td>
           </>
         )}
@@ -311,21 +348,21 @@ function FragmentRow(props: {
                     <button className="btn-ghost text-xs">Нэмэх</button>
                   </form>
                 )}
-                {props.isMe && !canPay && !paid && <p className="text-slate-500">Өөрийн цалинд урамшуулал/суутгал бичихгүй.</p>}
+                {props.mayAdjust && props.isMe && !props.isAdmin && !paid && <p className="text-slate-500">Өөрийн цалинд урамшуулал/суутгал бичихгүй.</p>}
               </div>
               <div className="flex flex-wrap gap-2">
                 <a className="btn-ghost text-xs" href={`/print/payslip?period=${props.period}&user=${r.user.id}`} target="_blank" rel="noreferrer">
                   Цалингийн хуудас
                 </a>
-                {canPay && !paid && (
-                  <>
-                    <button className="btn-ghost text-xs" onClick={props.onSalary}>
-                      Үндсэн цалин оруулах
-                    </button>
-                    <button className="btn-primary text-xs" onClick={props.onPaid}>
-                      Олгосон
-                    </button>
-                  </>
+                {props.maySalary && (
+                  <button className="btn-ghost text-xs" onClick={props.onSalary}>
+                    Үндсэн цалин оруулах
+                  </button>
+                )}
+                {props.mayPay && !paid && (
+                  <button className="btn-primary text-xs" onClick={props.onPaid}>
+                    Олгосон
+                  </button>
                 )}
               </div>
             </div>
@@ -333,6 +370,125 @@ function FragmentRow(props: {
         </tr>
       )}
     </>
+  );
+}
+
+/**
+ * Base salary from a chosen month on (earlier months keep theirs), with the person's salary history.
+ * For a month already paid it starts at the next month — the API refuses a paid month.
+ */
+function SalaryModal(props: { r: PayrollRow; period: string; formula: boolean; onClose: () => void; onSaved: () => void }) {
+  const { r } = props;
+  const none = props.formula ? 'анхдагч' : 'цалингүй';
+  const [amount, setAmount] = useState(r.customBase ? String(r.baseSalary) : '');
+  const [fromMonth, setFromMonth] = useState(r.status === 'PAID' ? nextMonth(props.period) : props.period);
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [history, setHistory] = useState<SalaryRate[] | null>(null);
+  const [historyError, setHistoryError] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    api<SalaryRate[]>(`/hr/payroll/salary/${r.user.id}`)
+      .then((rows) => alive && setHistory(rows))
+      .catch((err) => alive && setHistoryError(err instanceof Error ? err.message : 'Түүх ачаалж чадсангүй'));
+    return () => {
+      alive = false;
+    };
+  }, [r.user.id]);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setError('');
+    const raw = amount.trim();
+    const value = raw === '' ? null : Math.round(Number(raw.replace(/[\s,]/g, '')));
+    if (value !== null && !(value >= 0 && value <= 100_000_000)) return setError('Цалин буруу байна');
+    if (!/^\d{4}-\d{2}$/.test(fromMonth)) return setError('Хэдэн сараас мөрдөхийг сонгоно уу');
+    setSaving(true);
+    try {
+      await api(`/hr/payroll/salary/${r.user.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ baseSalaryMnt: value, fromMonth, reason: reason.trim() || undefined }),
+      });
+      props.onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+      <form onSubmit={save} className="card max-h-[90vh] w-full max-w-md space-y-3 overflow-auto">
+        <div>
+          <h3 className="text-lg font-semibold">Үндсэн цалин</h3>
+          <p className="text-xs text-slate-400">
+            {r.user.fullName} · {ROLE_LABEL[r.user.role]}
+          </p>
+        </div>
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <label className="block text-xs text-slate-400">
+          Сарын үндсэн цалин ₮
+          <input
+            className="mt-1 w-full"
+            inputMode="numeric"
+            autoFocus
+            placeholder={`Хоосон = ${props.formula ? 'албан тушаалын анхдагч' : 'цалингүй'}`}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+          />
+        </label>
+        <label className="block text-xs text-slate-400">
+          Хэдэн сараас
+          <input type="month" className="mt-1 w-full" required value={fromMonth} onChange={(e) => setFromMonth(e.target.value)} />
+          <span className="mt-1 block text-[11px] text-slate-500">Энэ сараас хойш мөрдөнө; өмнөх сарууд хэвээр. Олгосон сараас эхлүүлэхгүй.</span>
+        </label>
+        <label className="block text-xs text-slate-400">
+          Шалтгаан (заавал биш)
+          <input
+            className="mt-1 w-full"
+            maxLength={200}
+            placeholder="Албан тушаал ахисан, гэрээ шинэчилсэн…"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </label>
+        <div className="border-t border-slate-800 pt-2">
+          <p className="text-xs font-semibold text-slate-300">Цалингийн түүх</p>
+          {history === null && !historyError && <p className="mt-1 text-xs text-slate-500">Уншиж байна…</p>}
+          {historyError && <p className="mt-1 text-xs text-red-400">{historyError}</p>}
+          {history?.length === 0 && <p className="mt-1 text-xs text-slate-500">Түүх алга.</p>}
+          {history && history.length > 0 && (
+            <ul className="mt-1 max-h-48 divide-y divide-slate-800 overflow-auto text-xs">
+              {history.map((h) => (
+                <li key={h.id} className="py-1.5">
+                  <div className="flex justify-between gap-2">
+                    <span className="font-mono text-slate-300">{h.fromMonth} сараас</span>
+                    <span className={h.baseSalaryMnt === null ? 'text-slate-500' : 'font-semibold'}>
+                      {h.baseSalaryMnt === null ? none : tugrik(h.baseSalaryMnt)}
+                    </span>
+                  </div>
+                  <p className="text-slate-500">
+                    {h.reason ? `${h.reason} · ` : ''}
+                    {h.createdBy?.fullName ?? 'өмнө тогтоосон'}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" className="btn-ghost" onClick={props.onClose}>
+            Болих
+          </button>
+          <button className="btn-primary" disabled={saving}>
+            {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 

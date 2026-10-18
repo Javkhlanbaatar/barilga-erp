@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { randomBytes } from 'crypto';
+import { effectivePermissions, PermissionOverrides } from './permissions';
 import { PrismaService } from '../prisma/prisma.service';
 import { LoginDto } from './dto/login.dto';
 
@@ -60,6 +61,8 @@ export class AuthService {
         role: user.role,
         isActive: user.isActive,
         warehouseId: user.warehouseId,
+        // Rights in force now (role + what the admin changed for this person), for showing the right buttons.
+        can: effectivePermissions({ role: user.role, permissions: user.permissions as PermissionOverrides }),
       },
     };
   }

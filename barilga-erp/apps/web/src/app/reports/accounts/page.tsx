@@ -122,7 +122,7 @@ export default function AccountsReportPage() {
                     <td className="text-right text-amber-300">{p.receivableMnt ? tugrik(p.receivableMnt) : '—'}</td>
                     <td className="text-right text-sky-300">{p.payableMnt ? tugrik(p.payableMnt) : '—'}</td>
                     <td className={`text-right pr-3 font-semibold ${p.netMnt > 0 ? 'text-amber-300' : p.netMnt < 0 ? 'text-sky-300' : ''}`}>
-                      {p.netMnt > 0 ? `${tugrik(p.netMnt)} бидэнд` : p.netMnt < 0 ? `${tugrik(-p.netMnt)} бид` : '0₮'}
+                      {p.netMnt > 0 ? `${tugrik(p.netMnt)} бидэнд` : p.netMnt < 0 ? `${tugrik(-p.netMnt)} тэдэнд` : '0₮'}
                     </td>
                   </tr>
                 ))}

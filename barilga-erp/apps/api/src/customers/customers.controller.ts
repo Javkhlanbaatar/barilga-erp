@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { POS_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Permission } from '../auth/permissions';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { AccountsService } from './accounts.service';
 import { CustomersService } from './customers.service';
@@ -35,7 +36,7 @@ export class CustomersController {
 
   /** The customer pays off their debt; the money goes to the oldest open orders first. */
   @Post(':id/pay-debt')
-  @Roles(...POS_ROLES)
+  @Permission('PAY_DEBT')
   @RequireFeature('CREDIT_SALES')
   payDebt(@Param('id') id: string, @Body() dto: PayDebtDto, @CurrentUser() user: AuthUser) {
     return this.accounts.payDebt(id, dto.method, dto.amountMnt, user);

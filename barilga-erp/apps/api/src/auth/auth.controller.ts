@@ -4,6 +4,8 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { CurrentUser } from './current-user.decorator';
 import { LoginDto } from './dto/login.dto';
+import { AuthUser } from './current-user.decorator';
+import { effectivePermissions, PERMISSION_KEYS, PERMISSIONS } from './permissions';
 
 @Controller('auth')
 export class AuthController {
@@ -22,7 +24,15 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  me(@CurrentUser() user: { id: string; email: string; role: string; name: string }) {
-    return user;
+  me(@CurrentUser() user: AuthUser) {
+    const { permissions: _overrides, ...rest } = user;
+    return { ...rest, can: effectivePermissions(user) };
+  }
+
+  /** The list of rights the admin can give or take, with each role's default. */
+  @Get('permissions')
+  @UseGuards(JwtAuthGuard)
+  permissions() {
+    return PERMISSION_KEYS.map((key) => ({ key, ...PERMISSIONS[key] }));
   }
 }

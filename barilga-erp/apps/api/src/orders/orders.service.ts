@@ -121,7 +121,7 @@ export class OrdersService {
         sourceType,
         supplierName:
           sourceType === SourceType.EXTERNAL_SUPPLIER
-            ? line.supplierName?.trim() || 'Other store'
+            ? line.supplierName?.trim() || 'Өөр дэлгүүр'
             : null,
       };
     });
@@ -131,7 +131,7 @@ export class OrdersService {
         subtotalMnt,
         weightKg: Number(weightKg.toFixed(3)),
         maxLengthM: Number(maxLengthM.toFixed(2)),
-        volumeM3: Number(volumeM3.toFixed(3)),
+        volumeM3: Number(volumeM3.toFixed(6)),
       },
     };
   }
@@ -292,7 +292,7 @@ export class OrdersService {
     const customerRegNumber = dto.customerRegNumber?.trim() || null;
     if (billType === BillType.COMPANY) {
       if (!customerRegNumber || !/^[0-9A-Za-z]{7,12}$/.test(customerRegNumber)) {
-        throw new BadRequestException('Company E-Barimt requires a valid registration number (РД, 7–12 characters)');
+        throw new BadRequestException('Байгууллагын И-баримтад зөв РД оруулна уу (7–12 тэмдэгт) / Company E-Barimt requires a valid registration number (РД, 7–12 characters)');
       }
     }
 
@@ -674,7 +674,7 @@ export class OrdersService {
               warehouseId: withItems.warehouseId,
               refType: 'ORDER',
               refId: orderId,
-              reason: `Order ${withItems.orderNumber} completed`,
+              reason: `Захиалга ${withItems.orderNumber} олгосон`,
               actorId: user.id,
             });
             // A manager may already have assigned a supplier before completion (assignSupplier creates
@@ -1011,7 +1011,7 @@ export class OrdersService {
                 warehouseId: item.order.warehouseId,
                 refType: 'ORDER',
                 refId: orderId,
-                reason: `Supplier "${supplierName}" delivered ${item.order.orderNumber}`,
+                reason: `«${supplierName}» нийлүүлсэн — ${item.order.orderNumber}`,
                 actorId: user.id,
               });
               stockBefore = moved.before;

@@ -4,6 +4,7 @@ import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Permission } from '../auth/permissions';
 import { REPORT_ROLES } from '../auth/rbac';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { DailyQueryDto } from './dto/daily-query.dto';
@@ -28,7 +29,7 @@ export class ReportsController {
   ) {}
 
   @Get('daily')
-  @Roles(...REPORT_ROLES)
+  @Permission('REPORT_SALES')
   daily(@Query() query: DailyQueryDto, @CurrentUser() user: AuthUser) {
     return this.reports.daily(query, user);
   }

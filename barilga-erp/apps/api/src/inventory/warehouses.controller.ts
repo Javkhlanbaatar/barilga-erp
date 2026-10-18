@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CATALOG_READ_ROLES, OVERSIGHT_ROLES } from '../auth/rbac';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { Permission } from '../auth/permissions';
 import { AdjustStockDto, CreateWarehouseDto, UpdateWarehouseDto } from './dto/warehouse.dto';
 import { InventoryService } from './inventory.service';
 import { allowedWarehouseIds, assertWarehouseAccess } from './warehouse-scope';
@@ -39,7 +40,7 @@ export class WarehousesController {
 
   /** Manual stock correction (counted quantity or +/- delta) with a mandatory reason, written to the ledger. */
   @Post('adjust')
-  @Roles(...OVERSIGHT_ROLES)
+  @Permission('STOCK_ADJUST')
   adjust(@Body() dto: AdjustStockDto, @CurrentUser() user: AuthUser) {
     // A branch manager corrects stock in their own warehouses only.
     assertWarehouseAccess(user, dto.warehouseId);

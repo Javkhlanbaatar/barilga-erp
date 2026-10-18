@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation';
 import { CustomerPicker } from '@/components/customer-picker';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
+import { CATEGORIES, UNITS, categoryKey, categoryLabel, unitLabel, withVolume } from '@/lib/catalog';
 import { useFeatures } from '@/lib/features';
-import { hasRole, homeForRole, OVERSIGHT_ROLES, TOP_ROLES } from '@/lib/rbac';
+import { can, useCan } from '@/lib/permissions';
+import { hasRole, homeForRole, OVERSIGHT_ROLES } from '@/lib/rbac';
 import { AuthUser, Customer, Product, Role, StockReceipt, Warehouse } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
@@ -23,9 +25,40 @@ type Line = {
   stockQty: number;
 };
 
+/** May open the page (read receipts); taking goods in also needs the RECEIPT_CREATE right. Same rule as the API. */
 const RECEIPT_ROLES: Role[] = ['ADMIN', 'MANAGER', 'ACHIGCH_BELTGEGCH'];
 const qty = (v: string | number) => Number(v).toLocaleString('mn-MN', { maximumFractionDigits: 3 });
 const ymd = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(d);
+
+/** A product registered on the spot from an unknown code; sizes stay text so empty boxes stay empty. */
+type NewProduct = {
+  nameMn: string;
+  sku: string;
+  category: string;
+  unit: string;
+  priceMnt: string;
+  weightKg: string;
+  lengthM: string;
+  widthM: string;
+  heightM: string;
+  volumeM3: string;
+};
+
+const isBarcodeLike = (code: string) => /^[0-9]{8,14}$/.test(code);
+
+/** The form for an unknown code: a barcode becomes P-<last 8 digits> as SKU, anything else is used as typed. */
+const newProductFor = (code: string): NewProduct => ({
+  nameMn: '',
+  sku: isBarcodeLike(code) ? `P-${code.slice(-8)}` : code,
+  category: '',
+  unit: 'ш',
+  priceMnt: '',
+  weightKg: '',
+  lengthM: '',
+  widthM: '',
+  heightM: '',
+  volumeM3: '',
+});
 
 /**
  * Бараа орлого: goods arriving from a supplier. Scan or search each product (scanning the same one again
@@ -52,7 +85,8 @@ export default function ReceiptsPage() {
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [unknown, setUnknown] = useState<string | null>(null);
-  const [newProduct, setNewProduct] = useState({ nameMn: '', unit: 'ш', priceMnt: '', sku: '' });
+  const [newProduct, setNewProduct] = useState<NewProduct>(() => newProductFor(''));
+  const [creatingProduct, setCreatingProduct] = useState(false);
   const [filterFrom, setFilterFrom] = useState(() => ymd(new Date(Date.now() - 29 * 86_400_000)));
   /** Putting an existing receipt on a partner's account (or taking it off). */
   const [attach, setAttach] = useState<{ receipt: StockReceipt; partner: Customer | null; reason: string; busy: boolean } | null>(null);
@@ -60,7 +94,11 @@ export default function ReceiptsPage() {
 
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
   const features = useFeatures();
-  const canAddProduct = hasRole(me?.role, TOP_ROLES);
+  const canDo = useCan();
+  const canAddProduct = canDo('PRODUCT_WRITE');
+  const canReceive = canDo('RECEIPT_CREATE');
+  // Purchase costs and the supplier partner put money we owe on the books: managers by default.
+  const canCost = canDo('RECEIPT_COST_EDIT');
   const lockedTo = isOversight ? null : (me?.warehouseId ?? null);
 
   const flash = useCallback((kind: Toast['kind'], text: string) => {
@@ -86,7 +124,7 @@ export default function ReceiptsPage() {
       return;
     }
     const user = JSON.parse(raw) as AuthUser;
-    if (!hasRole(user.role, RECEIPT_ROLES)) {
+    if (!hasRole(user.role, RECEIPT_ROLES) && !can(user, 'RECEIPT_CREATE')) {
       router.replace(homeForRole(user.role));
       return;
     }
@@ -176,7 +214,7 @@ export default function ReceiptsPage() {
       if (!found.length) {
         // Not registered: offer to register it with this code.
         setUnknown(code);
-        setNewProduct({ nameMn: '', unit: 'ш', priceMnt: '', sku: /^\d{8,14}$/.test(code) ? '' : code });
+        setNewProduct(newProductFor(code));
       } else setResults(found.slice(0, 30));
     } catch {
       // keep typing
@@ -185,22 +223,33 @@ export default function ReceiptsPage() {
 
   /** Registers a product that arrived for the first time (its code as barcode), then puts it on the receipt. */
   async function createProduct() {
-    if (!unknown) return;
-    if (newProduct.nameMn.trim().length < 2) return setFormError('Барааны нэрийг бичнэ үү');
-    const isBarcode = /^[0-9]{8,14}$/.test(unknown);
+    if (!unknown || creatingProduct) return;
+    const np = newProduct;
+    const category = categoryKey(np.category);
+    // Checked here, not with `required`: these boxes sit inside the receipt form and must not block saving it.
+    if (np.nameMn.trim().length < 2) return setFormError('Барааны нэрийг бичнэ үү');
+    if (!np.sku.trim()) return setFormError('Барааны код (SKU)-ыг бичнэ үү');
+    if (!np.category.trim() || category === 'General') return setFormError('Ангиллаа сонгоно уу');
+    if (!(Number(np.weightKg) > 0)) return setFormError('Жинг кг-аар оруулна уу (0-ээс их)');
+    const isBarcode = isBarcodeLike(unknown);
+    setFormError('');
+    setCreatingProduct(true);
     try {
       const p = await api<Product>('/products', {
         method: 'POST',
         body: JSON.stringify({
-          sku: newProduct.sku.trim() || (isBarcode ? `P-${unknown.slice(-8)}` : unknown),
+          sku: np.sku.trim(),
           barcode: isBarcode ? unknown : undefined,
-          nameMn: newProduct.nameMn.trim(),
-          nameEn: newProduct.nameMn.trim(),
-          unit: newProduct.unit.trim() || 'ш',
-          priceMnt: Math.max(0, Math.round(Number(newProduct.priceMnt) || 0)),
-          weightKg: 0,
-          lengthM: 0,
-          volumeM3: 0,
+          nameMn: np.nameMn.trim(),
+          nameEn: np.nameMn.trim(),
+          unit: np.unit.trim() || 'ш',
+          category,
+          priceMnt: Math.max(0, Math.round(Number(np.priceMnt) || 0)),
+          weightKg: Number(np.weightKg),
+          lengthM: Number(np.lengthM) || 0,
+          widthM: np.widthM.trim() ? Number(np.widthM) : null,
+          heightM: np.heightM.trim() ? Number(np.heightM) : null,
+          volumeM3: Number(np.volumeM3) || 0,
           stockQty: 0,
         }),
       });
@@ -208,15 +257,24 @@ export default function ReceiptsPage() {
       addLine(p);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Бараа бүртгэж чадсангүй');
+    } finally {
+      setCreatingProduct(false);
     }
   }
+
+  /** Enter in a box of the new-product form registers the product instead of saving the receipt. */
+  const createOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    void createProduct();
+  };
 
   const total = lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitCost) || 0), 0);
   const units = lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
 
   /** A manager corrects a purchase price later; the reason goes to the admin's edit report. */
   async function editCost(r: StockReceipt, i: StockReceipt['items'][number]) {
-    const raw = window.prompt(`${i.product.nameMn}: шинэ нэгж үнэ (₮, хоосон бол үнэгүй):`, i.unitCostMnt == null ? '' : String(i.unitCostMnt));
+    const raw = window.prompt(`${i.product.nameMn}: шинэ нэгж үнэ (₮, хоосон бол үнэ оруулаагүй):`, i.unitCostMnt == null ? '' : String(i.unitCostMnt));
     if (raw === null) return;
     const reason = window.prompt('Засах шалтгаан (засварын түүхэд бичигдэнэ):');
     if (!reason || reason.trim().length < 3) return;
@@ -225,7 +283,7 @@ export default function ReceiptsPage() {
         method: 'PATCH',
         body: JSON.stringify({ unitCostMnt: raw.trim() === '' ? null : Math.round(Number(raw)), reason: reason.trim() }),
       });
-      flash('ok', 'Үнэ засагдлаа');
+      flash('ok', 'Өртөг засагдлаа');
       await load();
     } catch (err) {
       flash('error', err instanceof Error ? err.message : 'Засаж чадсангүй');
@@ -303,13 +361,14 @@ export default function ReceiptsPage() {
             Хэзээнээс
             <input type="date" className="mt-1 block" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} />
           </label>
-          {isOversight || lockedTo ? (
-            <button className="btn-primary" onClick={openCreate}>
-              + Орлого авах
-            </button>
-          ) : (
-            <p className="text-xs text-slate-400 max-w-[220px]">Орлого авахын тулд танд агуулах оноогдсон байх ёстой.</p>
-          )}
+          {canReceive &&
+            (isOversight || lockedTo ? (
+              <button className="btn-primary" onClick={openCreate}>
+                + Орлого авах
+              </button>
+            ) : (
+              <p className="text-xs text-slate-400 max-w-[220px]">Орлого авахын тулд танд агуулах оноогдсон байх ёстой.</p>
+            ))}
         </div>
       </div>
 
@@ -342,7 +401,7 @@ export default function ReceiptsPage() {
                   <td className="py-3">
                     {r.supplierName}
                     {r.supplierCustomer && <span className="block text-[11px] text-sky-300">харилцагчийн тооцоонд орсон</span>}
-                    {isOversight && features.enabled('PARTNER_ACCOUNTS') && (
+                    {canCost && features.enabled('PARTNER_ACCOUNTS') && (
                       <button
                         className="block text-[11px] text-amber-300 hover:underline"
                         onClick={() => setAttach({ receipt: r, partner: null, reason: '', busy: false })}
@@ -357,11 +416,11 @@ export default function ReceiptsPage() {
                     <ul className="space-y-0.5">
                       {r.items.map((i) => (
                         <li key={i.id}>
-                          {i.product.nameMn} · <b>{qty(i.quantity)}</b> {i.product.unit}
+                          {i.product.nameMn} · <b>{qty(i.quantity)}</b> {unitLabel(i.product.unit)}
                           {i.unitCostMnt != null && <span className="text-slate-400"> × {tugrik(i.unitCostMnt)}</span>}
-                          {isOversight && (
+                          {canCost && (
                             <button className="ml-2 text-[11px] text-amber-300 hover:underline" onClick={() => void editCost(r, i)}>
-                              үнэ засах
+                              өртөг засах
                             </button>
                           )}
                         </li>
@@ -392,7 +451,7 @@ export default function ReceiptsPage() {
             <h3 className="text-lg font-semibold">{attach.receipt.receiptNumber}: нийлүүлэгч харилцагч</h3>
             <p className="text-xs text-slate-400">
               Одоо: <b>{attach.receipt.supplierName}</b>
-              {attach.receipt.supplierCustomer ? ' (тооцоонд орсон)' : ' (тооцоонд ороогүй)'}. Сонгосон харилцагчийн өглөгт энэ орлогын үнэтэй
+              {attach.receipt.supplierCustomer ? ' (тооцоонд орсон)' : ' (тооцоонд ороогүй)'}. Сонгосон харилцагчийн өглөгт энэ орлогын өртөгтэй
               мөрүүдийн дүн орно; хоосон үлдээвэл тооцооноос гарна.
             </p>
             <CustomerPicker
@@ -435,7 +494,7 @@ export default function ReceiptsPage() {
 
             <div className="grid gap-3 sm:grid-cols-3">
               <label className="block text-xs text-slate-400">
-                1. Хаана авах
+                1. Аль агуулахад авах
                 <select className="mt-1 w-full" value={warehouseId} disabled={!!lockedTo} onChange={(e) => setWarehouseId(e.target.value)}>
                   {warehouses
                     .filter((w) => w.isActive)
@@ -449,7 +508,7 @@ export default function ReceiptsPage() {
               <div className="block text-xs text-slate-400">
                 2. Нийлүүлэгч
                 <div className="mt-1 space-y-1">
-                  {isOversight && (
+                  {canCost && (
                     <CustomerPicker
                       value={partner}
                       onChange={(c) => {
@@ -462,7 +521,7 @@ export default function ReceiptsPage() {
                   {!partner && (
                     <input
                       className="w-full"
-                      placeholder={isOversight ? 'Гэрээгүй бол нэрээр бичнэ' : 'Нийлүүлэгчийн нэр'}
+                      placeholder={canCost ? 'Гэрээгүй бол нэрээр бичнэ' : 'Нийлүүлэгчийн нэр'}
                       value={supplierName}
                       onChange={(e) => setSupplierName(e.target.value)}
                     />
@@ -498,7 +557,7 @@ export default function ReceiptsPage() {
                         <span>
                           {p.nameMn} <span className="font-mono text-[11px] text-slate-500">{p.sku}</span>
                         </span>
-                        <span className="text-xs text-slate-400">үлдэгдэл {qty(p.stockQty)} {p.unit}</span>
+                        <span className="text-xs text-slate-400">үлдэгдэл {qty(p.stockQty)} {unitLabel(p.unit)}</span>
                       </button>
                     </li>
                   ))}
@@ -510,16 +569,128 @@ export default function ReceiptsPage() {
               <div className="rounded-lg border border-amber-700 bg-amber-950/30 p-3 text-sm">
                 <p className="text-amber-200">
                   «<span className="font-mono">{unknown}</span>» бүртгэлгүй бараа.
-                  {!canAddProduct && ' Админ эсвэл ерөнхий менежерт бүртгүүлнэ үү.'}
+                  {!canAddProduct && ' Бараа бүртгэх эрхтэй ажилтнаар (админ, ерөнхий менежер) бүртгүүлнэ үү.'}
                 </p>
                 {canAddProduct && (
-                  <div className="mt-2 grid gap-2 sm:grid-cols-5">
-                    <input className="sm:col-span-2" placeholder="Барааны нэр" value={newProduct.nameMn} onChange={(e) => setNewProduct({ ...newProduct, nameMn: e.target.value })} />
-                    <input placeholder="Нэгж (ш, кг, м…)" value={newProduct.unit} onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })} />
-                    <input placeholder="Зарах үнэ ₮" inputMode="numeric" value={newProduct.priceMnt} onChange={(e) => setNewProduct({ ...newProduct, priceMnt: e.target.value })} />
-                    <button type="button" className="btn-primary text-sm" onClick={() => void createProduct()}>
-                      Бүртгээд нэмэх
-                    </button>
+                  <div className="mt-2 space-y-2 text-xs text-slate-400">
+                    <div className="grid gap-2 sm:grid-cols-4">
+                      <label className="sm:col-span-2">
+                        Барааны нэр
+                        <input
+                          className="mt-1 w-full"
+                          maxLength={160}
+                          value={newProduct.nameMn}
+                          onChange={(e) => setNewProduct({ ...newProduct, nameMn: e.target.value })}
+                          onKeyDown={createOnEnter}
+                        />
+                      </label>
+                      <label>
+                        Код (SKU)
+                        <input
+                          className="mt-1 w-full font-mono"
+                          maxLength={64}
+                          value={newProduct.sku}
+                          onChange={(e) => setNewProduct({ ...newProduct, sku: e.target.value })}
+                          onKeyDown={createOnEnter}
+                        />
+                      </label>
+                      <label>
+                        Ангилал
+                        <input
+                          className="mt-1 w-full"
+                          list="receipt-new-categories"
+                          maxLength={60}
+                          placeholder="Сонгох эсвэл бичих"
+                          value={newProduct.category}
+                          onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
+                          onKeyDown={createOnEnter}
+                        />
+                        <datalist id="receipt-new-categories">
+                          {CATEGORIES.filter((c) => c !== 'General').map((c) => (
+                            <option key={c} value={categoryLabel(c)} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label>
+                        Нэгж
+                        <input
+                          className="mt-1 w-full"
+                          list="receipt-new-units"
+                          maxLength={16}
+                          value={newProduct.unit}
+                          onChange={(e) => setNewProduct({ ...newProduct, unit: e.target.value })}
+                          onKeyDown={createOnEnter}
+                        />
+                        <datalist id="receipt-new-units">
+                          {UNITS.map((u) => (
+                            <option key={u} value={u} />
+                          ))}
+                        </datalist>
+                      </label>
+                      <label>
+                        Зарах үнэ ₮
+                        <input
+                          className="mt-1 w-full"
+                          inputMode="numeric"
+                          value={newProduct.priceMnt}
+                          onChange={(e) => setNewProduct({ ...newProduct, priceMnt: e.target.value })}
+                          onKeyDown={createOnEnter}
+                        />
+                      </label>
+                      <label>
+                        Жин (кг)
+                        <input
+                          className="mt-1 w-full"
+                          type="number"
+                          step="any"
+                          placeholder="заавал"
+                          value={newProduct.weightKg}
+                          onChange={(e) => setNewProduct({ ...newProduct, weightKg: e.target.value })}
+                          onKeyDown={createOnEnter}
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                      {(
+                        [
+                          ['lengthM', 'Урт (м)'],
+                          ['widthM', 'Өргөн (м)'],
+                          ['heightM', 'Өндөр (м)'],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <label key={key}>
+                          {label}
+                          <input
+                            className="mt-1 w-full"
+                            type="number"
+                            step="any"
+                            value={newProduct[key]}
+                            onChange={(e) => setNewProduct(withVolume({ ...newProduct, [key]: e.target.value }))}
+                            onKeyDown={createOnEnter}
+                          />
+                        </label>
+                      ))}
+                      <label>
+                        Эзлэхүүн (м³)
+                        <input
+                          className="mt-1 w-full"
+                          type="number"
+                          step="any"
+                          value={newProduct.volumeM3}
+                          onChange={(e) => setNewProduct({ ...newProduct, volumeM3: e.target.value })}
+                          onKeyDown={createOnEnter}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="btn-primary self-end text-sm"
+                        disabled={creatingProduct}
+                        onClick={() => void createProduct()}
+                      >
+                        {creatingProduct ? 'Бүртгэж байна…' : 'Бүртгээд нэмэх'}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-slate-500">Урт, өргөн, өндрийг бөглөхөд эзлэхүүн автоматаар бодогдоно.</p>
                   </div>
                 )}
               </div>
@@ -550,7 +721,7 @@ export default function ReceiptsPage() {
                           </span>
                         </td>
                         <td className="text-xs text-slate-400">
-                          {qty(l.stockQty)} {l.unit}
+                          {qty(l.stockQty)} {unitLabel(l.unit)}
                         </td>
                         <td>
                           <input
@@ -568,7 +739,7 @@ export default function ReceiptsPage() {
                               }
                             }}
                           />{' '}
-                          <span className="text-xs text-slate-400">{l.unit}</span>
+                          <span className="text-xs text-slate-400">{unitLabel(l.unit)}</span>
                         </td>
                         <td>
                           <input
@@ -576,13 +747,13 @@ export default function ReceiptsPage() {
                             type="number"
                             min="0"
                             step="1"
-                            disabled={!isOversight}
-                            placeholder={isOversight ? (l.lastCostMnt != null ? `өмнө ${l.lastCostMnt}` : '') : 'менежер'}
+                            disabled={!canCost}
+                            placeholder={canCost ? (l.lastCostMnt != null ? `өмнө ${l.lastCostMnt}` : '') : 'өртөг оруулах эрхгүй'}
                             value={l.unitCost}
                             onChange={(e) => setLines(lines.map((x, i) => (i === idx ? { ...x, unitCost: e.target.value } : x)))}
                           />
                           {warn && <span className="block text-[11px] text-red-300">зарах үнээс их/тэнцүү</span>}
-                          {isOversight && l.lastCostMnt != null && !l.unitCost && (
+                          {canCost && l.lastCostMnt != null && !l.unitCost && (
                             <button
                               type="button"
                               className="block text-[11px] text-amber-brand hover:underline"

@@ -497,7 +497,7 @@ export default function CheckoutPOS() {
       ? 'Гэрээгээр олгох (өглөгөөс хасна)'
       : paymentMethod === 'TRANSFER' && paymentMode === 'SINGLE'
       ? 'Захиалга үүсгэх (шилжүүлэг хүлээнэ)'
-      : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж'})`;
+      : `Захиалга баталгаажуулах (${paymentMode === 'SPLIT' ? 'хувааж төлөх' : paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж төлөх'})`;
   // Why the button is disabled, in words, so the cashier is never left guessing.
   const missing: string[] = [];
   if (!cart.length) missing.push('бараа нэмнэ үү');
@@ -514,7 +514,7 @@ export default function CheckoutPOS() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-xl font-bold text-amber-500">Борлуулагч — Шинэ захиалга</h2>
+            <h2 className="text-xl font-bold text-amber-500">Кассчин — Шинэ захиалга</h2>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="btn-ghost text-sm" onClick={() => setLookupOpen(true)}>
                 Лавлах (F2)
@@ -873,7 +873,7 @@ export default function CheckoutPOS() {
                   QPay QR
                 </button>
                 <button type="button" onClick={() => setPaymentMethod('CASH')} className={chipClass(paymentMethod === 'CASH', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}>
-                  Бэлэн мөнгө <span className="text-slate-500">(бусдад оруулсныг хасаад үлдсэн нь энд автоматаар)</span>
+                  Бэлэн мөнгө
                 </button>
                 <button type="button" onClick={() => setPaymentMethod('CARD')} className={chipClass(paymentMethod === 'CARD', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}>
                   <span className="flex justify-between">
@@ -1033,7 +1033,7 @@ export default function CheckoutPOS() {
               <>
                 {deliveryOffered && ourDelivery && b.assignedVehicle && (
                   <div className="flex justify-between text-slate-400">
-                    <span>Хэмжээ / ангилал:</span>
+                    <span>Машин:</span>
                     <span>{VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</span>
                   </div>
                 )}

@@ -94,7 +94,7 @@ export class NotificationsService {
           out.push({
             key: 'stock-negative',
             level: 'danger',
-            title: 'Үлдэгдэл хасах гарсан бараа',
+            title: 'Хасах үлдэгдэлтэй бараа',
             detail: 'Тооллого хийж «Тохируулах»-аар засна уу',
             count: negative,
             href: '/inventory',

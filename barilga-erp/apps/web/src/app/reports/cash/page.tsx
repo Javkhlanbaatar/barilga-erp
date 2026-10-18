@@ -103,9 +103,9 @@ export default function CashReportPage() {
               <th className="p-3">Кассчин</th>
               <th>Нээсэн</th>
               <th>Хаасан</th>
-              <th className="text-right">Эхний</th>
+              <th className="text-right">Эхний үлд.</th>
               <th className="text-right">Бэлэн борл.</th>
-              <th className="text-right">Гарсан/нэмсэн</th>
+              <th className="text-right">Гаргасан/нэмсэн</th>
               <th className="text-right">Байх ёстой</th>
               <th className="text-right">Тоолсон</th>
               <th className="pr-3 text-right">Зөрүү</th>

@@ -283,7 +283,7 @@ export class InventoryService {
       productId,
       delta: quantity,
       type: StockMovementType.OPENING,
-      reason: ctx.reason ?? 'Opening balance',
+      reason: ctx.reason ?? 'Эхний үлдэгдэл',
     });
   }
 

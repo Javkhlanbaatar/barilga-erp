@@ -24,9 +24,10 @@ import { CATALOG_READ_ROLES, CATALOG_WRITE_ROLES } from '../auth/rbac';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import { assertCan, Permission } from '../auth/permissions';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { InventoryService } from '../inventory/inventory.service';
-import { isManagerRole } from '../inventory/warehouse-scope';
+import { assertWarehouseAccess, isManagerRole } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
 import { nextInStoreBarcode, normalizeBarcode } from './barcode';
@@ -73,7 +74,7 @@ export class ProductsController {
 
   @Get('all')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...CATALOG_WRITE_ROLES)
+  @Permission('PRODUCT_WRITE')
   async listAll(@Query('q') q?: string, @Query('search') search?: string) {
     const searchWhere = await productSearchFilter(this.prisma, productSearchTerm(q, search));
     return this.prisma.product.findMany({
@@ -84,7 +85,7 @@ export class ProductsController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...CATALOG_WRITE_ROLES)
+  @Permission('PRODUCT_WRITE')
   async create(@Body() dto: CreateProductDto, @CurrentUser() user: AuthUser) {
     const { stockQty, warehouseId, companions, barcode, ...rest } = dto;
     try {
@@ -105,10 +106,12 @@ export class ProductsController {
         });
         if (stockQty) {
           const target = await this.inventory.resolveWarehouseId(tx, warehouseId ?? user.warehouseId ?? null);
+          // Someone given the product right outside the head office books opening stock only in their shops.
+          assertWarehouseAccess(user, target);
           await this.inventory.openingBalance(tx, created.id, stockQty, {
             warehouseId: target,
             actorId: user.id,
-            reason: 'Opening balance when the product was created',
+            reason: 'Бараа бүртгэхэд оруулсан эхний үлдэгдэл',
           });
         }
         return tx.product.findUniqueOrThrow({ where: { id: created.id } });
@@ -117,7 +120,7 @@ export class ProductsController {
 if (isUniqueViolation(err)) {
         const target = String((err as Prisma.PrismaClientKnownRequestError).meta?.target ?? '');
         if (target.includes('barcode')) throw new ConflictException('Ийм баркодтой бараа бүртгэлтэй байна / Barcode already in use');
-        throw new ConflictException(`SKU ${dto.sku} already exists`);
+        throw new ConflictException(`${dto.sku} кодтой бараа бүртгэлтэй байна / SKU ${dto.sku} already exists`);
       }
       throw err;
     }
@@ -125,7 +128,7 @@ if (isUniqueViolation(err)) {
 
   @Post(':id/image')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...CATALOG_WRITE_ROLES)
+  @Permission('PRODUCT_WRITE')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
@@ -163,7 +166,7 @@ if (isUniqueViolation(err)) {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...CATALOG_WRITE_ROLES)
+  @Permission('PRODUCT_WRITE')
   async update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: AuthUser) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Product not found');
@@ -180,6 +183,9 @@ if (isUniqueViolation(err)) {
               'There are several warehouses; change stock with POST /inventory/adjust and a warehouseId',
             );
           }
+          // Changing the count is a stock adjustment: it needs that right (not only the product right).
+          assertCan(user, 'STOCK_ADJUST');
+          assertWarehouseAccess(user, warehouses[0].id);
           // The typed value is that warehouse's count; compare with its own balance read inside the
           // transaction (not the product total read earlier, which a sale may have changed meanwhile).
           const bal = await tx.stockBalance.findUnique({
@@ -190,7 +196,7 @@ if (isUniqueViolation(err)) {
             warehouseId: warehouses[0].id,
             productId: id,
             delta,
-            reason: 'Quantity edited on the product',
+            reason: 'Бараа засахад тоо хэмжээ өөрчилсөн',
             actorId: user.id,
           });
         }
@@ -201,7 +207,7 @@ if (isUniqueViolation(err)) {
               entityType: 'PRODUCT_PRICE',
               entityId: id,
               summary: `${existing.sku} ${existing.nameMn}: үнэ ${existing.priceMnt} → ${dto.priceMnt}${
-                existing.lastCostMnt != null && dto.priceMnt < existing.lastCostMnt ? ` (өртөг ${existing.lastCostMnt}-аас доош)` : ''
+                existing.lastCostMnt != null && dto.priceMnt < existing.lastCostMnt ? ` (өртөг ${existing.lastCostMnt}₮-өөс доош)` : ''
               }`,
               before: { priceMnt: existing.priceMnt },
               after: { priceMnt: dto.priceMnt },
@@ -227,7 +233,7 @@ if (isUniqueViolation(err)) {
 if (isUniqueViolation(err)) {
         const target = String((err as Prisma.PrismaClientKnownRequestError).meta?.target ?? '');
         if (target.includes('barcode')) throw new ConflictException('Ийм баркодтой бараа бүртгэлтэй байна / Barcode already in use');
-        throw new ConflictException(`SKU ${dto.sku ?? existing.sku} already exists`);
+        throw new ConflictException(`${dto.sku ?? existing.sku} кодтой бараа бүртгэлтэй байна / SKU ${dto.sku ?? existing.sku} already exists`);
       }
       throw err;
     }
@@ -236,7 +242,7 @@ if (isUniqueViolation(err)) {
   /** Gives every product that has no barcode an in-store one (run once after importing old goods). */
   @Post('barcodes/fill')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...CATALOG_WRITE_ROLES)
+  @Permission('PRODUCT_WRITE')
   async fillBarcodes() {
     const missing = await this.prisma.product.findMany({ where: { barcode: null }, orderBy: { sku: 'asc' }, select: { id: true } });
     for (let i = 0; i < missing.length; i++) {
@@ -247,7 +253,7 @@ if (isUniqueViolation(err)) {
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(...CATALOG_WRITE_ROLES)
+  @Permission('PRODUCT_WRITE')
   async remove(@Param('id') id: string) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Product not found');

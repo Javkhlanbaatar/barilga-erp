@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { api, tugrik } from '@/lib/api';
 import { downloadCsv } from '@/lib/csv';
+import { useCan } from '@/lib/permissions';
 import type { AccountLineKind, AccountStatement, Product, Warehouse } from '@/lib/types';
 
 export const KIND_MN: Record<AccountLineKind, string> = {
@@ -71,6 +72,9 @@ export function AccountPanel({
   /** The partner sells to us or has a barter contract: goods can be taken from them on account. */
   partnerIsSupplier?: boolean;
 }) {
+  const allowed = useCan();
+  /** Goods taken by quantity become a goods receipt with costs: both rights are needed. */
+  const canTakeGoods = allowed('RECEIPT_CREATE') && allowed('RECEIPT_COST_EDIT');
   const [st, setSt] = useState<AccountStatement | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -188,8 +192,14 @@ export function AccountPanel({
           <button
             type="button"
             className="btn-ghost text-xs"
-            disabled={!partnerIsSupplier}
-            title={partnerIsSupplier ? '' : 'Харилцагчийг засаад «Нийлүүлэгч» эсвэл бартерын гэрээтэй гэж тэмдэглэнэ'}
+            disabled={!partnerIsSupplier || !canTakeGoods}
+            title={
+              !canTakeGoods
+                ? 'Бараа орлого авах болон өртөг оруулах эрх хэрэгтэй'
+                : partnerIsSupplier
+                  ? ''
+                  : 'Харилцагчийг засаад «Нийлүүлэгч» эсвэл бартерын гэрээтэй гэж тэмдэглэнэ'
+            }
             onClick={() => setModal({ kind: 'goods' })}
           >
             📦 Бараа авсан (тоогоор)
@@ -294,7 +304,7 @@ export function AccountPanel({
                 partnerName={st.customer.name}
                 busy={busy}
                 onCancel={() => setModal(null)}
-                onSave={(body) => run(() => api('/inventory/receipts', { method: 'POST', body: JSON.stringify(body) }), 'Бараа агуулахад орлоо — үнэтэй мөрүүд өглөгт нэмэгдсэн (үнэгүйг «Худалдаа» → «Бид авсан»-аас оруулна)')}
+                onSave={(body) => run(() => api('/inventory/receipts', { method: 'POST', body: JSON.stringify(body) }), 'Бараа агуулахад орлоо — үнэтэй мөрүүд өглөгт нэмэгдсэн (үнэ ороогүйг «Худалдаа / худалдан авалт» → «Бид авсан»-аас оруулна)')}
               />
             )}
             {modal.kind === 'receive' && (
@@ -775,7 +785,7 @@ function GoodsForm(props: {
       {lines.length > 0 && (
         <p className="text-right text-sm">
           Өглөгт нэмэгдэх: <b>{tugrik(total)}</b>
-          {unpriced > 0 && <span className="text-xs text-amber-300"> · {unpriced} мөр үнэгүй (дараа оруулна)</span>}
+          {unpriced > 0 && <span className="text-xs text-amber-300"> · {unpriced} мөр үнэ ороогүй (дараа оруулна)</span>}
         </p>
       )}
       <label className="block text-xs text-slate-400">

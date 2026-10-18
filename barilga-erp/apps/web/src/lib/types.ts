@@ -11,6 +11,8 @@ export type AuthUser = {
   isActive?: boolean;
   /** Warehouse/shop the user is assigned to (null/undefined = not assigned). */
   warehouseId?: string | null;
+  /** Rights in force now (role + what the admin changed for this person); from login and GET /auth/me. */
+  can?: string[];
 };
 
 export type WarehouseKind = 'SHOP' | 'WAREHOUSE';
@@ -44,6 +46,8 @@ export type StaffUser = {
   warehouse?: { id: string; code: string; name: string } | null;
   /** Branch manager: further warehouses they oversee. */
   managedWarehouses?: Array<{ id: string; code: string; name: string }>;
+  /** Rights the admin gave to (grant) or took from (revoke) this person on top of the role. */
+  permissions?: { grant: string[]; revoke: string[] };
   createdAt: string;
   updatedAt?: string;
 };
@@ -80,6 +84,9 @@ export type Product = {
   priceMnt: number;
   weightKg: number;
   lengthM: number;
+  /** Package width / height (m), when registered. */
+  widthM?: number | null;
+  heightM?: number | null;
   volumeM3: number;
   stockQty: number;
   minStockLevel?: number;
@@ -318,15 +325,15 @@ export const ORDER_STATUS_LABEL: Record<string, string> = {
 };
 
 export const VEHICLE_LABEL: Record<string, string> = {
-  PORTER: 'Porter (≤1.5t)',
-  DUMP: 'Dump (≤5t)',
-  MANIPULATOR: 'Manipulator (≤10t)',
+  PORTER: 'Портер (≤1.5тн)',
+  DUMP: 'Өөрөө буулгагч (≤5тн)',
+  MANIPULATOR: 'Манипулятор (≤10тн)',
 };
 
 export const DELIVERY_LABEL: Record<string, string> = {
   OUR_DELIVERY: 'Манай хүргэлт',
   DELIVERY: 'Манай хүргэлт',
-  SELF_PICKUP: 'Өөрөө авна',
+  SELF_PICKUP: 'Өөрөө авах',
   CUSTOMER_DRIVER: 'Харилцагчийн жолооч',
 };
 
@@ -472,7 +479,7 @@ export const ROLE_LABEL: Record<Role, string> = {
   SUPER_MANAGER: 'Ерөнхий менежер',
   MANAGER: 'Салбарын менежер',
   BORLUULAGCH: 'Кассчин',
-  ACHIGCH_BELTGEGCH: 'Агуулах',
+  ACHIGCH_BELTGEGCH: 'Агуулахын ажилтан',
 };
 
 // ───────── Phase 2B: customers, transfers, gathering, module switches ─────────

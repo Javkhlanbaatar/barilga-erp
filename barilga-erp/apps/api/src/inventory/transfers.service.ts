@@ -84,7 +84,7 @@ export class TransfersService {
     if (products.length !== productIds.length) throw new BadRequestException('Product not found');
     const short = products.filter((p) => D(balances.find((b) => b.productId === p.id)?.quantity ?? 0).lt(quantities.get(p.id)!));
     if (short.length > 0) {
-      throw new BadRequestException(`${warehouse.name}-д үлдэгдэл хүрэхгүй / Not enough stock: ${short.map((p) => p.sku).join(', ')}`);
+      throw new BadRequestException(`${warehouse.name}: үлдэгдэл хүрэхгүй / Not enough stock: ${short.map((p) => p.sku).join(', ')}`);
     }
   }
 
@@ -266,7 +266,7 @@ export class TransfersService {
           type: StockMovementType.TRANSFER_IN,
           refType: 'TRANSFER',
           refId: id,
-          reason: `${transfer.transferNumber} received${r.reason ? ` (дутуу: ${r.reason})` : ''}`,
+          reason: `${transfer.transferNumber} хүлээн авсан${r.reason ? ` (дутуу: ${r.reason})` : ''}`,
           actorId: user.id,
         });
       }
@@ -318,7 +318,7 @@ export class TransfersService {
           type: StockMovementType.TRANSFER_OUT,
           refType: 'TRANSFER',
           refId: id,
-          reason: `${transfer.transferNumber} cancelled: ${reason}`,
+          reason: `${transfer.transferNumber} цуцалсан: ${reason}`,
           actorId: user.id,
         });
       }

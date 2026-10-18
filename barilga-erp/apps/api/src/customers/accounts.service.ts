@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AccountEntryKind, CashMovementKind, OrderStatus, PaymentStatus, PayMethod, Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
+import { assertCan } from '../auth/permissions';
 import { PaymentService } from '../payment/payment.service';
 import { orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
 import { partnerPayable } from './partner-payable';
@@ -38,6 +39,16 @@ const MANUAL_KINDS: AccountEntryKind[] = [
 const PAY_MN: Record<string, string> = { CASH: 'бэлнээр', CARD: 'картаар', TRANSFER: 'шилжүүлгээр', OFFSET: 'хасалтаар' };
 /** Ledger amounts are 32-bit integers in the database. */
 const MAX_MNT = 2_000_000_000;
+
+/** Line kinds in Mongolian, for the edits report. */
+const KIND_MN: Record<string, string> = {
+  PURCHASE: 'бараа/үйлчилгээ авсан',
+  PAYMENT_TO_PARTNER: 'бид төлсөн',
+  PAYMENT_FROM_PARTNER: 'тэд төлсөн',
+  CHARGE: 'авлага нэмсэн',
+  ADJUSTMENT: 'залруулга',
+  OFFSET: 'хасалт',
+};
 
 /**
  * The two-way account with a partner (харилцагчийн тооцоо):
@@ -261,6 +272,8 @@ export class AccountsService {
     }
     const amountMnt = this.signed(dto.kind, dto.amountMnt);
     const method = dto.kind === AccountEntryKind.PAYMENT_TO_PARTNER ? (dto.method ?? null) : null;
+    // Cash to a partner leaves the till: the same right as any cash out.
+    if (method === 'CASH') assertCan(user, 'CASH_MOVEMENT');
     if (method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
     const entry = await this.prisma.$transaction(
       async (tx) => {
@@ -302,6 +315,9 @@ export class AccountsService {
     const [here, all] = await Promise.all([this.openCredit(customerId, await this.scopeFor(user)), this.openCredit(customerId)]);
     const owedHere = here.reduce((s, p) => s + p.amountMnt, 0);
     const owedElsewhere = all.reduce((s, p) => s + p.amountMnt, 0) - owedHere;
+    // Paying their orders is debt collection (the same right as «Өр төлөх»); cash beyond them enters the till.
+    if (owedHere > 0) assertCan(user, 'PAY_DEBT');
+    if (method === 'CASH' && amountMnt > owedHere) assertCan(user, 'CASH_MOVEMENT');
     // Money beyond this branch's orders would become an advance while another branch's orders stay unpaid:
     // those are collected by that branch (or by the general manager), not turned into what we owe them.
     if (amountMnt > owedHere && owedElsewhere > 0) {
@@ -385,7 +401,7 @@ export class AccountsService {
         data: {
           entityType: 'ACCOUNT_ENTRY',
           entityId: entryId,
-          summary: `Тооцооны мөр (${entry.kind}) засав`,
+          summary: `Тооцооны мөр (${KIND_MN[entry.kind] ?? entry.kind}) засав`,
           before: { amountMnt: entry.amountMnt, description: entry.description, occurredAt: entry.occurredAt.toISOString() },
           after: { amountMnt: next.amountMnt, description: next.description, occurredAt: next.occurredAt.toISOString() },
           reason: dto.reason,
@@ -406,6 +422,7 @@ export class AccountsService {
     if (!MANUAL_KINDS.includes(entry.kind) || entry.refType) {
       throw new BadRequestException('This line comes from another document (receipt / offset); change that document instead');
     }
+    if (entry.method === 'CASH') assertCan(user, 'CASH_MOVEMENT');
     if (entry.method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
     const reversal = await this.prisma.$transaction(
       async (tx) => {
@@ -443,7 +460,7 @@ export class AccountsService {
           data: {
             entityType: 'ACCOUNT_ENTRY',
             entityId: entryId,
-            summary: `Тооцооны мөр (${entry.kind}) хүчингүй болгов: ${entry.description}`,
+            summary: `Тооцооны мөр (${KIND_MN[entry.kind] ?? entry.kind}) хүчингүй болгов: ${entry.description}`,
             before: { amountMnt: entry.amountMnt },
             after: { amountMnt: 0 },
             reason,

@@ -7,28 +7,30 @@ import { useEffect, useState } from 'react';
 import { CashierSummary } from '@/components/cashier-summary';
 import { api } from '@/lib/api';
 import { useFeatures } from '@/lib/features';
+import { can, storeRights, type PermissionKey } from '@/lib/permissions';
 import { NotificationBell, useAlerts } from '@/components/notification-bell';
 import { AuthUser, FeatureKey, ROLE_LABEL } from '@/lib/types';
 
-const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; feature?: FeatureKey }> = [
+/** `permission`: shown to whoever has that right (the role's default, or given/taken by the admin) instead of by role. */
+const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; feature?: FeatureKey; permission?: PermissionKey }> = [
   { href: '/pos', label: 'ПОС / Захиалга', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
   { href: '/orders', label: 'Захиалгууд', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
   { href: '/invoices', label: 'Нэхэмжлэх', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'INVOICES' },
   { href: '/warehouse/tickets', label: 'Агуулах / тасалбар', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
-  { href: '/admin/attendance', label: 'Ирц', roles: ['ADMIN', 'MANAGER'], feature: 'HR' },
+  { href: '/admin/attendance', label: 'Ирц', roles: ['ADMIN', 'MANAGER'], feature: 'HR', permission: 'ATTENDANCE_MANAGE' },
   { href: '/admin/payroll', label: 'Цалин', roles: ['ADMIN', 'MANAGER'], feature: 'HR' },
   { href: '/reports', label: 'Тайлан', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
   { href: '/inventory', label: 'Агуулахын үлдэгдэл', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
-  { href: '/inventory/receipts', label: 'Бараа орлого', roles: ['ADMIN', 'MANAGER', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_RECEIPTS' },
+  { href: '/inventory/receipts', label: 'Бараа орлого', roles: ['ADMIN', 'MANAGER', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_RECEIPTS', permission: 'RECEIPT_CREATE' },
   { href: '/inventory/transfers', label: 'Шилжүүлэг', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_TRANSFERS' },
   { href: '/customers', label: 'Харилцагчид', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'CUSTOMERS' },
-  { href: '/admin/price-lists', label: 'Үнийн жагсаалт', roles: ['ADMIN', 'SUPER_MANAGER'], feature: 'PRICE_LISTS' },
+  { href: '/admin/price-lists', label: 'Үнийн жагсаалт', roles: ['ADMIN', 'SUPER_MANAGER'], feature: 'PRICE_LISTS', permission: 'PRICE_LIST_WRITE' },
   { href: '/admin/warehouses', label: 'Дэлгүүр / агуулах', roles: ['ADMIN'] },
   { href: '/admin/users', label: 'Хэрэглэгчид', roles: ['ADMIN'] },
   { href: '/admin/features', label: 'Модулиуд', roles: ['ADMIN'] },
   { href: '/admin/settings', label: 'Компанийн мэдээлэл', roles: ['ADMIN'] },
   { href: '/admin/documents', label: 'Баримтын загвар', roles: ['ADMIN', 'SUPER_MANAGER'] },
-  { href: '/admin', label: 'Хяналт самбар', roles: ['ADMIN', 'MANAGER'] },
+  { href: '/admin', label: 'Хяналтын самбар', roles: ['ADMIN', 'MANAGER'] },
   { href: '/devices', label: 'Төхөөрөмж шалгах', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
 ];
 
@@ -69,11 +71,25 @@ export function Shell({ children }: { children: React.ReactNode }) {
       return;
     }
     setUser(JSON.parse(raw));
+    // Rights can change while someone is signed in (the admin gives or takes one): refresh them on every page.
+    api<AuthUser & { can?: string[] }>('/auth/me')
+      .then((me) => {
+        storeRights(me);
+        const fresh = localStorage.getItem('barilga_user');
+        if (fresh) setUser(JSON.parse(fresh));
+      })
+      .catch(() => undefined);
   }, [router]);
 
   if (!user) return <div className="p-8 text-slate-400">Уншиж байна…</div>;
 
-  const visible = NAV.filter((n) => hasRole(user.role, n.roles) && (!n.feature || features.enabled(n.feature)));
+  const visible = NAV.filter(
+    (n) =>
+      (n.permission ? can(user, n.permission) : hasRole(user.role, n.roles)) &&
+      (!n.feature || features.enabled(n.feature)) &&
+      // A cashier's only report is the sales report: no right to it, no reports menu.
+      !(n.href === '/reports' && user.role === 'BORLUULAGCH' && !can(user, 'REPORT_SALES')),
+  );
   // The most specific matching link is active (so /inventory/transfers does not also light up /inventory).
   const activeHref = visible
     .filter((n) => pathname === n.href || (n.href !== '/admin' && pathname.startsWith(`${n.href}/`)))
@@ -132,7 +148,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {ROLE_LABEL[user.role]}
             </span>
           </div>
-          {user.role === 'BORLUULAGCH' && <CashierSummary />}
+          {user.role === 'BORLUULAGCH' && can(user, 'REPORT_SALES') && <CashierSummary />}
           <button
             className="btn-ghost w-full text-xs"
             onClick={() => {

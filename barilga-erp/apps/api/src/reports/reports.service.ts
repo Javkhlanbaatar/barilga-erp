@@ -276,7 +276,7 @@ export class ReportsService {
         return {
           productId: g.productId,
           sku: product?.sku ?? '',
-          nameMn: product?.nameMn ?? 'Unknown product',
+          nameMn: product?.nameMn ?? 'Тодорхойгүй бараа',
           nameEn: product?.nameEn ?? '',
           quantity: Math.round(g.quantity * 1000) / 1000,
           amountMnt: g.amountMnt,

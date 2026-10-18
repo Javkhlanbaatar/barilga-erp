@@ -37,7 +37,7 @@ export class VehicleLimitExceededError extends Error {
     readonly manipulator: VehicleLimit,
   ) {
     super(
-      `Сагсны үзүүлэлт Manipulator-ийн хязгаараас хэтэрсэн / Cart exceeds Manipulator limits ` +
+      `Сагсны жин, урт эсвэл эзлэхүүн манипуляторын даацаас хэтэрсэн — захиалгыг хувааж хийнэ үү / Cart exceeds Manipulator limits ` +
         `(max ${manipulator.maxWeightKg / 1000}t, ${manipulator.maxLengthM}m, ${manipulator.maxVolumeM3}m³). ` +
         `Одоогийн: ${specs.weightKg}кг, ${specs.maxLengthM}м, ${specs.volumeM3}м³. Захиалгыг хуваана уу.`,
     );

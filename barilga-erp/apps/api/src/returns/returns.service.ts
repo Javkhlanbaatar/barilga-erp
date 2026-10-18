@@ -176,7 +176,7 @@ export class ReturnsService {
     if (credit && credit.amountMnt > 0) {
       if (dto.refundMethod !== PayMethod.CREDIT) {
         throw new BadRequestException(
-          `Энэ захиалгад ${credit.amountMnt}₮ өр байна: буцаалт өрөөс хасагдана (refund method CREDIT)`,
+          `Энэ захиалгад ${credit.amountMnt}₮ өр байна: буцаалт өрөөс хасагдана / Refund method must be CREDIT`,
         );
       }
       if (refundAmount > credit.amountMnt) {
@@ -241,7 +241,7 @@ export class ReturnsService {
         warehouseId: order.warehouseId,
         refType: 'RETURN',
         refId: salesReturn.id,
-        reason: `Return on ${order.orderNumber}`,
+        reason: `Буцаалт — ${order.orderNumber}`,
         actorId: user.id,
       });
     }

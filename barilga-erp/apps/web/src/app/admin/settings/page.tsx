@@ -110,7 +110,7 @@ export default function AdminSettingsPage() {
   return (
     <Shell>
       <div className="mb-4">
-        <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Admin</p>
+        <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Админ</p>
         <h2 className="text-xl font-bold">Компанийн мэдээлэл</h2>
         <p className="text-slate-400 text-sm mt-1">Нэхэмжлэх болон борлуулалтын баримт дээр хэвлэгдэнэ.</p>
       </div>

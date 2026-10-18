@@ -5,7 +5,8 @@ import { createWithUniqueNumber, isUniqueConflictOn, ulaanbaatarYmd } from '../o
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReceiptDto } from './dto/receipt.dto';
 import { InventoryService } from './inventory.service';
-import { assignedWarehouseIds, isManagerRole, warehouseWhere } from './warehouse-scope';
+import { assertCan } from '../auth/permissions';
+import { assignedWarehouseIds, warehouseWhere } from './warehouse-scope';
 
 const RECEIPT_INCLUDE = {
   warehouse: { select: { id: true, code: true, name: true } },
@@ -35,11 +36,9 @@ export class ReceiptsService {
       if (!assigned.length) throw new ForbiddenException('You must be assigned to a warehouse to receive goods');
       if (!assigned.includes(dto.warehouseId)) throw new ForbiddenException('You can only receive goods into your own warehouse');
     }
-    // A cost or a supplier partner creates money we owe (a PURCHASE line on the partner account): managers
-    // decide that. Warehouse staff record what arrived; a manager adds the cost later (`үнэ засах`).
-    if (!isManagerRole(user.role) && (dto.supplierCustomerId || dto.items.some((i) => i.unitCostMnt != null))) {
-      throw new ForbiddenException('Өртөг, нийлүүлэгч харилцагчийг зөвхөн менежер оруулна / Only managers enter costs and supplier partners');
-    }
+    // A cost or a supplier partner creates money we owe (a PURCHASE line on the partner account): only those
+    // with the cost right decide that. Others record what arrived; the cost is added later (`өртөг засах`).
+    if (dto.supplierCustomerId || dto.items.some((i) => i.unitCostMnt != null)) assertCan(user, 'RECEIPT_COST_EDIT');
     const lines = new Map<string, { quantity: Prisma.Decimal; unitCostMnt: number | null }>();
     for (const item of dto.items) {
       const qty = new Prisma.Decimal(item.quantity.toString());
@@ -136,7 +135,7 @@ export class ReceiptsService {
    * is the newest priced receipt of the product — its last cost follow; before/after/reason go to the edit log.
    */
   async editItemCost(receiptId: string, itemId: string, unitCostMnt: number | null, reason: string, user: AuthUser) {
-    if (!isManagerRole(user.role)) throw new ForbiddenException('Only a manager or admin can change purchase prices');
+    assertCan(user, 'RECEIPT_COST_EDIT');
     await this.get(receiptId, user); // a branch manager only prices receipts of their own warehouses
     await this.prisma.$transaction(async (tx) => {
       const item = await tx.stockReceiptItem.findFirst({ where: { id: itemId, receiptId }, include: { receipt: true } });
@@ -196,7 +195,7 @@ export class ReceiptsService {
    * automatically (editItemCost). Managers only; kept in the edits report.
    */
   async attachPartner(receiptId: string, supplierCustomerId: string | null, reason: string, user: AuthUser) {
-    if (!isManagerRole(user.role)) throw new ForbiddenException('Only a manager or admin can change the supplier partner');
+    assertCan(user, 'RECEIPT_COST_EDIT');
     await this.get(receiptId, user);
     await this.prisma.$transaction(
       async (tx) => {
