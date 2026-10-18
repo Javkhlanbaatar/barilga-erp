@@ -6,8 +6,9 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
-import { AccountEntryKind, BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
+import { AccountEntryKind, BillType, OrderStatus, PaymentStatus, PayMethod, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { searchKey } from '../common/translit';
 import { assertCashDrawerOpen } from '../cash/cash-drawer';
@@ -711,6 +712,29 @@ export class OrdersService {
     if (method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
     await this.payments.payRemaining(orderId, method, user.id);
     return this.findOne(orderId, user);
+  }
+
+  /**
+   * "Төлбөр шалгах": asks QPay now about every waiting or expired invoice of the order (a customer may pay
+   * after the automatic checks stopped). Paid ones are settled exactly as the webhook would.
+   */
+  async checkQpay(orderId: string, user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can take payments');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { payments: true } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    const open = order.payments.filter(
+      (p) => p.method === PayMethod.QPAY && (p.status === PaymentStatus.UNPAID || p.status === PaymentStatus.EXPIRED),
+    );
+    const outcomes: string[] = [];
+    for (const p of open) {
+      try {
+        outcomes.push(await this.payments.verifyAndSettle(p, `manual-check:${user.id}`));
+      } catch {
+        throw new ServiceUnavailableException('QPay-тэй холбогдож чадсангүй, түр хүлээгээд дахин шалгана уу / Cannot reach QPay');
+      }
+    }
+    return { outcomes, order: await this.findOne(orderId, user) };
   }
 
   async confirmTransfer(orderId: string, user: AuthUser) {

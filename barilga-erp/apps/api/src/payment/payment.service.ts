@@ -14,7 +14,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutPaymentMethod } from '../orders/dto/order.dto';
 import { QpayClient } from './qpay.client';
 
-export const POLL_OFFSETS_MS = [60_000, 180_000, 300_000];
+/**
+ * When the server asks QPay about an unpaid invoice, counted from its creation: often at first (most people
+ * pay within a minute or two), then less often, up to 30 minutes. The webhook still settles it at once when
+ * QPay can reach us, and the cashier can ask at any time ("Төлбөр шалгах").
+ */
+export const POLL_OFFSETS_MS = [20_000, 45_000, 90_000, 180_000, 300_000, 600_000, 1_200_000, 1_800_000];
 
 export const LATE_PAYMENT_MARKER = 'LATE_PAYMENT_AFTER_EXPIRY';
 
@@ -736,7 +741,7 @@ export class PaymentService {
         where: { id: paymentId },
         data: { pollAttempts: attempts, nextPollAt: null },
       });
-      this.log.warn(`QPay poll exhausted (1m/3m/5m) for payment ${paymentId}`);
+      this.log.warn(`QPay poll exhausted (30 min) for payment ${paymentId}`);
       return;
     }
     const nextPollAt = new Date(createdAt.getTime() + POLL_OFFSETS_MS[attempts]);

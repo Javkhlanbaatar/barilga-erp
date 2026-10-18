@@ -129,6 +129,13 @@ export class OrdersController {
     return this.orders.payRemaining(id, dto.method, user);
   }
 
+  /** Ask QPay now whether the customer has paid (after the automatic checks, or when in doubt). */
+  @Post(':id/check-qpay')
+  @Roles(...POS_ROLES)
+  checkQpay(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.orders.checkQpay(id, user);
+  }
+
   /** The invoiced bank transfer arrived: release the order. */
   @Post(':id/confirm-transfer')
   @Roles(...POS_ROLES)

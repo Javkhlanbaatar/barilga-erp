@@ -431,7 +431,7 @@ export default function CheckoutPOS() {
         }),
       });
       setCashRefresh((n) => n + 1);
-      router.push(`/orders/${order.id}`);
+      router.push(`/orders/${order.id}?new=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Захиалга үүсгэж чадсангүй');
     } finally {

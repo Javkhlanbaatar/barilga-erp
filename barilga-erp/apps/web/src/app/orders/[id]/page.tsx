@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { CreditPanel, owedOnOrder } from '@/components/credit-panel';
 import { GatherPanel } from '@/components/gather-panel';
@@ -65,6 +65,77 @@ export default function OrderDetailPage() {
     setTimeAdj(o.timeAdjustmentMnt);
     setVehicleNumber(o.vehicleNumber ?? '');
     setDriverPhone(o.driverPhone ?? '');
+  }
+
+  // ── Waiting for QPay: refresh every few seconds; when the money arrives say so and print the receipt. ──
+  const [justPaid, setJustPaid] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkMsg, setCheckMsg] = useState('');
+  const [autoPrint, setAutoPrint] = useState(true);
+  const prevStatus = useRef<string | null>(null);
+
+  useEffect(() => {
+    try {
+      setAutoPrint(localStorage.getItem('auto_print_receipt') !== '0');
+    } catch {
+      // storage blocked: keep the default
+    }
+  }, []);
+
+  /** Prints the sales receipt in a hidden frame (no new window), once per order per browser tab. */
+  const printReceipt = useCallback((force = false) => {
+    const key = `receipt_printed_${params.id}`;
+    try {
+      if (!force && sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+    } catch {
+      // storage blocked: print anyway
+    }
+    document.getElementById('receipt-frame')?.remove();
+    const frame = document.createElement('iframe');
+    frame.id = 'receipt-frame';
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    frame.src = `/print/orders/${params.id}?doc=receipt`;
+    document.body.appendChild(frame);
+  }, [params.id]);
+
+  useEffect(() => {
+    if (!order) return;
+    const paidNow = order.status === 'READY_FOR_LOADING' || order.status === 'COMPLETED';
+    const wasWaiting = prevStatus.current === 'PENDING_PAYMENT';
+    const fresh = prevStatus.current === null && new URLSearchParams(window.location.search).get('new') === '1';
+    if (paidNow && (wasWaiting || fresh)) {
+      if (wasWaiting) setJustPaid(true);
+      if (autoPrint) printReceipt();
+    }
+    prevStatus.current = order.status;
+  }, [order, autoPrint, printReceipt]);
+
+  const waitingQpay = Boolean(
+    order?.status === 'PENDING_PAYMENT' && (order.payments ?? []).some((p) => p.method === 'QPAY' && p.status === 'UNPAID'),
+  );
+  useEffect(() => {
+    if (!waitingQpay) return;
+    const h = window.setInterval(() => {
+      if (!document.hidden) void load().catch(() => undefined);
+    }, 4000);
+    return () => window.clearInterval(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingQpay, params.id]);
+
+  async function checkQpay() {
+    setChecking(true);
+    setCheckMsg('');
+    try {
+      const r = await api<{ outcomes: string[]; order: Order }>(`/orders/${params.id}/check-qpay`, { method: 'POST', body: '{}' });
+      setOrder(r.order);
+      if (r.outcomes.includes('late')) setCheckMsg('Хугацаа дууссан нэхэмжлэхээр мөнгө орсон байна — менежерт мэдэгдэнэ үү (сануулгад гарна).');
+      else if (!r.outcomes.includes('paid') && r.order.status === 'PENDING_PAYMENT') setCheckMsg('QPay-д төлбөр хараахан ороогүй байна.');
+    } catch (err) {
+      setCheckMsg(err instanceof Error ? err.message : 'Шалгаж чадсангүй');
+    } finally {
+      setChecking(false);
+    }
   }
 
   useEffect(() => {
@@ -299,6 +370,21 @@ export default function OrderDetailPage() {
         </div>
         <div className="flex flex-col items-end gap-2">
           <p className="text-2xl font-bold text-amber-brand">{tugrik(order.totalMnt)}</p>
+          <label className="flex items-center gap-1 text-[11px] text-slate-400">
+            <input
+              type="checkbox"
+              checked={autoPrint}
+              onChange={(e) => {
+                setAutoPrint(e.target.checked);
+                try {
+                  localStorage.setItem('auto_print_receipt', e.target.checked ? '1' : '0');
+                } catch {
+                  // ignore
+                }
+              }}
+            />
+            Төлөгдөхөд баримт автоматаар хэвлэх
+          </label>
           <div className="flex gap-1">
             {[
               ['invoice', 'Нэхэмжлэх'],
@@ -368,6 +454,27 @@ export default function OrderDetailPage() {
       {features.enabled('INVOICES') && <InvoicePanel order={order} canManage={canDispatch} onOrder={setOrder} />}
       <div className="grid gap-6 md:grid-cols-2">
         <div className="card space-y-4">
+          {justPaid && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-600 bg-emerald-950/60 p-3">
+              <p className="text-lg font-bold text-emerald-300">✓ Төлбөр орлоо</p>
+              <button className="btn-primary text-sm" onClick={() => printReceipt(true)}>
+                🖨 Баримт хэвлэх
+              </button>
+            </div>
+          )}
+          {waitingQpay && (
+            <div className="space-y-2 rounded-xl border border-amber-700 bg-amber-950/40 p-3 text-sm">
+              <p className="flex items-center gap-2 text-amber-200">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                QPay төлбөр хүлээж байна… Төлөгдмөгц энд автоматаар гарна.
+              </p>
+              <button className="btn-ghost text-xs" disabled={checking} onClick={() => void checkQpay()}>
+                {checking ? 'Шалгаж байна…' : 'Төлбөр шалгах'}
+              </button>
+              {checkMsg && <p className="text-xs text-slate-300">{checkMsg}</p>}
+            </div>
+          )}
+          {!waitingQpay && checkMsg && <p className="text-xs text-slate-300">{checkMsg}</p>}
           <h3 className="font-semibold">Төлбөрийн хуваарилалт</h3>
           {splits.map((p) => (
             <div key={p.id ?? `${channel(p)}-${p.amountMnt}`} className="border border-slate-800 rounded-lg p-3 text-sm">
