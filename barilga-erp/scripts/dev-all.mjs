@@ -1,5 +1,5 @@
 // Starts everything the app needs on this computer with one command: the database (embedded Postgres),
-// the API (port 4000) and the web app (port 3000). Anything already running is left alone. Ctrl+C stops
+// the API (port 4000) and the web app (port 3000, or PORT). Anything already running is left alone. Ctrl+C stops
 // what this script started. It never migrates, resets or deletes data; it only warns about pending migrations.
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -94,12 +94,14 @@ async function main() {
     run('api', ['run', 'start:dev', '-w', '@barilga/api']);
     await waitFor(4000, 'API');
   }
-  if (await portBusy(3000)) console.log('[web] already running on 3000 — using it.');
+  // The web port follows PORT (next dev reads it too), so another app on 3000 is not mistaken for this one.
+  const webPort = Number(process.env.PORT) || 3000;
+  if (await portBusy(webPort)) console.log(`[web] already running on ${webPort} — using it.`);
   else {
     run('web', ['run', 'dev', '-w', '@barilga/web']);
-    await waitFor(3000, 'Web');
+    await waitFor(webPort, 'Web');
   }
-  console.log('\n[dev-all] Open http://localhost:3000  (Ctrl+C to stop)\n');
+  console.log(`\n[dev-all] Open http://localhost:${webPort}  (Ctrl+C to stop)\n`);
 }
 
 async function shutdown() {
