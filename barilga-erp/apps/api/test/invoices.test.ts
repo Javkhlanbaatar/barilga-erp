@@ -110,3 +110,23 @@ describe('invoice records', () => {
     await assert.rejects(() => w.invoices.create({ orderId: w.order.id }, cashier), BadRequestException);
   });
 });
+
+describe('invoice made at the till', () => {
+  it('a bank transfer at the till also waits for the money', async () => {
+    const w = await world();
+    await w.service.settleSplits(w.order.id, [{ method: 'TRANSFER', amount: 300_000 }]);
+    assert.equal((await w.db.order.findUnique({ where: { id: w.order.id } }))!.status, 'PENDING_PAYMENT');
+  });
+
+  it('is due in 7 days unless told otherwise, and can be extended by 7 days from today when overdue', async () => {
+    const w = await world();
+    const inv: any = await w.invoices.create({ orderId: w.order.id } as any, cashier);
+    const days = (d: string | Date) => Math.round((new Date(d).getTime() - Date.now()) / 86_400_000);
+    assert.ok([7, 8].includes(days(inv.dueDate)), `due in about a week (${days(inv.dueDate)})`);
+    await w.db.invoice.update({ where: { id: inv.id }, data: { dueDate: new Date(Date.now() - 2 * 86_400_000) } });
+    const ext: any = await w.invoices.extend(inv.id, 7, cashier);
+    assert.ok([7, 8].includes(days(ext.dueDate)), 'an overdue invoice gets 7 days from today');
+    const again: any = await w.invoices.extend(inv.id, 7, cashier);
+    assert.ok([14, 15].includes(days(again.dueDate)), 'a running invoice gets 7 more days');
+  });
+});

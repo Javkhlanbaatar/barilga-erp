@@ -9,15 +9,36 @@ export function CustomerPicker({
   value,
   onChange,
   filter,
+  allowCreate = false,
 }: {
   value: Customer | null;
   onChange: (c: Customer | null) => void;
   /** Narrows the matches, e.g. to suppliers on a goods receipt. */
   filter?: (c: Customer) => boolean;
+  /** Offer «+ Шинэ харилцагч» to register a company or a person on the spot. */
+  allowCreate?: boolean;
 }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<Customer[]>([]);
   const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [nc, setNc] = useState({ type: 'COMPANY' as 'COMPANY' | 'INDIVIDUAL', name: '', phone: '', regNumber: '' });
+  const [err, setErr] = useState('');
+
+  async function create() {
+    setErr('');
+    try {
+      const c = await api<Customer>('/customers', {
+        method: 'POST',
+        body: JSON.stringify({ type: nc.type, name: nc.name.trim(), phone: nc.phone.trim(), regNumber: nc.regNumber.trim() || undefined }),
+      });
+      onChange(c);
+      setCreating(false);
+      setNc({ type: 'COMPANY', name: '', phone: '', regNumber: '' });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Бүртгэж чадсангүй');
+    }
+  }
 
   useEffect(() => {
     const term = q.trim();
@@ -54,8 +75,56 @@ export function CustomerPicker({
     );
   }
 
+  if (creating) {
+    return (
+      <div className="space-y-2 rounded-lg border border-slate-700 p-2 text-xs">
+        <div className="grid grid-cols-2 gap-1">
+          {(
+            [
+              ['COMPANY', 'Байгууллага'],
+              ['INDIVIDUAL', 'Хувь хүн'],
+            ] as const
+          ).map(([k, l]) => (
+            <button key={k} type="button" className={nc.type === k ? 'btn-primary text-xs' : 'btn-ghost text-xs'} onClick={() => setNc({ ...nc, type: k })}>
+              {l}
+            </button>
+          ))}
+        </div>
+        <input className="w-full" placeholder={nc.type === 'COMPANY' ? 'Байгууллагын нэр' : 'Овог нэр'} value={nc.name} onChange={(e) => setNc({ ...nc, name: e.target.value })} />
+        <input className="w-full" placeholder="Утас" inputMode="tel" value={nc.phone} onChange={(e) => setNc({ ...nc, phone: e.target.value })} />
+        <input
+          className="w-full"
+          placeholder={nc.type === 'COMPANY' ? 'РД (7 оронтой) — заавал' : 'Регистрийн дугаар (заавал биш)'}
+          value={nc.regNumber}
+          onChange={(e) => setNc({ ...nc, regNumber: e.target.value })}
+        />
+        {err && <p className="text-red-400">{err}</p>}
+        <div className="flex gap-2">
+          <button type="button" className="btn-primary text-xs" disabled={nc.name.trim().length < 2 || nc.phone.trim().length < 8} onClick={() => void create()}>
+            Бүртгээд сонгох
+          </button>
+          <button type="button" className="btn-ghost text-xs" onClick={() => setCreating(false)}>
+            Болих
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative">
+      {allowCreate && (
+        <button
+          type="button"
+          className="absolute right-1 top-1 z-10 rounded px-2 py-1 text-xs text-amber-brand hover:underline"
+          onClick={() => {
+            setNc({ ...nc, name: q.trim() });
+            setCreating(true);
+          }}
+        >
+          + Шинэ
+        </button>
+      )}
       <input
         placeholder="Бүртгэлтэй харилцагч хайх (нэр, утас, РД)…"
         className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"

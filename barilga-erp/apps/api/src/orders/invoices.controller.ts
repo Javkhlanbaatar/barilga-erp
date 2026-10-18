@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
@@ -36,6 +36,15 @@ export class InvoicesController {
   @Roles(...POS_ROLES)
   sent(@Param('id') id: string, @Body() dto: MarkInvoiceSentDto, @CurrentUser() user: AuthUser) {
     return this.invoices.markSent(id, dto.via, user);
+  }
+
+  /** Extend the time to pay (default 7 days). */
+  @Post(':id/extend')
+  @Roles(...POS_ROLES)
+  extend(@Param('id') id: string, @Body() body: { days?: number }, @CurrentUser() user: AuthUser) {
+    const days = Math.round(Number(body?.days ?? 7));
+    if (!(days >= 1 && days <= 90)) throw new BadRequestException('days must be 1–90');
+    return this.invoices.extend(id, days, user);
   }
 
   @Post(':id/cancel')

@@ -98,8 +98,10 @@ export class InvoicesService {
     const fields = {
       recipientEmail: dto.recipientEmail ?? order.invoice?.recipientEmail ?? order.customer?.email ?? null,
       recipientPhone: dto.recipientPhone ?? order.invoice?.recipientPhone ?? order.customerPhone ?? null,
-      // The whole due day counts, in Ulaanbaatar time.
-      dueDate: dto.dueDate ? new Date(`${dto.dueDate.slice(0, 10)}T23:59:59+08:00`) : (order.invoice?.dueDate ?? null),
+      // The whole due day counts, in Ulaanbaatar time. A new invoice is due in 7 days unless told otherwise.
+      dueDate: dto.dueDate
+        ? new Date(`${dto.dueDate.slice(0, 10)}T23:59:59+08:00`)
+        : (order.invoice?.dueDate ?? InvoicesService.endOfDayIn(7)),
       note: dto.note ?? order.invoice?.note ?? null,
     };
     if (order.invoice) {
@@ -134,6 +136,26 @@ export class InvoicesService {
     }
     this.log.log(`Invoice ${created.invoiceNumber} for ${order.orderNumber} by ${user.id}`);
     return this.present(created);
+  }
+
+  /** 23:59:59 Ulaanbaatar time, `days` days from today. */
+  static endOfDayIn(days: number, from = new Date()) {
+    const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(from.getTime() + days * 86_400_000));
+    return new Date(`${ymd}T23:59:59+08:00`);
+  }
+
+  /** More time to pay: from the later of today and the current due date, by `days` (default 7). */
+  async extend(id: string, days: number, user: AuthUser) {
+    await this.assertOn();
+    const row = await this.prisma.invoice.findUnique({ where: { id }, include: INVOICE_INCLUDE });
+    if (!row) throw new NotFoundException('Invoice not found');
+    await this.assertAccess(user, row.order.warehouseId);
+    if (row.cancelledAt) throw new BadRequestException('Энэ нэхэмжлэх цуцлагдсан / Invoice was cancelled');
+    const base = row.dueDate && row.dueDate.getTime() > Date.now() ? row.dueDate : new Date();
+    const dueDate = InvoicesService.endOfDayIn(days, base);
+    const updated = await this.prisma.invoice.update({ where: { id }, data: { dueDate }, include: INVOICE_INCLUDE });
+    this.log.log(`Invoice ${row.invoiceNumber} due date ${row.dueDate?.toISOString() ?? '—'} → ${dueDate.toISOString()} by ${user.id}`);
+    return this.present(updated);
   }
 
   /** The order's invoice with its link key, for staff who may see that order. */

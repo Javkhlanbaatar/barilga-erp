@@ -741,6 +741,41 @@ export class OrdersService {
     return { outcomes, order: await this.findOne(orderId, user) };
   }
 
+  /**
+   * Sets who the order is for after the sale (an invoice printed with empty buyer lines, then the customer was
+   * registered). Name, phone and РД on the order and its invoice follow the customer. Not once part of it is on
+   * account or offset against a partner: that money is already booked to whoever was chosen at the till.
+   */
+  async attachCustomer(orderId: string, customerId: string, user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can change the buyer');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { payments: true } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (order.status === OrderStatus.CANCELLED) throw new BadRequestException('Order is cancelled');
+    if (order.payments.some((p) => p.method === PayMethod.CREDIT || p.method === PayMethod.OFFSET)) {
+      throw new BadRequestException('Зээл эсвэл гэрээгээр олгосон захиалгын харилцагчийг солихгүй / The buyer of an on-account or contract sale cannot change');
+    }
+    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer || !customer.isActive) throw new NotFoundException('Customer not found');
+    await this.prisma.$transaction([
+      this.prisma.order.update({
+        where: { id: orderId },
+        data: {
+          customerId: customer.id,
+          customerName: customer.name,
+          customerPhone: customer.phone,
+          customerRegNumber: customer.regNumber ?? null,
+        },
+      }),
+      this.prisma.invoice.updateMany({
+        where: { orderId },
+        data: { customerId: customer.id, recipientEmail: customer.email ?? undefined, recipientPhone: customer.phone },
+      }),
+    ]);
+    this.log.log(`Order ${order.orderNumber}: buyer set to ${customer.name} (${customer.id}) by ${user.id}`);
+    return this.findOne(orderId, user);
+  }
+
   async confirmTransfer(orderId: string, user: AuthUser) {
     if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can confirm payments');
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });

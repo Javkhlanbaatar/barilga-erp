@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { OrderStatus, Role } from '@prisma/client';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -148,6 +148,14 @@ export class OrdersController {
   @Roles(...POS_ROLES)
   checkQpay(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.orders.checkQpay(id, user);
+  }
+
+  /** Who the order is for, set after the sale (e.g. once the company is registered). */
+  @Patch(':id/customer')
+  @Roles(...POS_ROLES)
+  attachCustomer(@Param('id') id: string, @Body() body: { customerId?: string }, @CurrentUser() user: AuthUser) {
+    if (!body?.customerId || typeof body.customerId !== 'string') throw new BadRequestException('customerId is required');
+    return this.orders.attachCustomer(id, body.customerId, user);
   }
 
   /** The invoiced bank transfer arrived: release the order. */

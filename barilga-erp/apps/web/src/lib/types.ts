@@ -206,6 +206,8 @@ export type Order = {
   status: 'PENDING_PAYMENT' | 'READY_FOR_LOADING' | 'COMPLETED' | 'CANCELLED';
   customerName: string;
   customerPhone: string;
+  /** Registered customer the order is for (null = walk-in). */
+  customerId?: string | null;
   warehouse?: { id: string; code: string; name: string } | null;
   deliveryAddress?: string | null;
   notes?: string | null;

@@ -113,6 +113,8 @@ export default function CheckoutPOS() {
   const [splitInvoice, setSplitInvoice] = useState(0);
   /** Cash is the balancing line: it holds whatever the other methods do not cover, until typed by hand. */
   const [cashManual, setCashManual] = useState(false);
+  /** Bank transfer sales: make the invoice (due in 7 days) and print it right after the order is created. */
+  const [makeInvoice, setMakeInvoice] = useState(true);
   /** What we owe the selected supply/barter partner — the most a contract sale can take. */
   const [partnerPayable, setPartnerPayable] = useState<number | null>(null);
   const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
@@ -446,6 +448,15 @@ export default function CheckoutPOS() {
         }),
       });
       setCashRefresh((n) => n + 1);
+      if (invoiceNow) {
+        try {
+          await api('/invoices', { method: 'POST', body: JSON.stringify({ orderId: order.id }) });
+          router.push(`/orders/${order.id}?new=1&invoice=1`);
+          return;
+        } catch {
+          // the order exists; the invoice can still be made on its page
+        }
+      }
       router.push(`/orders/${order.id}?new=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Захиалга үүсгэж чадсангүй');
@@ -455,6 +466,8 @@ export default function CheckoutPOS() {
   }
 
   const usesQpay = paymentMode === 'SPLIT' ? splitQpay > 0 : paymentMethod === 'QPAY';
+  const usesTransfer = paymentMode === 'SPLIT' ? splitTransfer > 0 : paymentMethod === 'TRANSFER';
+  const invoiceNow = usesTransfer && makeInvoice && features.enabled('INVOICES');
   // On account (зарлагаар): goods leave now, the customer pays later; only for a registered customer.
   const usesCredit = paymentMode === 'SPLIT' ? splitCredit > 0 : paymentMethod === 'CREDIT';
   const contractAmount = paymentMode === 'SPLIT' ? splitContract : paymentMethod === 'CONTRACT' ? totalMnt : 0;
@@ -763,7 +776,7 @@ export default function CheckoutPOS() {
             </div>
           )}
 
-          {features.enabled('CUSTOMERS') && <CustomerPicker value={customer} onChange={pickCustomer} />}
+          {features.enabled('CUSTOMERS') && <CustomerPicker value={customer} onChange={pickCustomer} allowCreate />}
           <input
             placeholder="Харилцагчийн нэр (заавал биш)"
             className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
@@ -986,6 +999,17 @@ export default function CheckoutPOS() {
                   {splitOk ? ' — зөв' : ` — зөрүү ${tugrik(totalMnt - splitSum)}`}
                 </p>
               </div>
+            )}
+            {usesTransfer && features.enabled('INVOICES') && (
+              <label className="mt-2 flex items-start gap-2 rounded-lg border border-sky-800 bg-sky-950/30 p-2 text-xs text-sky-100">
+                <input type="checkbox" className="mt-0.5" checked={makeInvoice} onChange={(e) => setMakeInvoice(e.target.checked)} />
+                <span>
+                  Нэхэмжлэх гаргаж хэвлэх (төлөх хугацаа 7 хоног)
+                  <span className="block text-[11px] text-slate-400">
+                    {customer ? `«${customer.name}» нэрээр гарна.` : 'Харилцагч сонгоогүй бол «Төлөгч» хэсэг хоосон мөртэй гарна — дараа нь харилцагч оноож болно.'}
+                  </span>
+                </span>
+              </label>
             )}
           </div>
 

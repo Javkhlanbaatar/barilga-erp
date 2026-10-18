@@ -84,8 +84,8 @@ export default function OrderDetailPage() {
   }, []);
 
   /** Prints the sales receipt in a hidden frame (no new window), once per order per browser tab. */
-  const printReceipt = useCallback((force = false) => {
-    const key = `receipt_printed_${params.id}`;
+  const printReceipt = useCallback((force = false, doc: 'receipt' | 'invoice' = 'receipt') => {
+    const key = `${doc}_printed_${params.id}`;
     try {
       if (!force && sessionStorage.getItem(key)) return;
       sessionStorage.setItem(key, '1');
@@ -96,7 +96,7 @@ export default function OrderDetailPage() {
     const frame = document.createElement('iframe');
     frame.id = 'receipt-frame';
     frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-    frame.src = `/print/orders/${params.id}?doc=receipt`;
+    frame.src = `/print/orders/${params.id}?doc=${doc}`;
     document.body.appendChild(frame);
   }, [params.id]);
 
@@ -105,6 +105,10 @@ export default function OrderDetailPage() {
     const paidNow = order.status === 'READY_FOR_LOADING' || order.status === 'COMPLETED';
     const wasWaiting = prevStatus.current === 'PENDING_PAYMENT';
     const fresh = prevStatus.current === null && new URLSearchParams(window.location.search).get('new') === '1';
+    // A bank-transfer sale made with «Нэхэмжлэх гаргах» at the till: print the invoice straight away.
+    if (prevStatus.current === null && new URLSearchParams(window.location.search).get('invoice') === '1') {
+      printReceipt(false, 'invoice');
+    }
     if (paidNow && (wasWaiting || fresh)) {
       if (wasWaiting) setJustPaid(true);
       if (autoPrint) printReceipt();

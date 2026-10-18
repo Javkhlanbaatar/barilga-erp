@@ -2,7 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, tugrik } from '@/lib/api';
-import { INVOICE_STATE_LABEL, Invoice, Order } from '@/lib/types';
+import { CustomerPicker } from '@/components/customer-picker';
+import { Customer, INVOICE_STATE_LABEL, Invoice, Order } from '@/lib/types';
 
 const plusDays = (n: number) =>
   new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(Date.now() + n * 86_400_000));
@@ -125,6 +126,31 @@ export function InvoicePanel({ order, canManage, onOrder }: { order: Order; canM
     await sent('PRINT');
   }
 
+  /** The buyer was registered after the sale: put them on the order and the invoice. */
+  async function attach(c: Customer | null) {
+    if (!c) return;
+    setError('');
+    try {
+      onOrder(await api<Order>(`/orders/${order.id}/customer`, { method: 'PATCH', body: JSON.stringify({ customerId: c.id }) }));
+      await load();
+      setMsg(`«${c.name}» нэхэмжлэх дээр орлоо.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Харилцагч оноож чадсангүй');
+    }
+  }
+
+  async function extend() {
+    if (!inv) return;
+    setError('');
+    try {
+      await api(`/invoices/${inv.id}/extend`, { method: 'POST', body: JSON.stringify({ days: 7 }) });
+      await load();
+      setMsg('Төлөх хугацааг 7 хоногоор сунгалаа.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Сунгаж чадсангүй');
+    }
+  }
+
   async function cancel() {
     if (!inv || !window.confirm(`${inv.invoiceNumber} нэхэмжлэхийг цуцлах уу? Илгээсэн холбоос ажиллахаа болино.`)) return;
     try {
@@ -185,9 +211,24 @@ export function InvoicePanel({ order, canManage, onOrder }: { order: Order; canM
       ) : (
         <>
           <p className="text-sm text-slate-300">
-            {inv.recipientEmail ?? 'имэйлгүй'} · {inv.recipientPhone ?? '—'}
-            {inv.dueDate && <> · төлөх хугацаа <b>{day(inv.dueDate)}</b></>}
+            Төлөгч: <b>{order.customerId ? order.customerName : 'тодорхойгүй (хэвлэхэд хоосон мөр)'}</b> · {inv.recipientEmail ?? 'имэйлгүй'} ·{' '}
+            {inv.recipientPhone ?? '—'}
+            {inv.dueDate && (
+              <>
+                {' '}
+                · төлөх хугацаа <b className={inv.state === 'OVERDUE' ? 'text-red-300' : ''}>{day(inv.dueDate)}</b>
+                {inv.state === 'OVERDUE' && <span className="text-red-300"> (хэтэрсэн)</span>}
+              </>
+            )}
           </p>
+          {!order.customerId && inv.state !== 'CANCELLED' && (
+            <div className="text-xs text-slate-400">
+              Харилцагч оноох (байхгүй бол «+ Шинэ» дарж бүртгэнэ):
+              <div className="mt-1 max-w-md">
+                <CustomerPicker value={null} onChange={(c) => void attach(c)} allowCreate />
+              </div>
+            </div>
+          )}
           <p className="text-xs text-slate-400">
             Үлдэгдэл {tugrik(inv.owedMnt)} / {tugrik(order.totalMnt)}
             {inv.sentAt ? ` · сүүлд ${when(inv.sentAt)}-д ${VIA_MN[inv.lastSentVia ?? ''] ?? ''} илгээсэн (${inv.sendCount} удаа)` : ' · хараахан илгээгээгүй'}
@@ -206,9 +247,14 @@ export function InvoicePanel({ order, canManage, onOrder }: { order: Order; canM
               >
                 Имэйлээр илгээх
               </button>
-              <button className="btn-ghost text-sm" onClick={() => void print()}>
-                Хэвлэх
+              <button className="btn-ghost text-sm" onClick={() => void print()} title="Хэвлэх цонхонд «Save as PDF» сонговол PDF болж хадгалагдана">
+                Хэвлэх / PDF
               </button>
+              {inv.state !== 'PAID' && (
+                <button className="btn-ghost text-sm" onClick={() => void extend()}>
+                  Хугацаа +7 хоног
+                </button>
+              )}
               <button className="btn-ghost text-sm" onClick={() => setEditing(true)}>
                 Засах
               </button>
