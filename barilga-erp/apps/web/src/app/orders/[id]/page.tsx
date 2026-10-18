@@ -752,6 +752,24 @@ export default function OrderDetailPage() {
             </div>
             {error && <p className="text-red-400 text-sm">{error}</p>}
 
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() =>
+                  setReturnQty(
+                    Object.fromEntries(
+                      order.items.map((i) => [i.id, Math.max(0, Math.round((Number(i.quantity) - (returnedByItem[i.id] ?? 0)) * 1000) / 1000)]),
+                    ),
+                  )
+                }
+              >
+                Бүх барааг буцаах
+              </button>
+              <button type="button" className="btn-ghost text-xs" onClick={() => setReturnQty(Object.fromEntries(order.items.map((i) => [i.id, 0])))}>
+                Арилгах
+              </button>
+            </div>
             <table className="w-full text-sm">
               <thead className="text-left text-[11px] text-slate-400">
                 <tr>

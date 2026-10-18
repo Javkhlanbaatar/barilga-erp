@@ -4,7 +4,7 @@ import { AuthUser } from '../auth/current-user.decorator';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
 import { assertCashDrawerOpen } from '../cash/cash-drawer';
 import { InventoryService } from '../inventory/inventory.service';
-import { assertWarehouseAccess, isManagerRole } from '../inventory/warehouse-scope';
+import { assertWarehouseAccess, isManagerRole, orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReturnDto } from './dto/create-return.dto';
 
@@ -281,6 +281,46 @@ export class ReturnsService {
         totalAmount: l.lineRefund,
       })),
     };
+  }
+
+  /**
+   * Card / transfer refunds, for the person who sends the money: still to pay first, then the last 30 days
+   * of ones already sent. Managers only, limited to their warehouses.
+   */
+  async payouts(user: AuthUser) {
+    if (!isManagerRole(user.role)) throw new ForbiddenException('Only managers can see refund payouts');
+    const scope: Prisma.OrderWhereInput = seesAllWarehouses(user) ? {} : orderWarehouseWhere(user, await this.inventory.defaultWarehouseId());
+    const select = {
+      id: true,
+      refundAmount: true,
+      refundMethod: true,
+      refundStatus: true,
+      refundAccount: true,
+      reason: true,
+      createdAt: true,
+      paidOutAt: true,
+      createdBy: { select: { fullName: true } },
+      order: { select: { id: true, orderNumber: true, customerName: true, customerPhone: true } },
+    } as const;
+    const [pending, sent] = await Promise.all([
+      this.prisma.salesReturn.findMany({
+        where: { refundStatus: RefundStatus.PENDING_PAYOUT, refundAmount: { gt: 0 }, order: scope },
+        select,
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.salesReturn.findMany({
+        where: {
+          refundStatus: RefundStatus.PAID_OUT,
+          refundMethod: { in: [PayMethod.TRANSFER, PayMethod.CARD, PayMethod.QPAY] },
+          paidOutAt: { gte: new Date(Date.now() - 30 * 86_400_000) },
+          order: scope,
+        },
+        select,
+        orderBy: { paidOutAt: 'desc' },
+        take: 100,
+      }),
+    ]);
+    return { pending, sent, pendingMnt: pending.reduce((s, r) => s + r.refundAmount, 0) };
   }
 
   /** A card or bank-transfer refund was actually sent to the customer (managers, their own warehouses). */

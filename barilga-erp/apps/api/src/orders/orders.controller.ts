@@ -77,6 +77,13 @@ export class OrdersController {
     return this.orders.listRecentlyPrepared(user);
   }
 
+  /** Card / transfer refunds still to send, and recently sent ones. */
+  @Get('returns/payouts')
+  @Roles(...OVERSIGHT_ROLES)
+  refundPayouts(@CurrentUser() user: AuthUser) {
+    return this.returns.payouts(user);
+  }
+
   @Get(':id')
   @Roles(Role.ADMIN, Role.MANAGER, Role.BORLUULAGCH, Role.ACHIGCH_BELTGEGCH)
   findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {

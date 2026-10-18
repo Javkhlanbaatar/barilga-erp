@@ -16,6 +16,12 @@ export const REPORTS: Array<{ href: string; label: string; hint: string; roles: 
     roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'],
   },
   {
+    href: '/reports/refunds',
+    label: 'Буцаах мөнгө',
+    hint: 'Буцаалтын мөнгийг харилцагчийн данс руу шилжүүлэх жагсаалт',
+    roles: ['ADMIN', 'MANAGER'],
+  },
+  {
     href: '/reports/cash',
     label: 'Касс',
     hint: 'Ээлж бүрийн касс: байх ёстой, тоолсон, илүү/дутуу',

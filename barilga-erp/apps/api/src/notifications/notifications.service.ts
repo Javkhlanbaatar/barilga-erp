@@ -220,7 +220,7 @@ export class NotificationsService {
         const n = await this.prisma.salesReturn.count({
           where: { refundStatus: RefundStatus.PENDING_PAYOUT, refundAmount: { gt: 0 }, order: orderScope },
         });
-        return n ? { key: 'refunds-pending', level: 'warn', title: 'Олгоогүй буцаалтын мөнгө', count: n, href: '/orders' } : null;
+        return n ? { key: 'refunds-pending', level: 'warn', title: 'Харилцагчид буцааж шилжүүлэх мөнгө', count: n, href: '/reports/refunds' } : null;
       });
     }
 
