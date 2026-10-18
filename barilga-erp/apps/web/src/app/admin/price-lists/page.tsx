@@ -101,6 +101,38 @@ export default function PriceListsPage() {
       .filter((c) => c.priceMnt !== c.before && (c.priceMnt === null || (Number.isFinite(c.priceMnt) && c.priceMnt >= 0)));
   }, [detail, draft]);
 
+  /**
+   * Ready-made lists so the feature works on day one: the list is created and its prices filled in one go
+   * (wholesale = retail − 10%, cost = last purchase price where known, barter = retail). Prices can be changed
+   * afterwards like any other list.
+   */
+  async function quickStart(kind: 'wholesale' | 'cost' | 'barter') {
+    const names = { wholesale: 'Бөөний үнэ', cost: 'Өртгийн үнэ', barter: 'Бартерын үнэ' } as const;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const created = await api<PriceList>('/price-lists', { method: 'POST', body: JSON.stringify({ name: names[kind] }) });
+      const d = await api<Detail>(`/price-lists/${created.id}/prices`);
+      const prices = d.products
+        .map((p) => ({
+          productId: p.productId,
+          priceMnt: kind === 'wholesale' ? Math.round(p.retailMnt * 0.9) : kind === 'cost' ? p.lastCostMnt : p.retailMnt,
+        }))
+        .filter((p): p is { productId: string; priceMnt: number } => p.priceMnt !== null && p.priceMnt >= 0);
+      if (prices.length) await api(`/price-lists/${created.id}/prices`, { method: 'PUT', body: JSON.stringify({ prices }) });
+      await loadLists();
+      setSelected(created.id);
+      setMessage({
+        ok: true,
+        text: `«${names[kind]}» үүслээ (${prices.length} барааны үнэ). Харилцагчид оноохдоо: Харилцагчид → засах → «Үнийн жагсаалт».`,
+      });
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Үүсгэж чадсангүй' });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function createList(e: FormEvent) {
     e.preventDefault();
     if (newName.trim().length < 2) return;
@@ -365,7 +397,38 @@ export default function PriceListsPage() {
           </table>
         </div>
       )}
-      {ready && lists.length === 0 && <p className="text-slate-500">Үнийн жагсаалт алга. Дээрээс нэр өгч үүсгэнэ үү (жишээ нь «Өртгийн үнэ», «Бартерын үнэ»).</p>}
+      {ready && lists.length === 0 && (
+        <div className="card max-w-3xl space-y-3">
+          <p className="font-semibold">Эхлэх</p>
+          <p className="text-sm text-slate-400">
+            Үнийн жагсаалт нь тодорхой харилцагчдад өөр үнээр зарахад хэрэглэгдэнэ. Доорхоос бэлэн загвар сонгоход үнэ нь автоматаар бөглөгдөнө —
+            дараа нь бараа тус бүрийн үнийг засаж болно.
+          </p>
+          {canEdit ? (
+            <div className="grid gap-2 sm:grid-cols-3">
+              {(
+                [
+                  ['wholesale', 'Бөөний үнэ', 'Жижиглэн үнээс 10% хямд'],
+                  ['cost', 'Өртгийн үнэ', 'Сүүлд авсан өртгөөр (өртөгтэй бараа)'],
+                  ['barter', 'Бартерын үнэ', 'Жижиглэн үнээр эхэлнэ, дараа нь засна'],
+                ] as const
+              ).map(([k, title, hint]) => (
+                <button key={k} type="button" className="rounded-lg border border-slate-700 p-3 text-left hover:border-amber-500" disabled={busy} onClick={() => void quickStart(k)}>
+                  <span className="block font-semibold">{title}</span>
+                  <span className="block text-xs text-slate-400">{hint}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">Үнийн жагсаалтыг админ эсвэл ерөнхий менежер үүсгэнэ.</p>
+          )}
+          <ol className="list-decimal space-y-1 pl-5 text-xs text-slate-400">
+            <li>Жагсаалт үүсгэж үнийг тохируулна.</li>
+            <li>«Харилцагчид» → харилцагч засах → «Үнийн жагсаалт»-аас сонгоно.</li>
+            <li>Касс дээр тэр харилцагчийг сонгоход сагсны үнэ автоматаар жагсаалтын үнээр бодогдоно (жагсаалтад байхгүй бараа жижиглэн үнээр).</li>
+          </ol>
+        </div>
+      )}
     </Shell>
   );
 }

@@ -47,7 +47,10 @@ export default function TransfersPage() {
   const [me, setMe] = useState<AuthUser | null>(null);
   const [rows, setRows] = useState<StockTransfer[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [filter, setFilter] = useState<TransferStatus | 'ALL'>('IN_TRANSIT');
+  const [filter, setFilter] = useState<TransferStatus | 'ALL'>('ALL');
+  /** Admin: register the second shop / warehouse right here when there is only one. */
+  const [newWh, setNewWh] = useState({ code: '', name: '', kind: 'WAREHOUSE' as 'SHOP' | 'WAREHOUSE' });
+  const [whMsg, setWhMsg] = useState('');
   const [pending, setPending] = useState<{ toSend: number; toReceive: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -351,6 +354,54 @@ export default function TransfersPage() {
           </button>
         </div>
       </div>
+
+      {warehouses.length > 0 && active.length < 2 && (
+        <div className="mb-4 space-y-3 rounded-xl border border-amber-700 bg-amber-950/30 p-4 text-sm">
+          <p className="font-semibold text-amber-200">Шилжүүлэг эхлүүлэхэд 2 ба түүнээс дээш дэлгүүр/агуулах хэрэгтэй.</p>
+          <p className="text-slate-300">
+            Одоо зөвхөн «{active[0]?.name ?? '—'}» бүртгэлтэй байна. Хоёр дахь дэлгүүр эсвэл төв агуулахаа бүртгэмэгц «Бараа хүсэх», «Шууд илгээх» ажиллана.
+          </p>
+          {me?.role === 'ADMIN' ? (
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-xs text-slate-400">
+                Төрөл
+                <select className="mt-1 block" value={newWh.kind} onChange={(e) => setNewWh({ ...newWh, kind: e.target.value as 'SHOP' | 'WAREHOUSE' })}>
+                  <option value="WAREHOUSE">Агуулах</option>
+                  <option value="SHOP">Дэлгүүр</option>
+                </select>
+              </label>
+              <label className="text-xs text-slate-400">
+                Код
+                <input className="mt-1 block w-28" placeholder="WH1" value={newWh.code} onChange={(e) => setNewWh({ ...newWh, code: e.target.value.toUpperCase() })} />
+              </label>
+              <label className="text-xs text-slate-400">
+                Нэр
+                <input className="mt-1 block w-56" placeholder="Төв агуулах" value={newWh.name} onChange={(e) => setNewWh({ ...newWh, name: e.target.value })} />
+              </label>
+              <button
+                className="btn-primary text-sm"
+                disabled={newWh.code.trim().length < 2 || newWh.name.trim().length < 2}
+                onClick={async () => {
+                  setWhMsg('');
+                  try {
+                    await api('/inventory/warehouses', { method: 'POST', body: JSON.stringify({ code: newWh.code.trim(), name: newWh.name.trim(), kind: newWh.kind }) });
+                    setWarehouses(await api<Warehouse[]>('/inventory/warehouses'));
+                    setNewWh({ code: '', name: '', kind: 'WAREHOUSE' });
+                    setWhMsg('Бүртгэгдлээ. Ажилтнуудаа «Хэрэглэгчид» хэсэгт энэ газарт оноогоорой.');
+                  } catch (err) {
+                    setWhMsg(err instanceof Error ? err.message : 'Бүртгэж чадсангүй');
+                  }
+                }}
+              >
+                Бүртгэх
+              </button>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400">Админ «Дэлгүүр / агуулах» хэсэгт шинэ газар бүртгэнэ.</p>
+          )}
+          {whMsg && <p className="text-xs text-emerald-300">{whMsg}</p>}
+        </div>
+      )}
 
       {pending && (pending.toSend > 0 || pending.toReceive > 0) && (
         <div className="mb-3 flex flex-wrap gap-2 text-sm">
