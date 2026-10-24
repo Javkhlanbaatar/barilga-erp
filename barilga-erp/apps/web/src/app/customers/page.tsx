@@ -1,13 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Modal } from '@/components/modal';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { hasRole, homeForRole, OVERSIGHT_ROLES, POS_ROLES } from '@/lib/rbac';
 import { AccountPanel } from '@/components/account-panel';
 import { PartnerTradePanel } from '@/components/partner-trade';
+import { CustomerOwnPrices } from '@/components/customer-prices';
 import { useFeatures } from '@/lib/features';
 import { useCan } from '@/lib/permissions';
 import { AuthUser, Customer, CustomerDetail, CustomerType, ORDER_STATUS_LABEL, PriceList } from '@/lib/types';
@@ -54,7 +56,7 @@ function PayDebt({ customerId, owedTotal, onDone }: { customerId: string; owedTo
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2">
       {owed < owedTotal && <p className="w-full text-[11px] text-slate-400">Таны салбарт: {tugrik(owed)}</p>}
-      <input className="w-32" type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      <input className="w-32" type="number" inputMode="numeric" aria-label="Төлөх дүн" value={amount} onChange={(e) => setAmount(e.target.value)} />
       <select value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
         <option value="CASH">Бэлэн</option>
         <option value="CARD">Карт</option>
@@ -93,10 +95,13 @@ export default function CustomersPage() {
   const [detail, setDetail] = useState<CustomerDetail | null>(null);
   const [modal, setModal] = useState<'create' | 'edit' | null>(null);
   const [form, setForm] = useState(emptyForm);
+  // The form as the dialog opened: closing it with changes (also the type buttons) asks first.
+  const openedForm = useRef('');
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [detailTab, setDetailTab] = useState<'account' | 'trade'>('account');
+  const detailRef = useRef<HTMLElement>(null);
 
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
   const can = useCan();
@@ -154,9 +159,13 @@ export default function CustomersPage() {
     if (focus) void api<CustomerDetail>(`/customers/${focus}`).then(setDetail).catch(() => undefined);
   }, [me]);
 
-  async function openDetail(c: Customer) {
+  /** `scroll`: on phones and tablets the detail sits below the list, so bring it into view once it is loaded. */
+  async function openDetail(c: Customer, scroll = true) {
     try {
       setDetail(await api<CustomerDetail>(`/customers/${c.id}`));
+      if (scroll && window.matchMedia('(max-width: 1023px)').matches) {
+        window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      }
     } catch (err) {
       flash('error', err instanceof Error ? err.message : 'Алдаа');
     }
@@ -164,12 +173,13 @@ export default function CustomersPage() {
 
   function openCreate() {
     setForm(emptyForm);
+    openedForm.current = JSON.stringify(emptyForm);
     setFormError('');
     setModal('create');
   }
 
   function openEdit(c: Customer) {
-    setForm({
+    const next = {
       type: c.type,
       name: c.name,
       phone: c.phone,
@@ -182,7 +192,9 @@ export default function CustomersPage() {
       creditAllowed: c.creditAllowed ?? false,
       sellsToUs: c.sellsToUs ?? false,
       barterContract: c.barterContract ?? '',
-    });
+    };
+    setForm(next);
+    openedForm.current = JSON.stringify(next);
     setFormError('');
     setModal('edit');
   }
@@ -255,7 +267,7 @@ export default function CustomersPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-3 mb-3">
-        <input className="w-80" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Нэр, утас, РД-ээр хайх…" />
+        <input className="w-full sm:w-80" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Нэр, утас, РД-ээр хайх…" />
         <label className="text-sm text-slate-400 flex items-center gap-2">
           <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
           Идэвхгүйг харуулах
@@ -263,8 +275,26 @@ export default function CustomersPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
-        <div className="card overflow-auto p-0">
-          <table className="w-full text-sm min-w-[560px]">
+        <div className="card min-w-0 p-0">
+          {/* Phones: a tap-friendly list instead of the 4-column table. */}
+          <ul className="divide-y divide-slate-800 md:hidden">
+            {rows.map((c) => (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  className={`block w-full px-3 py-2.5 text-left ${detail?.id === c.id ? 'bg-steel-800' : ''} ${c.isActive ? '' : 'opacity-60'}`}
+                  onClick={() => void openDetail(c)}
+                >
+                  <span className="block font-medium">{c.name}</span>
+                  <span className="block text-xs text-slate-400">
+                    {TYPE_LABEL[c.type]} · {c.phone}
+                    {c.regNumber ? ` · РД ${c.regNumber}` : ''}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <table className="hidden w-full text-sm md:table">
             <thead className="text-left text-slate-400 border-b border-slate-700">
               <tr>
                 <th className="p-3">Нэр</th>
@@ -292,7 +322,7 @@ export default function CustomersPage() {
           {!loading && rows.length === 0 && <p className="p-3 text-slate-500">Харилцагч олдсонгүй.</p>}
         </div>
 
-        <aside className="card h-fit">
+        <aside ref={detailRef} className="card h-fit min-w-0 scroll-mt-16">
           {!detail ? (
             <p className="text-slate-500 text-sm">Дэлгэрэнгүйг харахын тулд харилцагч сонгоно уу.</p>
           ) : (
@@ -318,6 +348,7 @@ export default function CustomersPage() {
                     Үнэ: <span className="text-emerald-300">{detail.priceList?.name ?? 'Жижиглэн үнэ'}</span>
                   </p>
                 )}
+                <CustomerOwnPrices key={detail.id} customerId={detail.id} canRemove={can('PRICE_OVERRIDE')} />
               </div>
               {detail.credit && detail.credit.owedMnt > 0 && (
                 <div className="rounded-lg border border-amber-700/60 p-3">
@@ -335,7 +366,7 @@ export default function CustomersPage() {
                     ))}
                   </ul>
                   {features.enabled('CREDIT_SALES') && can('PAY_DEBT') && (
-                    <PayDebt customerId={detail.id} owedTotal={detail.credit.owedMnt} onDone={() => void openDetail(detail)} />
+                    <PayDebt customerId={detail.id} owedTotal={detail.credit.owedMnt} onDone={() => void openDetail(detail, false)} />
                   )}
                 </div>
               )}
@@ -367,7 +398,7 @@ export default function CustomersPage() {
                   </ul>
                 )}
               </div>
-              <div className="flex gap-2 pt-1">
+              <div className="flex flex-wrap gap-2 pt-1">
                 <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(detail)}>
                   Засах
                 </button>
@@ -387,7 +418,7 @@ export default function CustomersPage() {
 
       {detail && (
         <div className="mt-4 space-y-2">
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {features.enabled('PARTNER_ACCOUNTS') && (
               <button className={detailTab === 'account' ? 'btn-primary text-sm' : 'btn-ghost text-sm'} onClick={() => setDetailTab('account')}>
                 Тооцоо (авлага / өглөг)
@@ -414,9 +445,24 @@ export default function CustomersPage() {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={save} className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">{modal === 'create' ? 'Харилцагч нэмэх' : 'Харилцагч засах'}</h3>
+        <Modal
+          onClose={() => setModal(null)}
+          dirty={JSON.stringify(form) !== openedForm.current}
+          title={modal === 'create' ? 'Харилцагч нэмэх' : 'Харилцагч засах'}
+          size="md"
+          busy={saving}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
+                Болих
+              </button>
+              <button type="submit" form="customer-form" className="btn-primary" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+              </button>
+            </>
+          }
+        >
+          <form id="customer-form" onSubmit={save} className="space-y-3">
             {formError && <p className="text-red-400 text-sm">{formError}</p>}
             {modal === 'create' && (
               <div className="flex gap-2">
@@ -424,7 +470,7 @@ export default function CustomersPage() {
                   <button
                     key={t}
                     type="button"
-                    className={`flex-1 rounded-md px-3 py-1.5 text-sm ${form.type === t ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
+                    className={`min-h-[40px] flex-1 rounded-md px-3 py-1.5 text-sm ${form.type === t ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
                     onClick={() => setForm({ ...form, type: t })}
                   >
                     {TYPE_LABEL[t]}
@@ -438,7 +484,7 @@ export default function CustomersPage() {
             </label>
             <label className="block text-xs text-slate-400">
               Утас
-              <input className="mt-1 w-full" required pattern="[0-9+\-\s]{8,15}" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              <input className="mt-1 w-full" type="tel" inputMode="tel" required pattern="[0-9+\-\s]{8,15}" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </label>
             <label className="block text-xs text-slate-400">
               {form.type === 'COMPANY' ? 'РД (заавал, 7 оронтой)' : 'Регистрийн дугаар (заавал биш, жишээ нь УБ12345678)'}
@@ -495,21 +541,13 @@ export default function CustomersPage() {
               Тэмдэглэл
               <textarea className="mt-1 w-full" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             </label>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
-                Болих
-              </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {toast && (
         <div
-          className={`fixed bottom-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          className={`fixed bottom-4 left-4 right-4 z-[60] sm:left-auto rounded-lg border px-4 py-3 text-sm shadow-lg ${
             toast.kind === 'error' ? 'border-red-700 bg-red-950 text-red-100' : 'border-emerald-700 bg-emerald-950 text-emerald-100'
           }`}
         >

@@ -1,10 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Modal } from '@/components/modal';
 import { Shell } from '@/components/shell';
 import { api } from '@/lib/api';
+import { unitLabel } from '@/lib/catalog';
 import { hasRole, homeForRole, OVERSIGHT_ROLES, TRANSFER_ROLES } from '@/lib/rbac';
 import { AuthUser, StockTransfer, TransferStatus, Warehouse } from '@/lib/types';
 
@@ -66,6 +68,7 @@ export default function TransfersPage() {
   const [notes, setNotes] = useState('');
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   // act modal (dispatch a request / receive / cancel)
   const [act, setAct] = useState<{ kind: 'dispatch' | 'receive' | 'cancel'; t: StockTransfer } | null>(null);
@@ -123,6 +126,11 @@ export default function TransfersPage() {
   useEffect(() => {
     if (me) void load();
   }, [me, load]);
+
+  // The search box is ready for a barcode scanner on a computer; on a phone the keyboard is not popped up uninvited.
+  useEffect(() => {
+    if (mode && window.matchMedia('(min-width: 768px)').matches) searchRef.current?.focus();
+  }, [mode]);
 
   // Product search: what the source warehouse holds.
   useEffect(() => {
@@ -209,6 +217,12 @@ export default function TransfersPage() {
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Санал авч чадсангүй');
     }
+  }
+
+  /** Closing with scanned lines asks first (a tap outside or Esc must not lose them). */
+  function closeTransfer() {
+    if ((lines.length || notes.trim()) && !window.confirm('Оруулсан бараанууд хадгалагдахгүй. Хаах уу?')) return;
+    setMode(null);
   }
 
   async function submit(e: FormEvent) {
@@ -326,6 +340,74 @@ export default function TransfersPage() {
   const fromChoices = mode === 'send' && lockedTo ? active.filter((w) => w.id === lockedTo) : active.filter((w) => w.id !== toId);
   const toChoices = mode === 'request' && lockedTo ? active.filter((w) => w.id === lockedTo) : active.filter((w) => w.id !== fromId);
 
+  /** The goods of one transfer: asked / sent / arrived, with any shortage and its reason. */
+  const itemList = (t: StockTransfer) => (
+    <>
+      <ul className="space-y-0.5">
+        {t.items.map((i) => {
+          const sent = Number(i.quantity);
+          const asked = i.requestedQty != null ? Number(i.requestedQty) : null;
+          const got = i.receivedQty != null ? Number(i.receivedQty) : null;
+          return (
+            <li key={i.id}>
+              <span className="font-mono text-[11px] text-slate-400">{i.product.sku}</span> {i.product.nameMn} ·{' '}
+              {t.status === 'REQUESTED' ? <span className="font-semibold">{qty(asked)}</span> : <span className="font-semibold">{qty(sent)}</span>}{' '}
+              {unitLabel(i.product.unit)}
+              {asked != null && t.status !== 'REQUESTED' && asked !== sent && <span className="text-xs text-slate-500"> (хүссэн {qty(asked)})</span>}
+              {got != null && got < sent && (
+                <span className="text-xs text-red-300">
+                  {' '}
+                  · ирсэн {qty(got)}, дутуу {qty(sent - got)}
+                  {i.shortageReason ? ` — ${i.shortageReason}` : ''}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {t.notes && <p className="text-xs text-slate-500 mt-1">{t.notes}</p>}
+    </>
+  );
+
+  /** What this person can do with a transfer now. `wide`: phone cards, one full-width button per row. */
+  const actions = (t: StockTransfer, wide = false) => {
+    const w = wide ? 'w-full py-2 text-sm' : 'text-xs px-3 py-1';
+    return (
+      <>
+        {t.status === 'REQUESTED' && mine(t.fromWarehouse.id) && (
+          <button className={`btn-primary ${w}`} disabled={busyId === t.id} onClick={() => void openAct('dispatch', t)}>
+            Илгээх
+          </button>
+        )}
+        {t.status === 'IN_TRANSIT' && mine(t.toWarehouse.id) && (
+          <>
+            <button className={`btn-primary ${w}`} disabled={busyId === t.id} onClick={() => void receiveAll(t)}>
+              Бүгд ирсэн
+            </button>
+            <button className={`btn-ghost ${w}`} disabled={busyId === t.id} onClick={() => void openAct('receive', t)}>
+              Дутуу ирсэн
+            </button>
+          </>
+        )}
+        {t.status !== 'REQUESTED' && t.status !== 'CANCELLED' && (
+          <a className={`btn-ghost ${w}`} href={`/print/transfers/${t.id}`} target="_blank" rel="noreferrer">
+            Хэвлэх
+          </a>
+        )}
+        {t.status === 'REQUESTED' && (mine(t.fromWarehouse.id) || mine(t.toWarehouse.id)) && (
+          <button className={`btn-ghost ${w}`} disabled={busyId === t.id} onClick={() => void openAct('cancel', t)}>
+            {mine(t.fromWarehouse.id) && !isOversight ? 'Татгалзах' : 'Цуцлах'}
+          </button>
+        )}
+        {t.status === 'IN_TRANSIT' && isOversight && (
+          <button className={`btn-danger ${w}`} disabled={busyId === t.id} onClick={() => void openAct('cancel', t)}>
+            Цуцлах
+          </button>
+        )}
+      </>
+    );
+  };
+
   return (
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
@@ -374,9 +456,9 @@ export default function TransfersPage() {
                 Код
                 <input className="mt-1 block w-28" placeholder="WH1" value={newWh.code} onChange={(e) => setNewWh({ ...newWh, code: e.target.value.toUpperCase() })} />
               </label>
-              <label className="text-xs text-slate-400">
+              <label className="w-full text-xs text-slate-400 sm:w-auto">
                 Нэр
-                <input className="mt-1 block w-56" placeholder="Төв агуулах" value={newWh.name} onChange={(e) => setNewWh({ ...newWh, name: e.target.value })} />
+                <input className="mt-1 block w-full sm:w-56" placeholder="Төв агуулах" value={newWh.name} onChange={(e) => setNewWh({ ...newWh, name: e.target.value })} />
               </label>
               <button
                 className="btn-primary text-sm"
@@ -422,7 +504,7 @@ export default function TransfersPage() {
         {FILTERS.map((f) => (
           <button
             key={f.key}
-            className={`rounded-md px-3 py-1.5 text-sm ${filter === f.key ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
+            className={`min-h-[36px] rounded-md px-3 py-1.5 text-sm ${filter === f.key ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
             onClick={() => setFilter(f.key)}
           >
             {f.label}
@@ -430,7 +512,59 @@ export default function TransfersPage() {
         ))}
       </div>
 
-      <div className="card overflow-auto p-0">
+      {/* Phones: one card per transfer; the action buttons span the card. */}
+      <div className="space-y-2 md:hidden">
+        {rows.map((t) => (
+          <article key={t.id} className="card space-y-2 text-sm">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-mono text-xs">{t.transferNumber}</p>
+                <p className="font-medium">
+                  {t.fromWarehouse.name} <span className="text-slate-500">→</span> {t.toWarehouse.name}
+                </p>
+                {t.order && (
+                  <Link href={`/orders/${t.order.id}`} className="text-[11px] text-amber-300 hover:underline">
+                    Захиалга {t.order.orderNumber}
+                  </Link>
+                )}
+              </div>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${STATUS_STYLE[t.status]}`}>{STATUS_LABEL[t.status]}</span>
+                {t.hasShortage && <span className="inline-flex rounded-full border border-red-700 px-2 py-0.5 text-[11px] text-red-300">Дутуу ирсэн</span>}
+              </div>
+            </div>
+            {itemList(t)}
+            <div className="space-y-0.5 text-xs text-slate-400">
+              {t.requestedBy && (
+                <p>
+                  Хүссэн: {t.requestedBy.fullName} · {when(t.requestedAt)}
+                </p>
+              )}
+              {t.sentBy && (
+                <p>
+                  Илгээсэн: {t.sentBy.fullName} · {when(t.sentAt)}
+                </p>
+              )}
+              {t.status === 'RECEIVED' && (
+                <p>
+                  Хүлээн авсан: {t.receivedBy?.fullName ?? '—'} · {when(t.receivedAt)}
+                </p>
+              )}
+              {t.status === 'CANCELLED' && (
+                <p>
+                  Цуцалсан: {t.cancelledBy?.fullName ?? '—'} · {when(t.cancelledAt)}
+                  {t.cancelReason ? ` — ${t.cancelReason}` : ''}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col gap-2">{actions(t, true)}</div>
+          </article>
+        ))}
+        {loading && <p className="p-3 text-slate-500">Уншиж байна…</p>}
+        {!loading && rows.length === 0 && <p className="card text-slate-500">Шилжүүлэг алга.</p>}
+      </div>
+
+      <div className="card hidden overflow-auto p-0 md:block">
         <table className="w-full text-sm min-w-[860px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
@@ -457,35 +591,7 @@ export default function TransfersPage() {
                 <td className="py-3">
                   {t.fromWarehouse.name} <span className="text-slate-500">→</span> {t.toWarehouse.name}
                 </td>
-                <td className="py-3">
-                  <ul className="space-y-0.5">
-                    {t.items.map((i) => {
-                      const sent = Number(i.quantity);
-                      const asked = i.requestedQty != null ? Number(i.requestedQty) : null;
-                      const got = i.receivedQty != null ? Number(i.receivedQty) : null;
-                      return (
-                        <li key={i.id}>
-                          <span className="font-mono text-[11px] text-slate-400">{i.product.sku}</span> {i.product.nameMn} ·{' '}
-                          {t.status === 'REQUESTED' ? (
-                            <span className="font-semibold">{qty(asked)}</span>
-                          ) : (
-                            <span className="font-semibold">{qty(sent)}</span>
-                          )}{' '}
-                          {i.product.unit}
-                          {asked != null && t.status !== 'REQUESTED' && asked !== sent && <span className="text-xs text-slate-500"> (хүссэн {qty(asked)})</span>}
-                          {got != null && got < sent && (
-                            <span className="text-xs text-red-300">
-                              {' '}
-                              · ирсэн {qty(got)}, дутуу {qty(sent - got)}
-                              {i.shortageReason ? ` — ${i.shortageReason}` : ''}
-                            </span>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {t.notes && <p className="text-xs text-slate-500 mt-1">{t.notes}</p>}
-                </td>
+                <td className="py-3">{itemList(t)}</td>
                 <td className="py-3 text-xs text-slate-300">
                   {t.requestedBy && (
                     <p>
@@ -522,38 +628,7 @@ export default function TransfersPage() {
                   {t.hasShortage && <span className="ml-1 inline-flex rounded-full border border-red-700 px-2 py-0.5 text-[11px] text-red-300">Дутуу ирсэн</span>}
                 </td>
                 <td className="py-3 pr-3">
-                  <div className="flex flex-wrap justify-end gap-1">
-                    {t.status === 'REQUESTED' && mine(t.fromWarehouse.id) && (
-                      <button className="btn-primary text-xs px-3 py-1" disabled={busyId === t.id} onClick={() => void openAct('dispatch', t)}>
-                        Илгээх
-                      </button>
-                    )}
-                    {t.status === 'IN_TRANSIT' && mine(t.toWarehouse.id) && (
-                      <>
-                        <button className="btn-primary text-xs px-3 py-1" disabled={busyId === t.id} onClick={() => void receiveAll(t)}>
-                          Бүгд ирсэн
-                        </button>
-                        <button className="btn-ghost text-xs px-3 py-1" disabled={busyId === t.id} onClick={() => void openAct('receive', t)}>
-                          Дутуу ирсэн
-                        </button>
-                      </>
-                    )}
-                    {t.status !== 'REQUESTED' && t.status !== 'CANCELLED' && (
-                      <a className="btn-ghost text-xs px-3 py-1" href={`/print/transfers/${t.id}`} target="_blank" rel="noreferrer">
-                        Хэвлэх
-                      </a>
-                    )}
-                    {t.status === 'REQUESTED' && (mine(t.fromWarehouse.id) || mine(t.toWarehouse.id)) && (
-                      <button className="btn-ghost text-xs px-3 py-1" disabled={busyId === t.id} onClick={() => void openAct('cancel', t)}>
-                        {mine(t.fromWarehouse.id) && !isOversight ? 'Татгалзах' : 'Цуцлах'}
-                      </button>
-                    )}
-                    {t.status === 'IN_TRANSIT' && isOversight && (
-                      <button className="btn-danger text-xs px-3 py-1" disabled={busyId === t.id} onClick={() => void openAct('cancel', t)}>
-                        Цуцлах
-                      </button>
-                    )}
-                  </div>
+                  <div className="flex flex-wrap justify-end gap-1">{actions(t)}</div>
                 </td>
               </tr>
             ))}
@@ -564,16 +639,31 @@ export default function TransfersPage() {
       </div>
 
       {mode && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={submit} className="card w-full max-w-2xl space-y-3 max-h-[90vh] overflow-auto">
-            <h3 className="font-semibold text-lg">{mode === 'request' ? 'Бараа хүсэх' : 'Шууд илгээх'}</h3>
+        <Modal
+          onClose={closeTransfer}
+          guardTyping={false}
+          title={mode === 'request' ? 'Бараа хүсэх' : 'Шууд илгээх'}
+          size="lg"
+          busy={saving}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={closeTransfer}>
+                Болих
+              </button>
+              <button type="submit" form="transfer-form" className="btn-primary" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : mode === 'request' ? 'Хүсэлт илгээх' : 'Илгээх'}
+              </button>
+            </>
+          }
+        >
+          <form id="transfer-form" onSubmit={submit} className="space-y-3">
             <p className="text-xs text-slate-400">
               {mode === 'request'
                 ? 'Хүсэлт явуулахад бараа хөдлөхгүй. Эх агуулах илгээсний дараа замд гарна.'
                 : 'Илгээхэд бараа эх агуулахаас шууд хасагдана.'}
             </p>
             {formError && <p className="text-red-400 text-sm">{formError}</p>}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <label className="block text-xs text-slate-400">
                 Хаанаас
                 <select
@@ -605,12 +695,13 @@ export default function TransfersPage() {
               </label>
             </div>
 
-            <div className="flex items-end gap-2">
-              <label className="block flex-1 text-xs text-slate-400">
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="block min-w-0 flex-1 basis-56 text-xs text-slate-400">
                 Бараа хайх эсвэл баркод уншуулах (Enter нэмнэ)
                 <input
+                  ref={searchRef}
                   className="mt-1 w-full"
-                  autoFocus
+                  enterKeyHint="done"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   onKeyDown={onSearchKey}
@@ -623,22 +714,25 @@ export default function TransfersPage() {
                 </button>
               )}
             </div>
+            {mode === 'request' && <p className="-mt-1 text-[11px] text-slate-500">«Дутагдлаар санал» — доод үлдэгдлээс доош орсон барааг жагсаалтад нэмнэ.</p>}
             {results.length > 0 && search.trim() && (
               <ul className="max-h-40 overflow-auto rounded border border-slate-700 divide-y divide-slate-800">
                 {results.map((r) => (
                   <li key={r.id}>
                     <button
                       type="button"
-                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-steel-800 disabled:opacity-40"
+                      className="flex min-h-[40px] w-full flex-wrap items-center justify-between gap-x-2 px-3 py-1.5 text-left text-sm hover:bg-steel-800 disabled:opacity-40"
                       disabled={lines.some((l) => l.productId === r.id)}
                       onClick={() => {
                         addLine(r);
                         setSearch('');
                       }}
                     >
-                      <span className="font-mono text-[11px] text-slate-400">{r.sku}</span> {r.nameMn}
-                      <span className="float-right text-slate-400">
-                        эх агуулахад {qty(r.stockQty)} {r.unit}
+                      <span>
+                        <span className="font-mono text-[11px] text-slate-400">{r.sku}</span> {r.nameMn}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        эх агуулахад {qty(r.stockQty)} {unitLabel(r.unit)}
                       </span>
                     </button>
                   </li>
@@ -647,28 +741,38 @@ export default function TransfersPage() {
             )}
 
             {lines.length > 0 && (
-              <table className="w-full text-sm">
-                <thead className="text-left text-slate-400 text-xs">
-                  <tr>
-                    <th className="py-1">Бараа</th>
-                    <th>Эх агуулахад</th>
-                    <th>{mode === 'request' ? 'Хүсэх тоо' : 'Илгээх тоо'}</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
+              // One row per item on a computer; on a phone each item wraps onto two lines.
+              <div className="text-sm">
+                <div className="hidden gap-3 py-1 text-xs text-slate-400 sm:flex">
+                  <span className="flex-1">Бараа</span>
+                  <span className="w-32">Эх агуулахад</span>
+                  <span className="w-40">{mode === 'request' ? 'Хүсэх тоо' : 'Илгээх тоо'}</span>
+                  <span className="w-9" />
+                </div>
+                <ul className="divide-y divide-slate-800 border-t border-slate-800">
                   {lines.map((l, idx) => (
-                    <tr key={l.productId} className="border-t border-slate-800">
-                      <td className="py-1.5">
+                    <li key={l.productId} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+                      <span className="min-w-0 flex-1 basis-[calc(100%-3rem)] sm:basis-0">
                         <span className="font-mono text-[11px] text-slate-400">{l.sku}</span> {l.nameMn}
-                      </td>
-                      <td className="text-slate-400">
-                        {l.available === null ? '—' : `${qty(l.available)} ${l.unit}`}
-                      </td>
-                      <td className="whitespace-nowrap">
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-ghost order-none h-9 w-9 p-0 text-xs sm:order-last"
+                        aria-label="Мөр хасах"
+                        onClick={() => setLines(lines.filter((_, i) => i !== idx))}
+                      >
+                        ✕
+                      </button>
+                      <span className="text-xs text-slate-400 sm:w-32 sm:text-sm">
+                        <span className="sm:hidden">Эх агуулахад: </span>
+                        {l.available === null ? '—' : `${qty(l.available)} ${unitLabel(l.unit)}`}
+                      </span>
+                      <span className="ml-auto flex items-center gap-2 whitespace-nowrap sm:ml-0 sm:w-40">
+                        <span className="text-xs text-slate-400 sm:hidden">{mode === 'request' ? 'Хүсэх тоо' : 'Илгээх тоо'}</span>
                         <input
                           className="w-24"
                           type="number"
+                          inputMode="decimal"
                           min="0.001"
                           step="any"
                           required
@@ -678,93 +782,95 @@ export default function TransfersPage() {
                         {mode === 'send' && l.available !== null && (
                           <button
                             type="button"
-                            className="ml-1 text-[11px] text-amber-300 hover:underline"
+                            className="min-h-[36px] text-[11px] text-amber-300 hover:underline"
                             onClick={() => setLines(lines.map((x, i) => (i === idx ? { ...x, quantity: String(l.available) } : x)))}
                           >
                             бүгд
                           </button>
                         )}
-                      </td>
-                      <td className="text-right">
-                        <button type="button" className="btn-ghost text-xs px-2 py-0.5" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
-                          ✕
-                        </button>
-                      </td>
-                    </tr>
+                      </span>
+                    </li>
                   ))}
-                </tbody>
-              </table>
+                </ul>
+              </div>
             )}
 
             <label className="block text-xs text-slate-400">
               Тэмдэглэл {mode === 'send' ? '(машин, жолооч г.м.)' : '(хэзээ хэрэгтэй г.м.)'}
               <input className="mt-1 w-full" maxLength={500} value={notes} onChange={(e) => setNotes(e.target.value)} />
             </label>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setMode(null)}>
-                Болих
-              </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : mode === 'request' ? 'Хүсэлт илгээх' : 'Илгээх'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {act && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={submitAct} className="card w-full max-w-xl space-y-3 max-h-[90vh] overflow-auto">
-            <h3 className="font-semibold text-lg">
-              {act.t.transferNumber} —{' '}
-              {act.kind === 'dispatch' ? 'хүсэлтийг илгээх' : act.kind === 'receive' ? 'ирсэн тоогоор хүлээн авах' : 'цуцлах / татгалзах'}
-            </h3>
+        <Modal
+          onClose={() => setAct(null)}
+          title={`${act.t.transferNumber} — ${act.kind === 'dispatch' ? 'хүсэлтийг илгээх' : act.kind === 'receive' ? 'ирсэн тоогоор хүлээн авах' : 'цуцлах / татгалзах'}`}
+          size="lg"
+          busy={busyId === act.t.id}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={() => setAct(null)}>
+                Болих
+              </button>
+              <button type="submit" form="transfer-act-form" className={act.kind === 'cancel' ? 'btn-danger' : 'btn-primary'} disabled={busyId === act.t.id}>
+                {act.kind === 'dispatch' ? 'Илгээх' : act.kind === 'receive' ? 'Хүлээн авах' : 'Цуцлах'}
+              </button>
+            </>
+          }
+        >
+          <form id="transfer-act-form" onSubmit={submitAct} className="space-y-3">
             <p className="text-xs text-slate-400">
               {act.t.fromWarehouse.name} → {act.t.toWarehouse.name}
             </p>
             {actError && <p className="text-sm text-red-400">{actError}</p>}
             {act.kind !== 'cancel' && (
-              <table className="w-full text-sm">
-                <thead className="text-left text-xs text-slate-400">
-                  <tr>
-                    <th className="py-1">Бараа</th>
-                    <th>{act.kind === 'dispatch' ? 'Хүссэн / байгаа' : 'Илгээсэн'}</th>
-                    <th>{act.kind === 'dispatch' ? 'Илгээх' : 'Ирсэн'}</th>
-                  </tr>
-                </thead>
-                <tbody>
+              // One row per item on a computer; on a phone the amounts go under the name.
+              <div className="text-sm">
+                <div className="hidden gap-3 py-1 text-xs text-slate-400 sm:flex">
+                  <span className="flex-1">Бараа</span>
+                  <span className="w-32">{act.kind === 'dispatch' ? 'Хүссэн / байгаа' : 'Илгээсэн'}</span>
+                  <span className="w-28">{act.kind === 'dispatch' ? 'Илгээх' : 'Ирсэн'}</span>
+                </div>
+                <ul className="divide-y divide-slate-800 border-t border-slate-800">
                   {actLines.map((l, idx) => {
                     const short = act.kind === 'receive' && Number(l.value) < l.base;
                     return (
-                      <tr key={l.productId} className="border-t border-slate-800 align-top">
-                        <td className="py-1.5">{l.label}</td>
-                        <td className="text-slate-400 whitespace-nowrap">
-                          {qty(l.base)} {l.unit}
-                          {act.kind === 'dispatch' && <span className={l.available! < l.base ? ' text-red-300' : ''}> / {qty(l.available)}</span>}
-                        </td>
-                        <td>
-                          <input
-                            className="w-24"
-                            type="number"
-                            min="0"
-                            step="any"
-                            value={l.value}
-                            onChange={(e) => setActLines(actLines.map((x, i) => (i === idx ? { ...x, value: e.target.value } : x)))}
-                          />
-                          {short && (
+                      <li key={l.productId} className="space-y-1 py-2">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="min-w-0 basis-full sm:flex-1 sm:basis-0">{l.label}</span>
+                          <span className="whitespace-nowrap text-xs text-slate-400 sm:w-32 sm:text-sm">
+                            <span className="sm:hidden">{act.kind === 'dispatch' ? 'Хүссэн / байгаа: ' : 'Илгээсэн: '}</span>
+                            {qty(l.base)} {unitLabel(l.unit)}
+                            {act.kind === 'dispatch' && <span className={l.available! < l.base ? ' text-red-300' : ''}> / {qty(l.available)}</span>}
+                          </span>
+                          <label className="ml-auto flex items-center gap-2 text-xs text-slate-400 sm:ml-0 sm:w-28">
+                            <span className="sm:hidden">{act.kind === 'dispatch' ? 'Илгээх' : 'Ирсэн'}</span>
                             <input
-                              className="mt-1 block w-full text-xs"
-                              placeholder="Дутуу ирсэн шалтгаан (урагдсан, ирээгүй…)"
-                              value={l.reason}
-                              onChange={(e) => setActLines(actLines.map((x, i) => (i === idx ? { ...x, reason: e.target.value } : x)))}
+                              className="w-24 text-white"
+                              type="number"
+                              inputMode="decimal"
+                              min="0"
+                              step="any"
+                              value={l.value}
+                              onChange={(e) => setActLines(actLines.map((x, i) => (i === idx ? { ...x, value: e.target.value } : x)))}
                             />
-                          )}
-                        </td>
-                      </tr>
+                          </label>
+                        </div>
+                        {short && (
+                          <input
+                            className="block w-full text-xs"
+                            placeholder="Дутуу ирсэн шалтгаан (урагдсан, ирээгүй…)"
+                            value={l.reason}
+                            onChange={(e) => setActLines(actLines.map((x, i) => (i === idx ? { ...x, reason: e.target.value } : x)))}
+                          />
+                        )}
+                      </li>
                     );
                   })}
-                </tbody>
-              </table>
+                </ul>
+              </div>
             )}
             {act.kind !== 'receive' && (
               <label className="block text-xs text-slate-400">
@@ -775,21 +881,13 @@ export default function TransfersPage() {
             {act.kind === 'cancel' && act.t.status === 'IN_TRANSIT' && (
               <p className="text-xs text-amber-300">Замд байгаа бараа {act.t.fromWarehouse.name}-д буцаж орно.</p>
             )}
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-ghost" onClick={() => setAct(null)}>
-                Болих
-              </button>
-              <button className={act.kind === 'cancel' ? 'btn-danger' : 'btn-primary'} disabled={busyId === act.t.id}>
-                {act.kind === 'dispatch' ? 'Илгээх' : act.kind === 'receive' ? 'Хүлээн авах' : 'Цуцлах'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {toast && (
         <div
-          className={`fixed bottom-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          className={`fixed bottom-4 left-4 right-4 z-[60] sm:left-auto rounded-lg border px-4 py-3 text-sm shadow-lg ${
             toast.kind === 'error' ? 'border-red-700 bg-red-950 text-red-100' : 'border-emerald-700 bg-emerald-950 text-emerald-100'
           }`}
         >

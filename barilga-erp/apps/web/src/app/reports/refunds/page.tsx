@@ -92,15 +92,15 @@ export default function RefundPayoutsPage() {
         </p>
       </div>
       {error && <p className="mb-2 text-sm text-red-400">{error}</p>}
-      <div className="mb-4 grid gap-3 sm:grid-cols-2">
+      <div className="mb-4 grid grid-cols-2 gap-3">
         <article className="card">
           <p className="text-xs text-slate-400">Шилжүүлэх ёстой</p>
-          <p className="text-xl font-bold text-amber-brand">{tugrik(feed?.pendingMnt ?? 0)}</p>
+          <p className="break-words text-lg font-bold sm:text-xl text-amber-brand">{tugrik(feed?.pendingMnt ?? 0)}</p>
           <p className="text-xs text-slate-500">{feed?.pending.length ?? 0} буцаалт</p>
         </article>
         <article className="card">
           <p className="text-xs text-slate-400">Сүүлийн 30 хоногт шилжүүлсэн</p>
-          <p className="text-xl font-bold text-emerald-300">{tugrik((feed?.sent ?? []).reduce((s, r) => s + r.refundAmount, 0))}</p>
+          <p className="break-words text-lg font-bold sm:text-xl text-emerald-300">{tugrik((feed?.sent ?? []).reduce((s, r) => s + r.refundAmount, 0))}</p>
         </article>
       </div>
 

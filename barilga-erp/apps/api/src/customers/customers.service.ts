@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { CustomerType, OrderStatus, PaymentStatus, PayMethod, Prisma } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { isManagerRole } from '../inventory/warehouse-scope';
+import { audit } from '../common/audit';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCustomerDto, UpdateCustomerDto } from './dto/customer.dto';
 import { searchKey } from '../common/translit';
@@ -16,6 +17,54 @@ export class CustomersService {
   private readonly log = new Logger(CustomersService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /** The customer's own prices (set at the till), newest first, with today's retail price beside each. */
+  async ownPrices(id: string) {
+    const rows = await this.prisma.customerPrice.findMany({ where: { customerId: id }, orderBy: { updatedAt: 'desc' } });
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: rows.map((r) => r.productId) } },
+      select: { id: true, sku: true, nameMn: true, unit: true, priceMnt: true, active: true, lastCostMnt: true },
+    });
+    const byId = new Map(products.map((p) => [p.id, p]));
+    return rows.flatMap((r) => {
+      const p = byId.get(r.productId);
+      // belowCost: a later receipt's cost passed it, so it is not used (the cost itself is not shown here).
+      return p
+        ? [
+            {
+              productId: p.id,
+              sku: p.sku,
+              nameMn: p.nameMn,
+              unit: p.unit,
+              priceMnt: r.priceMnt,
+              retailMnt: p.priceMnt,
+              active: p.active,
+              belowCost: Boolean(p.lastCostMnt && r.priceMnt < p.lastCostMnt),
+              updatedAt: r.updatedAt,
+            },
+          ]
+        : [];
+    });
+  }
+
+  /** Drops one own price: the customer's list or retail applies again. */
+  async removeOwnPrice(id: string, productId: string, user: AuthUser) {
+    const row = await this.prisma.customerPrice.findUnique({ where: { customerId_productId: { customerId: id, productId } } });
+    if (!row) throw new NotFoundException('Үнэ олдсонгүй / Price not found');
+    await this.prisma.customerPrice.delete({ where: { id: row.id } });
+    const [customer, product] = await Promise.all([
+      this.prisma.customer.findUnique({ where: { id }, select: { name: true } }),
+      this.prisma.product.findUnique({ where: { id: productId }, select: { nameMn: true } }),
+    ]);
+    await audit(this.prisma, {
+      entityType: 'CUSTOMER_PRICE',
+      entityId: id,
+      summary: `${customer?.name ?? id}: «${product?.nameMn ?? productId}»-ийн хувийн үнэ ${row.priceMnt}₮ устгав`,
+      before: { productId, priceMnt: row.priceMnt },
+      actorId: user.id,
+    });
+    return { removed: true };
+  }
 
   /** Validates the register number for the customer type; companies must have one. */
   private checkRegNumber(type: CustomerType, reg: string | null | undefined): string | null {

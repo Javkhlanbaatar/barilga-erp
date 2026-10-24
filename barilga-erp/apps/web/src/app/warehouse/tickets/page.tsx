@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { PickList, unpickedCount } from '@/components/pick-list';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
+import { unitLabel } from '@/lib/catalog';
 import { useFeatures } from '@/lib/features';
 import { FULFILLMENT_ROLES, TRANSPORT_ROLES, hasRole } from '@/lib/rbac';
 import { AuthUser, DELIVERY_LABEL, companionLines, isHiredTransport, Order, VEHICLE_LABEL } from '@/lib/types';
@@ -231,7 +232,7 @@ export default function WarehouseTicketsPage() {
 
   return (
     <Shell>
-      <div className="flex items-end justify-between gap-4 mb-4">
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <div>
           <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Агуулах</p>
           <h2 className="text-xl font-bold">Бэлтгэх тасалбар</h2>
@@ -239,8 +240,8 @@ export default function WarehouseTicketsPage() {
             Ээлжинд: <span className="font-semibold text-amber-brand">{staffName}</span>
           </p>
         </div>
-        <div className="flex gap-2">
-          <input className="w-56" placeholder="Дугаар, нэр, утас…" value={find} onChange={(e) => setFind(e.target.value)} />
+        <div className="flex w-full gap-2 sm:w-auto">
+          <input className="min-w-0 flex-1 sm:w-56 sm:flex-none" placeholder="Дугаар, нэр, утас…" value={find} onChange={(e) => setFind(e.target.value)} />
           <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
             Шинэчлэх
           </button>
@@ -273,7 +274,7 @@ export default function WarehouseTicketsPage() {
                 <ul className="text-sm text-slate-300">
                   {o.items.map((i) => (
                     <li key={i.id}>
-                      {i.product.nameMn} × {Number(i.quantity)} {i.product.unit}
+                      {i.product.nameMn} × {Number(i.quantity)} {unitLabel(i.product.unit)}
                       {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
                         <span key={c} className="ml-2 inline-block rounded border border-amber-600 bg-amber-950/50 px-1.5 text-[11px] font-semibold text-amber-200">
                           + {c}
@@ -340,7 +341,28 @@ export default function WarehouseTicketsPage() {
       )}
 
       {tab === 'done' && (
-        <div className="overflow-auto card p-0">
+        <div className="space-y-2 md:hidden">
+          {recent.filter(matches).map((o) => (
+            <article key={o.id} className="card space-y-1 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-white">{o.orderNumber}</span>
+                <span className="font-semibold text-amber-brand">{o.preparedBy?.fullName ?? o.completedBy?.fullName ?? o.completedBy?.name ?? '—'}</span>
+              </div>
+              <p className="text-white">
+                {o.customerName}
+                {o.customerPhone ? ` · ${o.customerPhone}` : ''}
+              </p>
+              <p className="text-xs text-slate-400">{vehicleInfo(o, features.enabled('DELIVERY'))}</p>
+              <p className="text-xs text-slate-400">
+                Эхэлсэн {formatTs(o.pickingStartedAt)} · Дууссан {formatTs(o.completedAt ?? o.preparedAt)}
+              </p>
+            </article>
+          ))}
+          {!loading && recent.length === 0 && <p className="text-slate-500">Дууссан захиалга алга.</p>}
+        </div>
+      )}
+      {tab === 'done' && (
+        <div className="card hidden overflow-auto p-0 md:block">
           <table className="w-full text-sm min-w-[760px]">
             <thead className="text-left text-slate-400 border-b border-slate-700">
               <tr>

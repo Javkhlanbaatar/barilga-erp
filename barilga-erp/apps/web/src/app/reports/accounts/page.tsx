@@ -57,7 +57,7 @@ export default function AccountsReportPage() {
             Авлага = тэд бидэнд өртэй (дараа төлөхөөр авсан) · Өглөг = бид тэдэнд өртэй (тэднээс авсан бараа). Хуулгыг харилцагчийн хуудаснаас харна.
           </p>
         </div>
-        <div className="flex gap-2 print:hidden">
+        <div className="flex flex-wrap gap-2 print:hidden">
           <button
             className="btn-ghost"
             disabled={!data}
@@ -80,7 +80,7 @@ export default function AccountsReportPage() {
       {error && <p className="text-red-400 mb-3">{error}</p>}
       {data && (
         <>
-          <section className="grid gap-3 sm:grid-cols-3 mb-4">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 mb-4">
             <article className="card py-3">
               <p className="text-[10px] uppercase text-slate-400">Нийт авлага</p>
               <p className="text-lg font-bold text-amber-300">{tugrik(data.totals.receivableMnt)}</p>

@@ -21,9 +21,22 @@ function emptyToNull(value: unknown) {
   return value;
 }
 
-/** One item handed over with every unit sold, e.g. { name: 'Хатаагч', qtyPerUnit: 1, unit: 'ш' }. */
+/**
+ * One item handed over with every unit sold, e.g. { name: 'Хатаагч', qtyPerUnit: 1, unit: 'ш' }.
+ * It may be picked from the catalog (`productId`); then a name or unit left empty is copied from that product.
+ * Display only: printed on tickets and pick lists, never a stock line, a price or an order line.
+ */
 export class CompanionDto {
+  /** The catalog product this item is, when it was picked from the list. */
+  @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() || undefined : value))
+  @IsString()
+  @MaxLength(64)
+  productId?: string | null;
+
+  /** Required unless a product is picked (then empty = the product's name). */
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @ValidateIf((o: CompanionDto) => !o.productId || (o.name !== undefined && o.name !== null && o.name !== ''))
   @IsString()
   @MinLength(1)
   @MaxLength(80)
@@ -34,7 +47,9 @@ export class CompanionDto {
   @Max(1000)
   qtyPerUnit!: number;
 
+  /** Empty = 'ш', or the picked product's unit. */
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @ValidateIf((o: CompanionDto) => !o.productId || (o.unit !== undefined && o.unit !== null))
   @IsString()
   @MaxLength(16)
   unit!: string;
@@ -151,8 +166,12 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   nameEn?: string;
+  /** Same check as on create; a unit missing from the saved list (Тохиргоо → хэмжих нэгж) is still accepted. */
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(1)
+  @MaxLength(16)
   unit?: string;
   @IsOptional()
   @IsInt()

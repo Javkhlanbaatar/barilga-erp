@@ -70,7 +70,7 @@ export default function CashReportPage() {
           <h2 className="text-xl font-bold">Касс</h2>
           <p className="text-sm text-slate-400">Ээлж бүрийн бэлэн мөнгө: эхний үлдэгдэл + бэлэн борлуулалт − буцаалт ± гаргасан/нэмсэн = байх ёстой.</p>
         </div>
-        <div className="flex items-end gap-2">
+        <div className="flex flex-wrap items-end gap-2">
           <label className="text-xs text-slate-400">
             Эхлэх
             <input type="date" className="mt-1 block" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -81,18 +81,18 @@ export default function CashReportPage() {
           </label>
         </div>
       </div>
-      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <article className="card">
           <p className="text-xs text-slate-400">Хаагдсан ээлж</p>
-          <p className="text-xl font-bold">{closed.length}</p>
+          <p className="break-words text-lg font-bold sm:text-xl">{closed.length}</p>
         </article>
         <article className="card">
           <p className="text-xs text-slate-400">Дутуу нийт</p>
-          <p className="text-xl font-bold text-red-300">{tugrik(short)}</p>
+          <p className="break-words text-lg font-bold sm:text-xl text-red-300">{tugrik(short)}</p>
         </article>
         <article className="card">
           <p className="text-xs text-slate-400">Илүү нийт</p>
-          <p className="text-xl font-bold text-emerald-300">{tugrik(over)}</p>
+          <p className="break-words text-lg font-bold sm:text-xl text-emerald-300">{tugrik(over)}</p>
         </article>
       </div>
       {error && <p className="mb-2 text-sm text-red-400">{error}</p>}

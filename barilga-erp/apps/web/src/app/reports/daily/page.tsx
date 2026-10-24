@@ -114,7 +114,7 @@ export default function DailyReportPage() {
             Төлбөрийг төлсөн өдрөөр нь тооцно (Улаанбаатарын цаг)
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="btn-ghost" onClick={() => window.print()}>
             Z тайлан хэвлэх
           </button>
@@ -169,7 +169,7 @@ export default function DailyReportPage() {
             <p className="text-xs">Хэвлэсэн {new Date().toLocaleString('mn-MN')}</p>
           </header>
 
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-5">
+          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4 mb-5">
             <StatCard label="Нийт орлого" value={tugrik(report.totals.revenueMnt)} hint="Энэ хугацаанд орсон, буцаалт хассан" />
             <StatCard label="Кассанд бэлэн" value={tugrik(report.totals.cashMnt)} hint={`${report.payments[0]?.paidCount ?? 0} бэлэн төлбөр`} />
             <StatCard label="QPay нийт" value={tugrik(report.totals.qpayMnt)} hint="Зөвхөн төлөгдсөн QPay нэхэмжлэх" />
@@ -327,7 +327,7 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint: 
   return (
     <article className="card">
       <p className="text-xs uppercase tracking-wide text-slate-400 print:text-black">{label}</p>
-      <p className="text-2xl font-bold mt-1">{value}</p>
+      <p className="mt-1 break-words text-xl font-bold sm:text-2xl">{value}</p>
       <p className="text-xs text-slate-500 mt-1 print:text-black">{hint}</p>
     </article>
   );

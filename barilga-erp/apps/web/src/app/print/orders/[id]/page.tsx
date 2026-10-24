@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import { InvoiceDoc, InvoiceMeta } from '@/components/invoice-doc';
@@ -11,6 +11,33 @@ import type { AuthUser, CompanySettings, DocTemplate, Order } from '@/lib/types'
 type Doc = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
 type Layout = { paper: 'A4' | 'A5' | '80MM'; orientation: 'portrait' | 'landscape'; copies: number };
 type PrintSettings = Record<Doc, Layout>;
+/** GET /invoices/order/:id also gives the id, used to record that the invoice was printed. */
+type OrderInvoice = InvoiceMeta & { id: string; cancelledAt?: string | null };
+
+/**
+ * Printed straight after a sale paid by invoice (?invoice=1 here, or on the order page that opened this one
+ * in a hidden frame): that print counts as sending the invoice.
+ */
+function fromInvoiceAutoPrint(search: { get(name: string): string | null }) {
+  if (search.get('invoice') === '1') return true;
+  try {
+    return window.parent !== window && new URLSearchParams(window.parent.location.search).get('invoice') === '1';
+  } catch {
+    return false; // another site's frame
+  }
+}
+
+/** Records the print as a send (POST /invoices/:id/sent), once per invoice in this browser tab. */
+async function recordPrinted(invoiceId: string) {
+  const key = `invoice_print_sent_${invoiceId}`;
+  try {
+    if (sessionStorage.getItem(key)) return;
+    sessionStorage.setItem(key, '1');
+  } catch {
+    // storage blocked: record anyway
+  }
+  await api(`/invoices/${invoiceId}/sent`, { method: 'POST', body: JSON.stringify({ via: 'PRINT' }) }).catch(() => undefined);
+}
 
 const DOCS: Array<[Doc, string]> = [
   ['invoice', 'Нэхэмжлэх'],
@@ -49,7 +76,9 @@ function PrintOrder() {
   const [order, setOrder] = useState<Order | null>(null);
   const [company, setCompany] = useState<CompanySettings | null>(null);
   const [layouts, setLayouts] = useState<PrintSettings | null>(null);
-  const [invoice, setInvoice] = useState<InvoiceMeta | null>(null);
+  const [invoice, setInvoice] = useState<OrderInvoice | null>(null);
+  // The invoice number, due date and payment reference must be on the paper: printing waits for this answer.
+  const [invoiceLoaded, setInvoiceLoaded] = useState(false);
   const [templates, setTemplates] = useState<Record<Doc, DocTemplate> | null>(null);
   const [error, setError] = useState('');
   // ?edit=1: the page can be typed on before printing (one-off changes, nothing is saved) and does not print
@@ -83,16 +112,27 @@ function PrintOrder() {
         setTemplates(t);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ачаалж чадсангүй'));
-    // The invoice number and due date, when one was sent for this order (the module may be off).
-    api<InvoiceMeta | null>(`/invoices/order/${params.id}`).then(setInvoice).catch(() => setInvoice(null));
+    // The invoice number and due date, when one was made for this order (the module may be off: then none).
+    setInvoiceLoaded(false);
+    api<OrderInvoice | null>(`/invoices/order/${params.id}`)
+      .then((row) => setInvoice(row && !row.cancelledAt ? row : null))
+      .catch(() => setInvoice(null))
+      .finally(() => setInvoiceLoaded(true));
   }, [params.id]);
 
+  // Prints once everything the document shows is here (for an invoice: also its NH number and due date).
+  const readyToPrint = !!order && !!company && !!layouts && (doc !== 'invoice' || invoiceLoaded);
+  const printedRef = useRef(false);
   useEffect(() => {
-    if (order && company && layouts && search.get('edit') !== '1') {
-      const t = window.setTimeout(() => window.print(), 300);
-      return () => window.clearTimeout(t);
-    }
-  }, [order, company, layouts, search]);
+    if (!readyToPrint || search.get('edit') === '1' || printedRef.current) return;
+    const t = window.setTimeout(() => {
+      printedRef.current = true;
+      window.print();
+      // Straight after an invoice sale: the printed copy is how it was handed over, so it counts as sent.
+      if (doc === 'invoice' && invoice && fromInvoiceAutoPrint(search)) void recordPrinted(invoice.id);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [readyToPrint, search, doc, invoice]);
 
   // How many sheets one copy takes (the browser moves rows that do not fit onto the next page).
   const [pages, setPages] = useState(0);
@@ -105,10 +145,10 @@ function PrintOrder() {
       setPages(Math.max(1, Math.ceil(el.scrollHeight / (g.height * 3.78))));
     }, 400);
     return () => window.clearTimeout(h);
-  }, [order, layouts, doc, templates, invoice]);
+  }, [order, layouts, doc, templates, invoice, readyToPrint]);
 
   if (error) return <p className="p-6 text-red-600">{error}</p>;
-  if (!order || !company || !layouts) return <p className="p-6 text-slate-500">Уншиж байна…</p>;
+  if (!order || !company || !layouts || !readyToPrint) return <p className="p-6 text-slate-500">Уншиж байна…</p>;
 
   const layout = layouts[doc];
   const geo = pageGeometry(layout);
@@ -126,21 +166,21 @@ function PrintOrder() {
   return (
     <div className="print-doc min-h-screen bg-white text-black">
       <div className="no-print flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm">
-        <button className="rounded border border-slate-300 bg-white px-3 py-1" onClick={() => window.print()}>
-          Хэвлэх
+        <button className="min-h-[36px] rounded bg-slate-900 px-4 py-1 font-semibold text-white" onClick={() => window.print()}>
+          Хэвлэх / PDF
         </button>
         {DOCS.map(([d, label]) => (
           <a
             key={d}
             href={`?doc=${d}`}
-            className={`rounded px-3 py-1 ${d === doc ? 'bg-slate-800 text-white' : 'border border-slate-300 bg-white'}`}
+            className={`inline-flex min-h-[36px] items-center rounded px-3 py-1 ${d === doc ? 'bg-slate-800 text-white' : 'border border-slate-300 bg-white'}`}
           >
             {label}
           </a>
         ))}
         {canCustomize && (
         <button
-          className={`rounded px-3 py-1 ${editing ? 'bg-amber-500 text-black' : 'border border-slate-300 bg-white'}`}
+          className={`min-h-[36px] rounded px-3 py-1 ${editing ? 'bg-amber-500 text-black' : 'border border-slate-300 bg-white'}`}
           onClick={() => setEditing((v) => !v)}
           title="Хэвлэхийн өмнө баримт дээрх аль ч бичгийг шууд засна (хадгалагдахгүй)"
         >
@@ -148,7 +188,7 @@ function PrintOrder() {
         </button>
         )}
         {canCustomize && (
-        <a className="rounded border border-slate-300 bg-white px-3 py-1" href={`?doc=${doc}${blank ? '' : '&blank=1'}&edit=1`}>
+        <a className="inline-flex min-h-[36px] items-center rounded border border-slate-300 bg-white px-3 py-1" href={`?doc=${doc}${blank ? '' : '&blank=1'}&edit=1`}>
           {blank ? 'Энгийн хувилбар' : 'Хоосон талбартай'}
         </a>
         )}
@@ -161,6 +201,8 @@ function PrintOrder() {
           <span className="ml-auto text-amber-700">Компанийн мэдээлэл тохируулаагүй байна (Админ → Компанийн мэдээлэл).</span>
         )}
       </div>
+      {/* Phones: the sheet keeps its paper width and scrolls sideways inside this box (on paper it is a plain box). */}
+      <div className="overflow-x-auto px-2 print:overflow-visible print:px-0">
       {Array.from({ length: layout.copies }, (_, i) => (
         <section
           key={i}
@@ -172,6 +214,7 @@ function PrintOrder() {
           {body}
         </section>
       ))}
+      </div>
       <style>{`
         @media print {
           .no-print { display: none !important; }

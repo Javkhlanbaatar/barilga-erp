@@ -3,6 +3,7 @@
 import { BlankRowsControl, EditText, FlagPart, Part, useDesign } from '@/components/doc-design';
 import { Blank, BlankRows, DocNote, LogoMark, SellerBlock, Signatures, Watermark, paidAndDue } from '@/components/invoice-doc';
 import { tugrik } from '@/lib/api';
+import { unitLabel } from '@/lib/catalog';
 import { companionLines, type CompanySettings, type DocTemplate, type Order } from '@/lib/types';
 
 export const DELIVERY_MN: Record<string, string> = {
@@ -215,7 +216,7 @@ export function Picklist({ order, company, t }: DocProps) {
                   ))}
                 </td>
                 <td className="text-right text-base font-bold">{qty(i.quantity)}</td>
-                <td>{i.product.unit}</td>
+                <td>{unitLabel(i.product.unit)}</td>
                 <td className="w-32">{i.pickedBy?.fullName ?? ''}</td>
               </tr>
             ))}
@@ -317,7 +318,7 @@ export function IssueNote({ order, company, t }: DocProps) {
                   ))}
                 </td>
                 <td className="font-mono">{i.product.sku}</td>
-                <td>{i.product.unit}</td>
+                <td>{unitLabel(i.product.unit)}</td>
                 <td className="text-right font-semibold">{qty(i.quantity)}</td>
                 {prices && <td className="text-right">{tugrik(i.unitPrice)}</td>}
                 {prices && <td className="text-right">{tugrik(i.lineTotal)}</td>}

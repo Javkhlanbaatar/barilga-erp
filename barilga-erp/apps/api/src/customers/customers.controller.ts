@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { POS_ROLES } from '../auth/rbac';
@@ -40,6 +40,18 @@ export class CustomersController {
   @RequireFeature('CREDIT_SALES')
   payDebt(@Param('id') id: string, @Body() dto: PayDebtDto, @CurrentUser() user: AuthUser) {
     return this.accounts.payDebt(id, dto.method, dto.amountMnt, user);
+  }
+
+  /** The customer's own prices, set at the till by someone with the right. */
+  @Get(':id/prices')
+  ownPrices(@Param('id') id: string) {
+    return this.customers.ownPrices(id);
+  }
+
+  @Delete(':id/prices/:productId')
+  @Permission('PRICE_OVERRIDE')
+  removeOwnPrice(@Param('id') id: string, @Param('productId') productId: string, @CurrentUser() user: AuthUser) {
+    return this.customers.removeOwnPrice(id, productId, user);
   }
 
   @Get()

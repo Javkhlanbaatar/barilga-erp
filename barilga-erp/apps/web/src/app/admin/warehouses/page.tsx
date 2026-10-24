@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Modal } from '@/components/modal';
 import { Shell } from '@/components/shell';
 import { api } from '@/lib/api';
 import { homeForRole } from '@/lib/rbac';
@@ -119,7 +120,7 @@ export default function AdminWarehousesPage() {
             Дэлгүүр бүр өөрийн агуулахтай. Анхдагч агуулахад хуучин үлдэгдэл хуваарилагдсан.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="btn-primary" onClick={openCreate}>
             Агуулах нэмэх
           </button>
@@ -129,8 +130,8 @@ export default function AdminWarehousesPage() {
         </div>
       </div>
 
-      <div className="card overflow-auto p-0">
-        <table className="w-full text-sm min-w-[640px]">
+      <div className="card table-scroll p-0">
+        <table className="w-full text-sm min-w-[720px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
               <th className="p-3">Код</th>
@@ -186,7 +187,7 @@ export default function AdminWarehousesPage() {
                   </div>
                 </td>
                 <td className="pr-3">
-                  <div className="flex justify-end gap-1">
+                  <div className="flex flex-wrap justify-end gap-1">
                     <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
                       Засах
                     </button>
@@ -224,9 +225,23 @@ export default function AdminWarehousesPage() {
       </div>
 
       {modal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={save} className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">{modal === 'create' ? 'Агуулах нэмэх' : 'Агуулах засах'}</h3>
+        <Modal
+          onClose={() => setModal(null)}
+          title={modal === 'create' ? 'Агуулах нэмэх' : 'Агуулах засах'}
+          size="md"
+          busy={saving}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
+                Болих
+              </button>
+              <button type="submit" form="warehouse-form" className="btn-primary" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+              </button>
+            </>
+          }
+        >
+          <form id="warehouse-form" onSubmit={save} className="space-y-3">
             {formError && <p className="text-red-400 text-sm">{formError}</p>}
             <label className="block text-xs text-slate-400">
               Код (давтагдахгүй, дараа нь солигдохгүй)
@@ -265,23 +280,15 @@ export default function AdminWarehousesPage() {
             </label>
             <label className="block text-xs text-slate-400">
               Утас
-              <input className="mt-1 w-full" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              <input className="mt-1 w-full" type="tel" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </label>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
-                Болих
-              </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {toast && (
         <div
-          className={`fixed bottom-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          className={`fixed bottom-4 left-4 right-4 z-[60] sm:left-auto rounded-lg border px-4 py-3 text-sm shadow-lg ${
             toast.kind === 'error'
               ? 'border-red-700 bg-red-950 text-red-100'
               : 'border-emerald-700 bg-emerald-950 text-emerald-100'

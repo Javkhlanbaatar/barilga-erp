@@ -21,6 +21,8 @@ const NOUNS: Record<string, string> = {
   User: 'Хэрэглэгч',
   'Staff member': 'Ажилтан',
   'Attendance record': 'Ирцийн бүртгэл',
+  Request: 'Хүсэлт',
+  'Day status': 'Өдрийн төлөв',
   'Payroll row': 'Цалингийн мөр',
   Adjustment: 'Нэмэгдэл/суутгал',
   Entry: 'Бичилт',

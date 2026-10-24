@@ -107,7 +107,7 @@ export default function WarehouseReportPage() {
           Дуусах
           <input type="date" className="mt-1 block" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
         </label>
-        <input className="w-56" placeholder="Бараа шүүх…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input className="w-full sm:w-56" placeholder="Бараа шүүх…" value={q} onChange={(e) => setQ(e.target.value)} />
         <label className="text-sm text-slate-300 flex items-center gap-2">
           <input type="checkbox" checked={onlyLow} onChange={(e) => setOnlyLow(e.target.checked)} />
           Зөвхөн дуусч буй
@@ -118,7 +118,7 @@ export default function WarehouseReportPage() {
 
       {report && (
         <>
-          <section className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6 mb-4">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6 mb-4">
             {[
               ['Орлого', report.totals.receipts],
               ['Шилжиж ирсэн', report.totals.transfersIn],

@@ -16,6 +16,27 @@ const nextMonth = (ym: string) => {
   return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
 };
 
+type DayMark = 'PAID_LEAVE' | 'UNPAID_LEAVE' | 'SICK' | 'ANNUAL_LEAVE' | 'BUSINESS_TRIP' | 'ABSENT' | 'DAY_OFF';
+const MARK_LABEL: Record<DayMark, string> = {
+  ABSENT: 'Тасалсан',
+  UNPAID_LEAVE: 'Цалингүй чөлөө',
+  SICK: 'Өвчтэй',
+  PAID_LEAVE: 'Цалинтай чөлөө',
+  ANNUAL_LEAVE: 'Ээлжийн амралт',
+  BUSINESS_TRIP: 'Томилолт',
+  DAY_OFF: 'Амралтын өдөр',
+};
+/** A payroll row with the month's day statuses from the attendance page (days per status). */
+type RowWithMarks = PayrollRow & { attendanceMarks?: Partial<Record<DayMark, number>> };
+/** 'Тасалсан 2 · Цалингүй чөлөө 1' — empty when the month has no day statuses. */
+function marksLine(r: PayrollRow) {
+  const m = (r as RowWithMarks).attendanceMarks ?? {};
+  return (Object.keys(MARK_LABEL) as DayMark[])
+    .filter((k) => (m[k] ?? 0) > 0)
+    .map((k) => `${MARK_LABEL[k]} ${m[k]}`)
+    .join(' · ');
+}
+
 /** One line of GET /hr/payroll/salary/:userId — a base salary in force from `fromMonth` on. */
 type SalaryRate = {
   id: string;
@@ -85,9 +106,42 @@ export default function PayrollPage() {
     }
   }
 
+  // Paying a month that has not ended locks its remaining days: attendance can no longer be recorded for them.
+  const notOver = period >= thisMonth();
   const markPaid = (r: PayrollRow) =>
-    window.confirm(`${r.user.fullName}: гарт олгох ${tugrik(r.netSalary)}-ийг олгосон гэж бүртгэх үү? Дараа нь өөрчлөгдөхгүй.`) &&
-    void run(() => api(`/hr/payroll/${r.id}/pay`, { method: 'PATCH', body: '{}' }));
+    window.confirm(
+      `${r.user.fullName}: гарт олгох ${tugrik(r.netSalary)}-ийг олгосон гэж бүртгэх үү?` +
+        (notOver ? `\n\nАнхаар: ${period} сар дуусаагүй байна. Олгосон гэж тэмдэглэвэл энэ сарын үлдсэн өдрүүдийн ирцийг бүртгэх, засах боломжгүй болно.` : '') +
+        '\n\nДараа нь зөвхөн «Буцааж нээх»-ээр өөрчилнө.',
+    ) && void run(() => api(`/hr/payroll/${r.id}/pay`, { method: 'PATCH', body: '{}' }));
+
+  /**
+   * Undo «олгосон» for these rows, with one reason. The general manager does not reopen his own pay or a top
+   * role's (the admin does), as for setting a salary.
+   */
+  const mayReopen = (r: PayrollRow) => maySetSalary(r);
+  const reopen = (rows: PayrollRow[]) => {
+    const allowed = rows.filter(mayReopen);
+    if (!allowed.length) return;
+    const who = allowed.length === 1 ? allowed[0].user.fullName : `${allowed.length} ажилтны`;
+    const skipped = rows.length - allowed.length;
+    const reason = window.prompt(
+      `${who} ${period} сарын цалинг «олгосон»-оос буцааж нээх шалтгаан (3-аас доошгүй тэмдэгт)${skipped ? ` — өөрийн болон дээд албан тушаалын ${skipped} мөрийг админ нээнэ` : ''}:`,
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 3) return setError('Шалтгаанаа бичнэ үү (3-аас доошгүй тэмдэгт)');
+    void (async () => {
+      setError('');
+      try {
+        for (const r of allowed) await api(`/hr/payroll/${r.id}/reopen`, { method: 'PATCH', body: JSON.stringify({ reason: reason.trim() }) });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Алдаа');
+      } finally {
+        // Some rows may already be reopened when one fails: show the table as it is now.
+        await load(period);
+      }
+    })();
+  };
 
   function downloadCsv() {
     if (!report) return;
@@ -157,6 +211,16 @@ export default function PayrollPage() {
           <Stat label={`Гарт олгох · олгосон ${tugrik(report.totals.paid)}`} value={report.totals.net} accent />
         </div>
       )}
+      {report && maySalary && report.rows.some((r) => r.status === 'PAID') && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-700 p-3 text-xs text-slate-400">
+          <span className="mr-auto">
+            Олгосон сарын ирц, цалинг өөрчлөхгүй. Андуурсан эсвэл сар дуусаагүй байхад тэмдэглэсэн бол буцааж нээнэ (шалтгаан нь засварын түүхэд үлдэнэ).
+          </span>
+          <button className="btn-ghost text-xs" onClick={() => reopen(report.rows.filter((r) => r.status === 'PAID'))}>
+            Олгосон бүгдийг буцааж нээх
+          </button>
+        </div>
+      )}
 
       <div className="card overflow-auto p-0">
         <table className={`w-full text-sm ${formula ? 'min-w-[980px]' : 'min-w-[640px]'}`}>
@@ -195,6 +259,8 @@ export default function PayrollPage() {
                 onToggle={() => setOpen(open === r.id ? null : r.id)}
                 onSalary={() => setSalaryFor(r)}
                 onPaid={() => markPaid(r)}
+                onReopen={() => reopen([r])}
+                mayReopen={mayReopen(r)}
                 onAdd={(amountMnt, reason) =>
                   run(() => api('/hr/payroll/adjustments', { method: 'POST', body: JSON.stringify({ userId: r.user.id, periodMonth: period, amountMnt, reason }) }))
                 }
@@ -255,12 +321,15 @@ function FragmentRow(props: {
   onToggle: () => void;
   onSalary: () => void;
   onPaid: () => void;
+  onReopen: () => void;
+  mayReopen: boolean;
   onAdd: (amountMnt: number, reason: string) => Promise<void> | void;
   onRemove: (id: string) => void;
 }) {
   const { r, formula, canPay, open } = props;
   const paid = r.status === 'PAID';
   const canAdjust = props.mayAdjust && !paid && (!props.isMe || props.isAdmin);
+  const marks = marksLine(r);
   const [kind, setKind] = useState<'bonus' | 'deduction'>('bonus');
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
@@ -281,6 +350,7 @@ function FragmentRow(props: {
             {r.user.isActive === false && <span className="ml-1 text-[10px] text-slate-500">(гарсан)</span>}
           </p>
           <p className="text-[11px] text-slate-500">{ROLE_LABEL[r.user.role]}</p>
+          {marks && <p className="text-[11px] text-amber-300">{marks}</p>}
         </td>
         <td className="text-right whitespace-nowrap">
           {tugrik(r.earnedBase)}
@@ -315,6 +385,16 @@ function FragmentRow(props: {
       {open && (
         <tr className="border-t border-slate-800 bg-steel-900/60">
           <td colSpan={props.cols} className="p-3">
+            <div className="mb-3 space-y-1 rounded-md border border-slate-800 p-2 text-xs">
+              <p className="font-semibold text-slate-300">Ирцийн төлөв ({props.period})</p>
+              <p className={marks ? 'text-amber-300' : 'text-slate-500'}>{marks || 'Тасалсан, чөлөөтэй өдөр алга.'}</p>
+              <p className="text-slate-500">
+                Төлөв цалинг автоматаар өөрчлөхгүй. Хасах, нэмэх бол доор суутгал / урамшууллыг гараар бичнэ.{' '}
+                <a className="text-amber-brand hover:underline" href={`/admin/attendance?tab=month&month=${props.period}`}>
+                  Сарын ирц харах
+                </a>
+              </p>
+            </div>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="space-y-1 text-xs">
                 <p className="font-semibold text-slate-300">Урамшуулал / суутгал ({props.period})</p>
@@ -362,6 +442,11 @@ function FragmentRow(props: {
                 {props.mayPay && !paid && (
                   <button className="btn-primary text-xs" onClick={props.onPaid}>
                     Олгосон
+                  </button>
+                )}
+                {props.mayPay && paid && props.mayReopen && (
+                  <button className="btn-ghost text-xs" onClick={props.onReopen}>
+                    Буцааж нээх
                   </button>
                 )}
               </div>

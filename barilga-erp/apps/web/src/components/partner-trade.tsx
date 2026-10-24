@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
 import { api, tugrik } from '@/lib/api';
+import { unitLabel } from '@/lib/catalog';
 import { downloadCsv } from '@/lib/csv';
 import { useCan } from '@/lib/permissions';
 import { ORDER_STATUS_LABEL, type PartnerTrade } from '@/lib/types';
@@ -32,7 +33,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
 
   /** Goods taken by quantity get their price later; the partner account follows (managers only). */
   async function price(receiptId: string, item: PartnerTrade['purchases'][number]['items'][number]) {
-    const raw = window.prompt(`${item.nameMn} (${qty(item.quantity)} ${item.unit}): нэгж үнэ ₮`, item.unitCostMnt == null ? '' : String(item.unitCostMnt));
+    const raw = window.prompt(`${item.nameMn} (${qty(item.quantity)} ${unitLabel(item.unit)}): нэгж үнэ ₮`, item.unitCostMnt == null ? '' : String(item.unitCostMnt));
     if (raw === null || !raw.trim()) return;
     const n = Math.round(Number(raw.replace(/[\s,]/g, '')));
     if (!(n >= 0)) return setError('Үнэ буруу байна');
@@ -105,7 +106,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
       downloadCsv(
         `baraa-${name}`,
         ['Код', 'Бараа', 'Нэгж', 'Зарсан тоо', 'Зарсан дүн', 'Авсан тоо', 'Авсан дүн'],
-        data.goods.map((g) => [g.sku, g.nameMn, g.unit, g.soldQty, g.soldMnt, g.boughtQty, g.boughtMnt]),
+        data.goods.map((g) => [g.sku, g.nameMn, unitLabel(g.unit), g.soldQty, g.soldMnt, g.boughtQty, g.boughtMnt]),
       );
   }
 
@@ -114,14 +115,14 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
     <div className="card space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <h3 className="font-semibold">Худалдаа / худалдан авалт</h3>
-        <div className="flex flex-wrap items-end gap-2 text-xs">
-          <label className="text-slate-400">
+        <div className="flex w-full flex-wrap items-end gap-2 text-xs sm:w-auto">
+          <label className="min-w-0 flex-1 text-slate-400 sm:flex-none">
             Эхлэх
-            <input type="date" className="mt-1 block" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <input type="date" className="mt-1 block w-full" value={from} onChange={(e) => setFrom(e.target.value)} />
           </label>
-          <label className="text-slate-400">
+          <label className="min-w-0 flex-1 text-slate-400 sm:flex-none">
             Дуусах
-            <input type="date" className="mt-1 block" value={to} onChange={(e) => setTo(e.target.value)} />
+            <input type="date" className="mt-1 block w-full" value={to} onChange={(e) => setTo(e.target.value)} />
           </label>
           <button type="button" className="btn-ghost text-xs" onClick={() => (setFrom(''), setTo(''))}>
             Бүх хугацаа
@@ -147,7 +148,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
           )}
         </div>
       )}
-      <div className="flex gap-1 text-sm">
+      <div className="flex flex-wrap gap-1 text-sm">
         {(
           [
             ['sales', 'Бид зарсан'],
@@ -211,7 +212,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
 
       {data && tab === 'purchases' && (
         <div className="max-h-[28rem] overflow-auto rounded border border-slate-800">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[520px] text-sm">
             <thead className="sticky top-0 bg-steel-900 text-left text-xs text-slate-400">
               <tr>
                 <th className="p-2">Огноо</th>
@@ -258,7 +259,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
 
       {data && tab === 'goods' && (
         <div className="max-h-[28rem] overflow-auto rounded border border-slate-800">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[480px] text-sm">
             <thead className="sticky top-0 bg-steel-900 text-left text-xs text-slate-400">
               <tr>
                 <th className="p-2">Бараа</th>
@@ -274,9 +275,9 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
                   <td className="p-2">
                     {g.nameMn} <span className="font-mono text-[11px] text-slate-500">{g.sku}</span>
                   </td>
-                  <td className="text-right">{g.soldQty ? `${qty(g.soldQty)} ${g.unit}` : '—'}</td>
+                  <td className="text-right">{g.soldQty ? `${qty(g.soldQty)} ${unitLabel(g.unit)}` : '—'}</td>
                   <td className="text-right text-amber-200">{g.soldMnt ? tugrik(g.soldMnt) : '—'}</td>
-                  {data.purchasesShown && <td className="text-right">{g.boughtQty ? `${qty(g.boughtQty)} ${g.unit}` : '—'}</td>}
+                  {data.purchasesShown && <td className="text-right">{g.boughtQty ? `${qty(g.boughtQty)} ${unitLabel(g.unit)}` : '—'}</td>}
                   {data.purchasesShown && <td className="text-right pr-2 text-sky-200">{g.boughtMnt ? tugrik(g.boughtMnt) : '—'}</td>}
                 </tr>
               ))}
@@ -316,7 +317,7 @@ function ItemList({
               {i.nameMn} <span className="font-mono text-slate-500">{i.sku}</span>
             </td>
             <td className="text-right whitespace-nowrap">
-              {qty(i.quantity)} {i.unit}
+              {qty(i.quantity)} {unitLabel(i.unit)}
             </td>
             <td className="text-right whitespace-nowrap text-slate-400">× {i.price == null ? 'үнэ ороогүй' : tugrik(i.price)}</td>
             <td className="text-right whitespace-nowrap">{i.total == null ? '—' : tugrik(i.total)}</td>

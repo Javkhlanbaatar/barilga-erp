@@ -24,6 +24,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Permission } from '../auth/permissions';
 import { CompanySettingsDto } from './company.dto';
 import { DocTemplatesDto } from './doc-template.dto';
+import { AddCategoryDto, CategoriesDto } from './dto/categories.dto';
+import { AddUnitDto, UnitsDto } from './dto/units.dto';
 import { PrintSettingsDto } from './print.dto';
 import { SettingsService } from './settings.service';
 
@@ -111,5 +113,47 @@ export class SettingsController {
   @Permission('DOC_TEMPLATE_EDIT')
   setDocuments(@Body() dto: DocTemplatesDto, @CurrentUser() user: AuthUser) {
     return this.settings.setDocuments(dto, user.id);
+  }
+
+  /** Measuring units (хэмжих нэгж) for the product form; everyone who sees the catalog reads them. */
+  @Get('units')
+  @Roles(...CATALOG_READ_ROLES)
+  units() {
+    return this.settings.units();
+  }
+
+  /** The whole list (settings page): whoever may add and change products. */
+  @Put('units')
+  @Permission('PRODUCT_WRITE')
+  setUnits(@Body() dto: UnitsDto, @CurrentUser() user: AuthUser) {
+    return this.settings.setUnits(dto.units, user.id);
+  }
+
+  /** One new unit from the product form ('+ шинэ нэгж'); returns the list. */
+  @Post('units')
+  @Permission('PRODUCT_WRITE')
+  addUnit(@Body() dto: AddUnitDto, @CurrentUser() user: AuthUser) {
+    return this.settings.addUnit(dto.unit, user.id);
+  }
+
+  /** Product categories (барааны ангилал) for the product form; everyone who sees the catalog reads them. */
+  @Get('categories')
+  @Roles(...CATALOG_READ_ROLES)
+  categories() {
+    return this.settings.categories();
+  }
+
+  /** The whole list (settings page): whoever may add and change products. Products keep their category. */
+  @Put('categories')
+  @Permission('PRODUCT_WRITE')
+  setCategories(@Body() dto: CategoriesDto, @CurrentUser() user: AuthUser) {
+    return this.settings.setCategories(dto.categories, user.id);
+  }
+
+  /** One new category from the product form ('+ шинэ ангилал'); returns the list. */
+  @Post('categories')
+  @Permission('PRODUCT_WRITE')
+  addCategory(@Body() dto: AddCategoryDto, @CurrentUser() user: AuthUser) {
+    return this.settings.addCategory(dto.category, user.id);
   }
 }

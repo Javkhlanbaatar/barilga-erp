@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { Modal } from '@/components/modal';
 import { api, tugrik } from '@/lib/api';
 import { useCan } from '@/lib/permissions';
 
@@ -33,14 +34,14 @@ export type CashSession = {
 };
 
 type Current = { session: CashSession | null; lastClosed: { countedCashMnt: number | null; closedAt: string; user: { fullName: string } } | null };
-type Modal = null | 'open' | 'move' | 'close';
+type DialogKind = null | 'open' | 'move' | 'close';
 
 const time = (iso: string) => new Intl.DateTimeFormat('mn-MN', { timeZone: 'Asia/Ulaanbaatar', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
 
 /** The cashier's drawer on the POS: open it with a counted float, record cash in/out, and close it with a count. */
 export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
   const [cur, setCur] = useState<Current | null>(null);
-  const [modal, setModal] = useState<Modal>(null);
+  const [modal, setModal] = useState<DialogKind>(null);
   const [amount, setAmount] = useState('');
   const [kind, setKind] = useState<'IN' | 'OUT'>('OUT');
   const [reason, setReason] = useState('');
@@ -64,7 +65,7 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
     return () => window.clearInterval(h);
   }, [load, refreshKey]);
 
-  function openModal(m: Modal) {
+  function openModal(m: DialogKind) {
     setError('');
     setReason('');
     setAmount(m === 'open' ? String(cur?.lastClosed?.countedCashMnt ?? '') : '');
@@ -106,7 +107,7 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
           <span>
             Касс нээлттэй ({time(s.openedAt)}-с) · кассанд байх ёстой <b className="text-emerald-300">{tugrik(sum!.expectedCashMnt)}</b>
           </span>
-          <span className="flex gap-2">
+          <span className="flex flex-wrap gap-2">
             {can('CASH_MOVEMENT') && (
               <button className="btn-ghost text-xs" onClick={() => openModal('move')}>
                 Мөнгө гаргах / нэмэх
@@ -142,9 +143,13 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={submit} className="card w-full max-w-md space-y-3">
-            <h3 className="text-lg font-semibold">{modal === 'open' ? 'Касс нээх' : modal === 'move' ? 'Мөнгө гаргах / нэмэх' : 'Касс хаах'}</h3>
+        <Modal
+          onClose={() => setModal(null)}
+          title={modal === 'open' ? 'Касс нээх' : modal === 'move' ? 'Мөнгө гаргах / нэмэх' : 'Касс хаах'}
+          size="md"
+          busy={busy}
+        >
+          <form onSubmit={submit} className="space-y-3">
             {modal === 'open' && (
               <p className="text-xs text-slate-400">
                 Кассанд байгаа задгай мөнгөө тоолж оруулна.
@@ -196,7 +201,7 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
             )}
             <label className="block text-xs text-slate-400">
               {modal === 'close' ? 'Тоолсон бэлэн мөнгө ₮' : 'Дүн ₮'}
-              <input className="mt-1 block w-full" type="number" min={0} autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />
+              <input className="mt-1 block w-full" type="number" inputMode="numeric" min={0} autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />
             </label>
             {modal !== 'open' && (
               <label className="block text-xs text-slate-400">
@@ -213,7 +218,7 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
               </p>
             )}
             {error && <p className="text-sm text-red-400">{error}</p>}
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
                 Болих
               </button>
@@ -222,7 +227,7 @@ export function CashDrawerBar({ refreshKey }: { refreshKey?: unknown }) {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
     </>
   );

@@ -36,6 +36,16 @@ export class OrderLineDto {
   @IsString()
   @MaxLength(120)
   supplierName?: string;
+
+  /**
+   * A unit price typed at the till (whole tugrik). Needs the PRICE_OVERRIDE right when it differs from the
+   * customer's own price, their list or retail; never below cost. The public shop drops it.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1, { message: 'Үнэ 1₮-өөс бага байж болохгүй / unitPriceMnt must be at least 1' })
+  @Max(2_000_000_000)
+  unitPriceMnt?: number;
 }
 
 function toDeliveryMethod(value: unknown, obj: Record<string, unknown>): DeliveryMethod {

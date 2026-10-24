@@ -57,11 +57,12 @@ export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order
         </div>
       </div>
       <div className="flex flex-wrap items-end gap-2">
-        <label className="text-xs text-slate-400">
+        <label className="w-full text-xs text-slate-400 sm:w-auto">
           Төлж буй дүн
           <input
-            className="mt-1 block w-40"
+            className="mt-1 block w-full sm:w-40"
             type="number"
+            inputMode="numeric"
             min={1}
             max={owed}
             required
@@ -69,12 +70,12 @@ export function CreditPanel({ order, onPaid }: { order: Order; onPaid: (o: Order
             onChange={(e) => setAmount(Math.max(0, Math.round(Number(e.target.value) || 0)))}
           />
         </label>
-        <div className="flex gap-1">
+        <div className="flex flex-wrap gap-1">
           {(['CASH', 'CARD', 'TRANSFER'] as const).map((m) => (
             <button
               key={m}
               type="button"
-              className={`rounded-md px-3 py-2 text-sm ${method === m ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
+              className={`min-h-[40px] rounded-md px-3 py-2 text-sm ${method === m ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
               onClick={() => setMethod(m)}
             >
               {m === 'CASH' ? 'Бэлэн' : m === 'CARD' ? 'Карт' : 'Шилжүүлэг'}

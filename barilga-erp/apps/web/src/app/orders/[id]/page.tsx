@@ -5,8 +5,10 @@ import { useParams } from 'next/navigation';
 import { CreditPanel, owedOnOrder } from '@/components/credit-panel';
 import { GatherPanel } from '@/components/gather-panel';
 import { InvoicePanel } from '@/components/invoice-panel';
+import { Modal } from '@/components/modal';
 import { Shell } from '@/components/shell';
 import { api, orderTrackingUrl, tugrik } from '@/lib/api';
+import { unitLabel } from '@/lib/catalog';
 import { useFeatures } from '@/lib/features';
 import { useCan } from '@/lib/permissions';
 import { AuthUser, DELIVERY_LABEL, ORDER_STATUS_LABEL, companionLines, ebarimtStatusLabel, isHiredTransport, Order, PaymentSplit, VEHICLE_LABEL } from '@/lib/types';
@@ -100,7 +102,8 @@ export default function OrderDetailPage() {
     const frame = document.createElement('iframe');
     frame.id = 'receipt-frame';
     frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-    frame.src = `/print/orders/${params.id}?doc=${doc}`;
+    // The invoice printed straight after the sale is recorded as sent on paper (print page reads invoice=1).
+    frame.src = `/print/orders/${params.id}?doc=${doc}${doc === 'invoice' ? '&invoice=1' : ''}`;
     document.body.appendChild(frame);
   }, [params.id]);
 
@@ -218,6 +221,23 @@ export default function OrderDetailPage() {
     setReturnOpen(true);
   }
 
+  /** One line of the return form: what was sold, already returned, still returnable, and the chosen amount. */
+  function returnLine(item: Order['items'][number]) {
+    const sold = Number(item.quantity);
+    const done = returnedByItem[item.id] ?? 0;
+    const remaining = Math.round((sold - done) * 1000) / 1000;
+    const q = returnQty[item.id] ?? 0;
+    const set = (v: number) => setReturnQty({ ...returnQty, [item.id]: Math.max(0, Math.min(remaining, Math.round(v * 1000) / 1000)) });
+    return { sold, done, remaining, q, set };
+  }
+
+  /** Closing the return dialog with something entered asks first (a tap outside must not lose it). */
+  function closeReturn() {
+    const dirty = Object.values(returnQty).some((q) => q > 0) || returnReason.trim() !== '';
+    if (dirty && !window.confirm('Буцаалтын мэдээлэл хадгалагдахгүй. Хаах уу?')) return;
+    setReturnOpen(false);
+  }
+
   async function submitReturn(e: FormEvent) {
     e.preventDefault();
     if (!order) return;
@@ -227,6 +247,7 @@ export default function OrderDetailPage() {
     if (!items.length) {
       setError('Буцаах тоо хэмжээгээ оруулна уу');
       setToast('Буцаах тоо хэмжээгээ оруулна уу');
+      window.setTimeout(() => setToast(''), 4000);
       return;
     }
     setSaving(true);
@@ -250,6 +271,7 @@ export default function OrderDetailPage() {
       const message = err instanceof Error ? err.message : 'Буцаалт хийж чадсангүй';
       setError(message);
       setToast(message);
+      window.setTimeout(() => setToast(''), 6000);
     } finally {
       setSaving(false);
     }
@@ -262,6 +284,7 @@ export default function OrderDetailPage() {
       await load();
     } catch (err) {
       setToast(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
+      window.setTimeout(() => setToast(''), 6000);
     }
   }
 
@@ -308,6 +331,7 @@ export default function OrderDetailPage() {
       const message = err instanceof Error ? err.message : 'Цуцалж чадсангүй';
       setError(message);
       setToast(message);
+      window.setTimeout(() => setToast(''), 6000);
     }
   }
 
@@ -326,6 +350,7 @@ export default function OrderDetailPage() {
       const message = err instanceof Error ? err.message : 'Оноож чадсангүй';
       setError(message);
       setToast(message);
+      window.setTimeout(() => setToast(''), 6000);
     }
   }
 
@@ -347,6 +372,7 @@ export default function OrderDetailPage() {
       const message = err instanceof Error ? err.message : 'Оноож чадсангүй';
       setError(message);
       setToast(message);
+      window.setTimeout(() => setToast(''), 6000);
     } finally {
       setSaving(false);
     }
@@ -365,8 +391,8 @@ export default function OrderDetailPage() {
 
   return (
     <Shell>
-      <div className="flex justify-between items-start mb-4">
-        <div>
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
           <p className="text-amber-brand text-xs">{ORDER_STATUS_LABEL[order.status] ?? order.status}</p>
           <h2 className="text-2xl font-bold">{order.orderNumber}</h2>
           <p className="text-slate-400">
@@ -403,7 +429,7 @@ export default function OrderDetailPage() {
               Хяналтын холбоос:{' '}
               <button
                 type="button"
-                className="text-amber-brand hover:underline"
+                className="break-all text-left text-amber-brand hover:underline"
                 onClick={() => {
                   const url = orderTrackingUrl(order.trackingToken);
                   if (url) void navigator.clipboard.writeText(url);
@@ -414,7 +440,7 @@ export default function OrderDetailPage() {
             </p>
           )}
         </div>
-        <div className="flex flex-col items-end gap-2">
+        <div className="flex flex-col items-start gap-2 md:items-end">
           <p className="text-2xl font-bold text-amber-brand">{tugrik(order.totalMnt)}</p>
           <label className="flex items-center gap-1 text-[11px] text-slate-400">
             <input
@@ -431,7 +457,7 @@ export default function OrderDetailPage() {
             />
             Төлөгдөхөд баримт автоматаар хэвлэх
           </label>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1 md:justify-end">
             {[
               ['invoice', 'Нэхэмжлэх'],
               ['receipt', 'Баримт'],
@@ -449,20 +475,24 @@ export default function OrderDetailPage() {
               </a>
             ))}
           </div>
-          {canReturn && (
-            <button className="btn-ghost text-sm" onClick={openReturn}>
-              Буцаалт
-            </button>
-          )}
-          {canCancel && (
-            <button className="btn-danger text-sm" onClick={cancelOrder}>
-              Захиалга цуцлах
-            </button>
-          )}
-          {canTakePayment && (
-            <a href="/pos" className="btn-primary text-sm">
-              + Шинэ борлуулалт
-            </a>
+          {(canReturn || canCancel || canTakePayment) && (
+            <div className="flex flex-wrap gap-2 md:flex-col md:items-end">
+              {canReturn && (
+                <button className="btn-ghost text-sm" onClick={openReturn}>
+                  Буцаалт
+                </button>
+              )}
+              {canCancel && (
+                <button className="btn-danger text-sm" onClick={cancelOrder}>
+                  Захиалга цуцлах
+                </button>
+              )}
+              {canTakePayment && (
+                <a href="/pos" className="btn-primary text-sm">
+                  + Шинэ борлуулалт
+                </a>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -471,7 +501,7 @@ export default function OrderDetailPage() {
           <p className="text-sm">
             Хүлээгдэж буй төлбөр: <b>{tugrik(waitingMnt)}</b>. Харилцагч өөр хэлбэрээр төлсөн бол:
           </p>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {(['CASH', 'CARD', 'TRANSFER'] as const).map((m) => (
               <button
                 key={m}
@@ -532,7 +562,7 @@ export default function OrderDetailPage() {
           {awaitedTransfer > 0 && order.status === 'PENDING_PAYMENT' && (
             <div className="space-y-2 rounded-xl border border-sky-700 bg-sky-950/40 p-3 text-sm">
               <p className="text-sky-100">
-                Банкны шилжүүлэг хүлээж байна: <b>{tugrik(awaitedTransfer)}</b>. Гүйлгээний утга: <b className="font-mono">{order.orderNumber}</b>
+                Банкны шилжүүлэг хүлээж байна: <b>{tugrik(awaitedTransfer)}</b>. Гүйлгээний утга: <b className="font-mono">{order.invoice && !order.invoice.cancelledAt ? order.invoice.invoiceNumber : order.orderNumber}</b>
               </p>
               <p className="text-xs text-slate-400">Банкны апп / хуулгаас мөнгө орсныг шалгаад дарна. Тэр хүртэл бараа олгохгүй.</p>
               {canTakePayment && (
@@ -583,6 +613,7 @@ export default function OrderDetailPage() {
                     ))}
                     <p className="text-xs text-slate-500">
                       {Number(item.quantity)} × {tugrik(item.unitPrice)}
+                      {item.listPriceMnt != null ? ` (касс дээр өөрчилсөн; байсан ${tugrik(item.listPriceMnt)})` : ''}
                       {item.sourceType === 'EXTERNAL_SUPPLIER' ? ` · Гаднаас (${item.supplierName ?? 'өөр дэлгүүр'})` : ''}
                       {taken > 0 ? ` · буцаасан ${taken}` : ''}
                       {oversold ? ` · агуулахын үлдэгдэл ${Number(item.product.stockQty)}` : ''}
@@ -652,10 +683,26 @@ export default function OrderDetailPage() {
           {canEditFees && (
             <div className="border-t border-slate-700 pt-3 space-y-2">
               <h4 className="text-sm font-semibold">Кассчин — төлбөр засаж оруулах</h4>
-              <input type="number" value={delivery} onChange={(e) => setDelivery(Number(e.target.value))} />
-              <input type="number" value={unloading} onChange={(e) => setUnloading(Number(e.target.value))} />
-              <input type="number" value={timeAdj} onChange={(e) => setTimeAdj(Number(e.target.value))} />
-              <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Шалтгаан" />
+              <div className="grid gap-2 sm:grid-cols-3">
+                <label className="block text-xs text-slate-400">
+                  Хүргэлт (₮)
+                  <input type="number" inputMode="numeric" className="mt-1 w-full" value={delivery} onChange={(e) => setDelivery(Number(e.target.value))} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Буулгалт (₮)
+                  <input type="number" inputMode="numeric" className="mt-1 w-full" value={unloading} onChange={(e) => setUnloading(Number(e.target.value))} />
+                </label>
+                <label className="block text-xs text-slate-400">
+                  Цагийн нэмэгдэл/хөнгөлөлт (₮)
+                  {/* No inputMode here: the phone digit pad has no minus sign, and a discount is a negative number. */}
+                  <input type="number" className="mt-1 w-full" value={timeAdj} onChange={(e) => setTimeAdj(Number(e.target.value))} />
+                </label>
+              </div>
+              <p className="text-[11px] text-slate-500">Хөнгөлөлт бол хасах тоо бичнэ (ж: -5000).</p>
+              <label className="block text-xs text-slate-400">
+                Шалтгаан
+                <input className="mt-1 w-full" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Шалтгаан" />
+              </label>
               <button className="btn-primary" onClick={override}>
                 Түүхэнд бүртгэж хадгалах
               </button>
@@ -681,6 +728,8 @@ export default function OrderDetailPage() {
               <label className="block text-xs text-slate-400">
                 Гаднаас ирсэн жолоочийн утас
                 <input
+                  type="tel"
+                  inputMode="tel"
                   className="mt-1 w-full"
                   value={driverPhone}
                   onChange={(e) => setDriverPhone(e.target.value)}
@@ -752,9 +801,8 @@ export default function OrderDetailPage() {
       </div>
 
       {assignItemId && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={assignSupplier} className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">Гадны нийлүүлэгч оноох</h3>
+        <Modal onClose={() => setAssignItemId(null)} title="Гадны нийлүүлэгч оноох" size="md" busy={saving}>
+          <form onSubmit={assignSupplier} className="space-y-3">
             <p className="text-sm text-slate-300">
               Энэ мөрийг гадны нийлүүлэгчээс авсан болгоно. Олгосон захиалгын хувьд агуулахын үлдэгдэл сэргээгдэж, нийлүүлэгчид өглөг үүснэ.
             </p>
@@ -779,7 +827,7 @@ export default function OrderDetailPage() {
                 placeholder="Өөр талбайгаас зарсан / тэмдэглэхээ мартсан"
               />
             </label>
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <button type="button" className="btn-ghost" onClick={() => setAssignItemId(null)}>
                 Болих
               </button>
@@ -788,16 +836,29 @@ export default function OrderDetailPage() {
               </button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {returnOpen && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={submitReturn} className="card w-full max-w-2xl space-y-4 max-h-[90vh] overflow-auto">
-            <div>
-              <h3 className="font-semibold text-lg">Буцаалт — {order.orderNumber}</h3>
-              <p className="text-xs text-slate-400">1. Буцаах бараа, тоогоо сонгоно · 2. Шалтгаан · 3. Мөнгийг яаж буцаах</p>
-            </div>
+        <Modal
+          onClose={closeReturn}
+          guardTyping={false}
+          title={`Буцаалт — ${order.orderNumber}`}
+          size="lg"
+          busy={saving}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={closeReturn}>
+                Болих
+              </button>
+              <button type="submit" form="return-form" className="btn-primary" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : 'Буцаах'}
+              </button>
+            </>
+          }
+        >
+          <form id="return-form" onSubmit={submitReturn} className="space-y-4">
+            <p className="-mt-2 text-xs text-slate-400">1. Буцаах бараа, тоогоо сонгоно · 2. Шалтгаан · 3. Мөнгийг яаж буцаах</p>
             {error && <p className="text-red-400 text-sm">{error}</p>}
 
             <div className="flex flex-wrap gap-2">
@@ -818,7 +879,56 @@ export default function OrderDetailPage() {
                 Арилгах
               </button>
             </div>
-            <table className="w-full text-sm">
+            {/* Phones: one card per item (the 5-column table does not fit). */}
+            <div className="space-y-2 md:hidden">
+              {order.items.map((item) => {
+                const { sold, done, remaining, q, set } = returnLine(item);
+                return (
+                  <div key={item.id} className={`rounded-lg border border-slate-800 p-3 ${remaining <= 0 ? 'opacity-40' : ''}`}>
+                    <p className="font-medium">{item.product.nameMn}</p>
+                    <p className="text-[11px] text-slate-500">
+                      {item.product.sku} · {tugrik(item.unitPrice)} / {unitLabel(item.product.unit)}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Зарсан {sold} · Буцаасан {done || '—'}
+                    </p>
+                    {remaining <= 0 ? (
+                      <p className="mt-1 text-xs text-slate-500">бүгд буцсан</p>
+                    ) : (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <button type="button" className="btn-ghost h-9 w-9 p-0 text-lg" aria-label="Нэгээр хасах" onClick={() => set(q - 1)}>
+                          −
+                        </button>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min={0}
+                          max={remaining}
+                          step="any"
+                          className="w-20 text-center"
+                          value={q}
+                          onChange={(e) => set(Number(e.target.value))}
+                        />
+                        <button type="button" className="btn-ghost h-9 w-9 p-0 text-lg" aria-label="Нэгээр нэмэх" onClick={() => set(q + 1)}>
+                          +
+                        </button>
+                        <button type="button" className="min-h-[36px] px-1 text-xs text-amber-brand hover:underline" onClick={() => set(remaining)}>
+                          бүгд ({remaining})
+                        </button>
+                        <span className="ml-auto font-semibold">{q > 0 ? tugrik(Math.round(item.unitPrice * q)) : '—'}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              <p className="flex items-center justify-between border-t border-slate-700 pt-2 font-semibold">
+                Буцаах дүн
+                <span className="text-lg font-bold text-amber-brand">
+                  {tugrik(order.items.reduce((s, i) => s + Math.round(i.unitPrice * (returnQty[i.id] ?? 0)), 0))}
+                </span>
+              </p>
+            </div>
+            <table className="hidden w-full text-sm md:table">
               <thead className="text-left text-[11px] text-slate-400">
                 <tr>
                   <th className="pb-1">Бараа</th>
@@ -830,17 +940,13 @@ export default function OrderDetailPage() {
               </thead>
               <tbody>
                 {order.items.map((item) => {
-                  const sold = Number(item.quantity);
-                  const done = returnedByItem[item.id] ?? 0;
-                  const remaining = Math.round((sold - done) * 1000) / 1000;
-                  const q = returnQty[item.id] ?? 0;
-                  const set = (v: number) => setReturnQty({ ...returnQty, [item.id]: Math.max(0, Math.min(remaining, Math.round(v * 1000) / 1000)) });
+                  const { sold, done, remaining, q, set } = returnLine(item);
                   return (
                     <tr key={item.id} className={`border-t border-slate-800 align-middle ${remaining <= 0 ? 'opacity-40' : ''}`}>
                       <td className="py-2 pr-2">
                         <p className="font-medium">{item.product.nameMn}</p>
                         <p className="text-[11px] text-slate-500">
-                          {item.product.sku} · {tugrik(item.unitPrice)} / {item.product.unit}
+                          {item.product.sku} · {tugrik(item.unitPrice)} / {unitLabel(item.product.unit)}
                         </p>
                       </td>
                       <td className="text-right">{sold}</td>
@@ -850,11 +956,12 @@ export default function OrderDetailPage() {
                           <span className="text-xs text-slate-500">бүгд буцсан</span>
                         ) : (
                           <span className="inline-flex items-center gap-1">
-                            <button type="button" className="btn-ghost px-2 py-0.5" onClick={() => set(q - 1)}>
+                            <button type="button" className="btn-ghost h-9 w-9 p-0" aria-label="Нэгээр хасах" onClick={() => set(q - 1)}>
                               −
                             </button>
                             <input
                               type="number"
+                              inputMode="decimal"
                               min={0}
                               max={remaining}
                               step="any"
@@ -862,7 +969,7 @@ export default function OrderDetailPage() {
                               value={q}
                               onChange={(e) => set(Number(e.target.value))}
                             />
-                            <button type="button" className="btn-ghost px-2 py-0.5" onClick={() => set(q + 1)}>
+                            <button type="button" className="btn-ghost h-9 w-9 p-0" aria-label="Нэгээр нэмэх" onClick={() => set(q + 1)}>
                               +
                             </button>
                             <button type="button" className="text-[11px] text-amber-brand hover:underline" onClick={() => set(remaining)}>
@@ -951,20 +1058,12 @@ export default function OrderDetailPage() {
                 </span>
               </label>
             )}
-            <div className="flex justify-end gap-2">
-              <button type="button" className="btn-ghost" onClick={() => setReturnOpen(false)}>
-                Болих
-              </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Буцаах'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {toast && (
-        <div className={`fixed bottom-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm ${error && toast === error ? 'border-red-700 bg-red-950 text-red-100' : 'border-emerald-700 bg-emerald-950 text-emerald-100'}`}>
+        <div className={`pointer-events-none fixed ${returnOpen ? "bottom-24" : "bottom-4"} left-4 right-4 z-[60] sm:left-auto rounded-lg border px-4 py-3 text-sm ${error && toast === error ? 'border-red-700 bg-red-950 text-red-100' : 'border-emerald-700 bg-emerald-950 text-emerald-100'}`}>
           {toast}
         </div>
       )}

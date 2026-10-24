@@ -7,7 +7,23 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Permission } from '../auth/permissions';
 import { FeatureGuard, RequireFeature } from '../features/feature.guard';
 import { OVERSIGHT_ROLES, TOP_ROLES } from '../auth/rbac';
-import { AttendanceFixDto, AttendanceSettingsDto, BaseSalaryDto, PayrollAdjustmentDto, PayrollQueryDto, PayrollSettingsDto, StaffPunchDto } from './dto/hr.dto';
+import {
+  AttendanceAddDto,
+  AttendanceDeleteDto,
+  AttendanceFixDto,
+  AttendanceSettingsDto,
+  BaseSalaryDto,
+  ConfirmPunchesDto,
+  DayMarkDto,
+  LeaveCancelDto,
+  LeaveDecisionDto,
+  LeaveRequestDto,
+  PayrollAdjustmentDto,
+  PayrollQueryDto,
+  PayrollReopenDto,
+  PayrollSettingsDto,
+  StaffPunchDto,
+} from './dto/hr.dto';
 import { HrService } from './hr.service';
 
 @Controller('hr')
@@ -28,8 +44,97 @@ export class HrController {
     return this.hr.attendanceMonth(user, query.periodMonth);
   }
 
+  // ---- The person themselves (any signed-in staff; the admin decides whether self check-in is on)
+
+  @Get('me/attendance')
+  myAttendance(@CurrentUser() user: AuthUser, @Query() query: PayrollQueryDto) {
+    return this.hr.myAttendance(user, query.periodMonth);
+  }
+
+  @Post('me/check-in')
+  selfCheckIn(@CurrentUser() user: AuthUser) {
+    return this.hr.selfCheckIn(user);
+  }
+
+  @Post('me/check-out')
+  selfCheckOut(@CurrentUser() user: AuthUser) {
+    return this.hr.selfCheckOut(user);
+  }
+
+  @Post('me/leave')
+  requestLeave(@CurrentUser() user: AuthUser, @Body() dto: LeaveRequestDto) {
+    return this.hr.requestLeave(user, dto);
+  }
+
+  @Post('me/leave/:id/cancel')
+  cancelLeave(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.hr.cancelLeave(user, id);
+  }
+
+  // ---- Managers (or anyone given the attendance right)
+
+  @Get('leave')
+  @Permission('ATTENDANCE_MANAGE')
+  listLeave(@CurrentUser() user: AuthUser, @Query('status') status?: string) {
+    return this.hr.listLeave(user, status);
+  }
+
+  @Post('leave/:id/approve')
+  @Permission('ATTENDANCE_MANAGE')
+  approveLeave(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: LeaveDecisionDto) {
+    return this.hr.decideLeave(user, id, true, dto);
+  }
+
+  @Post('leave/:id/reject')
+  @Permission('ATTENDANCE_MANAGE')
+  rejectLeave(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: LeaveDecisionDto) {
+    return this.hr.decideLeave(user, id, false, dto);
+  }
+
+  /** Cancel an approved leave, or shorten it (back early). */
+  @Post('leave/:id/cancel')
+  @Permission('ATTENDANCE_MANAGE')
+  cancelApprovedLeave(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: LeaveCancelDto) {
+    return this.hr.cancelApprovedLeave(user, id, dto);
+  }
+
+  /** One day's status for a person (тасалсан, өвчтэй, чөлөө…). */
+  @Put('attendance/days')
+  @Permission('ATTENDANCE_MANAGE')
+  setDayMark(@CurrentUser() user: AuthUser, @Body() dto: DayMarkDto) {
+    return this.hr.setDayMark(user, dto);
+  }
+
+  @Delete('attendance/days/:userId/:date')
+  @Permission('ATTENDANCE_MANAGE')
+  clearDayMark(@CurrentUser() user: AuthUser, @Param('userId') userId: string, @Param('date') date: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('Огноо YYYY-MM-DD хэлбэртэй байна / date must be YYYY-MM-DD');
+    return this.hr.clearDayMark(user, userId, date);
+  }
+
+  /** Confirm check-ins people recorded themselves. */
+  @Post('attendance/confirm')
+  @Permission('ATTENDANCE_MANAGE')
+  confirmPunches(@CurrentUser() user: AuthUser, @Body() dto: ConfirmPunchesDto) {
+    return this.hr.confirmPunches(user, dto.ids);
+  }
+
+  /** A record added by hand, with a reason. */
+  @Post('attendance')
+  @Permission('ATTENDANCE_MANAGE')
+  addRecord(@CurrentUser() user: AuthUser, @Body() dto: AttendanceAddDto) {
+    return this.hr.addRecord(user, dto);
+  }
+
+  @Delete('attendance/:id')
+  @Permission('ATTENDANCE_MANAGE')
+  deleteRecord(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() dto: AttendanceDeleteDto) {
+    return this.hr.deleteRecord(user, id, dto.reason);
+  }
+
   @Get('attendance/settings')
-  @Roles(...OVERSIGHT_ROLES)
+  // Also for someone given the attendance right (they need the working day to correct times).
+  @Permission('ATTENDANCE_MANAGE', ...OVERSIGHT_ROLES)
   attendanceSettings() {
     return this.hr.attendanceSettings();
   }
@@ -106,5 +211,12 @@ export class HrController {
   @Permission('SALARY_SET')
   markPaid(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.hr.markPaid(id, user);
+  }
+
+  /** Undo «олгосон» with a reason (admin or the general manager). */
+  @Patch('payroll/:id/reopen')
+  @Permission('SALARY_SET')
+  reopenPaid(@Param('id') id: string, @Body() dto: PayrollReopenDto, @CurrentUser() user: AuthUser) {
+    return this.hr.reopenPaid(id, dto.reason, user);
   }
 }

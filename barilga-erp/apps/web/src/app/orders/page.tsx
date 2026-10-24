@@ -107,23 +107,24 @@ export default function OrdersPage() {
     <Shell>
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <h2 className="text-xl font-bold">Захиалгууд</h2>
-        <div className="flex flex-wrap items-end gap-2">
-          <input className="w-64" placeholder="Дугаар, утас, нэрээр хайх…" value={q} onChange={(e) => setQ(e.target.value)} />
-          <label className="text-xs text-slate-400">
+        <div className="flex w-full flex-wrap items-end gap-2 sm:w-auto">
+          <input className="w-full sm:w-64" placeholder="Дугаар, утас, нэрээр хайх…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <label className="min-w-0 flex-1 text-xs text-slate-400 sm:flex-none">
             Эхлэх
-            <input type="date" className="mt-1 block" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <input type="date" className="mt-1 block w-full" value={from} onChange={(e) => setFrom(e.target.value)} />
           </label>
-          <label className="text-xs text-slate-400">
+          <label className="min-w-0 flex-1 text-xs text-slate-400 sm:flex-none">
             Дуусах
-            <input type="date" className="mt-1 block" value={to} onChange={(e) => setTo(e.target.value)} />
+            <input type="date" className="mt-1 block w-full" value={to} onChange={(e) => setTo(e.target.value)} />
           </label>
         </div>
       </div>
-      <div className="mb-2 flex flex-wrap items-center gap-1 text-xs">
+      {/* Phones: one row that scrolls sideways instead of wrapping into several lines. */}
+      <div className="mb-2 flex items-center gap-1 overflow-x-auto pb-1 text-xs md:flex-wrap md:overflow-visible md:pb-0">
         {quick.map(([label, f, t]) => (
           <button
             key={label}
-            className={from === f && to === t ? 'btn-primary text-xs' : 'btn-ghost text-xs'}
+            className={`shrink-0 whitespace-nowrap ${from === f && to === t ? 'btn-primary text-xs' : 'btn-ghost text-xs'}`}
             onClick={() => {
               setFrom(f);
               setTo(t);
@@ -132,15 +133,15 @@ export default function OrdersPage() {
             {label}
           </button>
         ))}
-        <button className="btn-ghost ml-auto text-xs" onClick={exportCsv} disabled={!orders.length}>
+        <button className="btn-ghost ml-auto shrink-0 text-xs" onClick={exportCsv} disabled={!orders.length}>
           Excel
         </button>
       </div>
-      <div className="mb-3 flex flex-wrap gap-1">
+      <div className="mb-3 flex gap-1 overflow-x-auto pb-1 md:flex-wrap md:overflow-visible md:pb-0">
         {STATUS_TABS.map(([key, label]) => (
           <button
             key={key || 'all'}
-            className={`rounded-md px-3 py-1.5 text-sm ${status === key ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
+            className={`min-h-[36px] shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-sm ${status === key ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'}`}
             onClick={() => setStatus(key)}
           >
             {label}
@@ -148,7 +149,59 @@ export default function OrdersPage() {
         ))}
       </div>
       {error && <p className="mb-2 text-sm text-red-400">{error}</p>}
-      <div className="overflow-auto card p-0">
+      {/* Phones: one card per order; the whole card opens the order. */}
+      <div className="space-y-2 md:hidden">
+        {orders.map((o) => {
+          const p = payments(o);
+          return (
+            <Link key={o.id} href={`/orders/${o.id}`} className="card block space-y-1 active:bg-steel-800">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-semibold text-amber-brand">{o.orderNumber}</span>
+                <span
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${
+                    o.status === 'CANCELLED'
+                      ? 'border-slate-600 text-slate-400'
+                      : o.status === 'COMPLETED'
+                        ? 'border-emerald-700 text-emerald-200'
+                        : 'border-amber-600 text-amber-200'
+                  }`}
+                >
+                  {ORDER_STATUS_LABEL[o.status] ?? o.status}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-sm">
+                <span className="min-w-0 truncate text-slate-200">{o.customerName}</span>
+                <span className="shrink-0 text-xs text-slate-400">
+                  {o.createdAt
+                    ? new Date(o.createdAt).toLocaleString('mn-MN', { timeZone: 'Asia/Ulaanbaatar', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+                    : ''}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <b className="text-white">{tugrik(o.totalMnt)}</b>
+                <span className="flex flex-wrap gap-1">
+                  {p.owed > 0 && o.status !== 'CANCELLED' && (
+                    <span className="rounded-full border border-amber-600 px-1.5 text-[11px] text-amber-200">өртэй {tugrik(p.owed)}</span>
+                  )}
+                  {p.waiting > 0 && o.status === 'PENDING_PAYMENT' && (
+                    <span className="rounded-full border border-slate-600 px-1.5 text-[11px] text-slate-300">хүлээгдэж буй</span>
+                  )}
+                </span>
+              </div>
+              {shops && o.warehouse?.name && <p className="text-xs text-slate-500">{o.warehouse.name}</p>}
+            </Link>
+          );
+        })}
+        {!loading && orders.length === 0 && <p className="card text-sm text-slate-500">Захиалга олдсонгүй.</p>}
+        {orders.length > 0 && (
+          <p className="px-1 text-xs text-slate-400">
+            {counted.length} захиалга (цуцлагдсаныг тооцохгүй): <b className="text-slate-200">{tugrik(total)}</b>
+            {owedTotal > 0 && <span className="text-amber-300"> · төлөгдөөгүй өр {tugrik(owedTotal)}</span>}
+          </p>
+        )}
+        {loading && <p className="p-2 text-sm text-slate-500">Уншиж байна…</p>}
+      </div>
+      <div className="card hidden overflow-auto p-0 md:block">
         <table className="w-full text-sm">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>

@@ -1,10 +1,19 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { OrderStatus, PaymentStatus, Prisma, Role } from '@prisma/client';
 import { randomBytes } from 'crypto';
 import { AuthUser } from '../auth/current-user.decorator';
+import { can } from '../auth/permissions';
 import { FeaturesService } from '../features/features.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { assertWarehouseAccess, isManagerRole, orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
+import { PaymentService } from '../payment/payment.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../settings/settings.service';
 import { CreateInvoiceDto } from './dto/invoice.dto';
@@ -52,6 +61,8 @@ export class InvoicesService {
     private readonly inventory: InventoryService,
     private readonly settings: SettingsService,
     private readonly features?: FeaturesService,
+    /** Cancels the order behind a cancelled invoice when nothing was paid on it. */
+    private readonly payments?: PaymentService,
   ) {}
 
   /** What is still owed (open on-account part, awaited transfer, unpaid QPay) and the resulting state. */
@@ -69,6 +80,33 @@ export class InvoicesService {
     else if (row.sentAt) state = 'SENT';
     else state = 'DRAFT';
     return { paidMnt, owedMnt, state };
+  }
+
+  /**
+   * The list's state filter as a query (the same rules as `money`), so it runs before the row limit and an old
+   * open invoice is not cut off by newer ones. The exact state is still checked on each row afterwards.
+   */
+  static stateWhere(state: string, now = new Date()): Prisma.InvoiceWhereInput {
+    const cancelled: Prisma.InvoiceWhereInput = { OR: [{ cancelledAt: { not: null } }, { order: { status: OrderStatus.CANCELLED } }] };
+    const notCancelled: Prisma.InvoiceWhereInput = { cancelledAt: null, order: { status: { not: OrderStatus.CANCELLED } } };
+    const live: Prisma.PaymentWhereInput = { status: { notIn: [PaymentStatus.EXPIRED, PaymentStatus.FAILED] } };
+    const owing: Prisma.PaymentWhereInput = { status: PaymentStatus.UNPAID, amountMnt: { gt: 0 } };
+    // Paid: something live was recorded and nothing is still owed.
+    const paid: Prisma.InvoiceWhereInput = { order: { payments: { some: live, none: owing } } };
+    const unpaid: Prisma.InvoiceWhereInput = { OR: [{ order: { payments: { some: owing } } }, { order: { payments: { none: live } } }] };
+    switch (state) {
+      case 'CANCELLED':
+        return cancelled;
+      case 'PAID':
+        return { AND: [notCancelled, paid] };
+      case 'OPEN':
+        return { AND: [notCancelled, unpaid] };
+      case 'OVERDUE':
+        return { AND: [notCancelled, unpaid, { dueDate: { lt: now } }] };
+      default:
+        // DRAFT / SENT / VIEWED / PARTIAL: still owed and not past due.
+        return { AND: [notCancelled, unpaid, { OR: [{ dueDate: null }, { dueDate: { gte: now } }] }] };
+    }
   }
 
   private present(row: InvoiceRow) {
@@ -138,6 +176,16 @@ export class InvoicesService {
     return this.present(created);
   }
 
+  /**
+   * The invoice made at the till together with the order (also "задгай нэхэмжлэх", no buyer chosen): its number
+   * and link key, so the till can print or send it right away.
+   */
+  async createForNewOrder(orderId: string, user: AuthUser) {
+    const invoice = await this.create({ orderId }, user);
+    const { token } = await this.prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id }, select: { token: true } });
+    return { id: invoice.id, invoiceNumber: invoice.invoiceNumber, token };
+  }
+
   /** 23:59:59 Ulaanbaatar time, `days` days from today. */
   static endOfDayIn(days: number, from = new Date()) {
     const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(from.getTime() + days * 86_400_000));
@@ -182,27 +230,60 @@ export class InvoicesService {
     return this.present(updated);
   }
 
+  /**
+   * Cancels the invoice. When its order still waits for payment and nothing on it is paid (e.g. a standalone
+   * invoice the buyer will not pay), the order is cancelled too, through the usual unpaid-order cancel, so it does
+   * not wait forever. Otherwise only the invoice is cancelled, as before. The answer says which happened.
+   */
   async cancel(id: string, user: AuthUser) {
     await this.assertOn();
     if (!isManagerRole(user.role)) throw new ForbiddenException();
     const row = await this.prisma.invoice.findUnique({ where: { id }, include: INVOICE_INCLUDE });
     if (!row) throw new NotFoundException('Invoice not found');
     await this.assertAccess(user, row.order.warehouseId);
+    // The order first: if the provider cannot be asked about a waiting QPay part, nothing changes and it can be retried.
+    const order = await this.cancelUnpaidOrderToo(row, user);
     const updated = await this.prisma.invoice.update({
       where: { id },
       data: { cancelledAt: row.cancelledAt ?? new Date() },
       include: INVOICE_INCLUDE,
     });
-    this.log.log(`Invoice ${row.invoiceNumber} cancelled by ${user.id}`);
-    return this.present(updated);
+    this.log.log(`Invoice ${row.invoiceNumber} cancelled by ${user.id}${order.cancelled ? `; order ${row.order.orderNumber} cancelled with it` : ''}`);
+    return { ...this.present(updated), orderCancelled: order.cancelled, orderNote: order.note };
+  }
+
+  /** `note` (Mongolian, for the screen) says why the order was left as it is, when it matters. */
+  private async cancelUnpaidOrderToo(row: InvoiceRow, user: AuthUser): Promise<{ cancelled: boolean; note: string | null }> {
+    const o = row.order;
+    if (o.status === OrderStatus.CANCELLED || !this.payments) return { cancelled: false, note: null };
+    if (o.status !== OrderStatus.PENDING_PAYMENT || o.payments.some((p) => p.status === PaymentStatus.PAID)) {
+      return { cancelled: false, note: 'Захиалгад төлбөр орсон тул зөвхөн нэхэмжлэх цуцлагдлаа' };
+    }
+    if (!can(user, 'ORDER_CANCEL')) {
+      return { cancelled: false, note: 'Танд захиалга цуцлах эрх байхгүй тул зөвхөн нэхэмжлэх цуцлагдлаа' };
+    }
+    const who = user.fullName ?? user.name ?? user.email ?? user.id;
+    try {
+      await this.payments.cancelUnpaidOrder(o.id, `Нэхэмжлэх ${row.invoiceNumber} цуцлагдсан (by ${who})`);
+      return { cancelled: true, note: null };
+    } catch (err) {
+      // Money was confirmed meanwhile, or the order moved on: as before, only the invoice is cancelled.
+      if (err instanceof BadRequestException || err instanceof ConflictException) {
+        this.log.warn(`Invoice ${row.invoiceNumber}: order ${o.orderNumber} not cancelled (${err.message})`);
+        return { cancelled: false, note: 'Захиалгад төлбөр дөнгөж орсон тул зөвхөн нэхэмжлэх цуцлагдлаа' };
+      }
+      throw err;
+    }
   }
 
   async list(user: AuthUser, filter: { state?: string; customerId?: string; q?: string }) {
     await this.assertOn();
-    const where: Prisma.InvoiceWhereInput = {};
-    if (!seesAllWarehouses(user)) where.order = orderWarehouseWhere(user, await this.inventory.defaultWarehouseId());
-    if (filter.customerId) where.customerId = filter.customerId;
-    const rows = await this.prisma.invoice.findMany({ where, include: INVOICE_INCLUDE, orderBy: { createdAt: 'desc' }, take: 500 });
+    const and: Prisma.InvoiceWhereInput[] = [];
+    if (!seesAllWarehouses(user)) and.push({ order: orderWarehouseWhere(user, await this.inventory.defaultWarehouseId()) });
+    if (filter.customerId) and.push({ customerId: filter.customerId });
+    // In the query, before the limit: an old invoice still open must not drop out behind 500 newer ones.
+    if (filter.state) and.push(InvoicesService.stateWhere(filter.state));
+    const rows = await this.prisma.invoice.findMany({ where: { AND: and }, include: INVOICE_INCLUDE, orderBy: { createdAt: 'desc' }, take: 500 });
     const q = filter.q?.trim().toLowerCase();
     const invoices = rows
       .map((r) => this.present(r))

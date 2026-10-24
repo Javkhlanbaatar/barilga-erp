@@ -98,7 +98,7 @@ export type Product = {
   companions?: Companion[] | null;
 };
 
-export type Companion = { name: string; qtyPerUnit: number; unit: string };
+export type Companion = { name: string; qtyPerUnit: number; unit: string; /** Chosen from the catalog (display only; no stock effect). */ productId?: string };
 
 /** "Хатаагч × 2 ш" lines for a quantity of a product with companions. */
 export function companionLines(companions: Companion[] | null | undefined, quantity: number) {
@@ -209,6 +209,8 @@ export type PaymentSplit = {
 
 export type Order = {
   id: string;
+  /** Its invoice, if one was made: the number is the payment reference the buyer writes. */
+  invoice?: { invoiceNumber: string; cancelledAt: string | null } | null;
   orderNumber: string;
   status: 'PENDING_PAYMENT' | 'READY_FOR_LOADING' | 'COMPLETED' | 'CANCELLED';
   customerName: string;
@@ -240,6 +242,8 @@ export type Order = {
     id: string;
     quantity: number;
     unitPrice: number;
+    /** Set when the price was changed at the till: the price it would have had. */
+    listPriceMnt?: number | null;
     lineTotal: number;
     sourceType?: 'INTERNAL' | 'EXTERNAL_SUPPLIER';
     supplierName?: string | null;

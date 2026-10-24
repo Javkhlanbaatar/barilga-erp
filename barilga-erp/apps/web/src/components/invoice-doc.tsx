@@ -23,6 +23,23 @@ export type InvoiceDocOrder = {
 
 export type InvoiceMeta = { invoiceNumber: string; createdAt: string; dueDate?: string | null; note?: string | null };
 
+/** Name the till puts on a sale with no buyer typed in. */
+export const WALK_IN_NAME = 'Энгийн харилцагч';
+
+/** No real buyer on the order (nothing typed, or the walk-in placeholder): the invoice prints dotted lines instead. */
+export function isUnknownBuyer(name?: string | null) {
+  const n = name?.trim() ?? '';
+  return !n || n === WALK_IN_NAME;
+}
+
+/**
+ * What the buyer writes as the transfer description so the money can be matched: always the invoice number
+ * (NH-…) when there is an invoice, else the order number.
+ */
+export function paymentReference(invoice: Pick<InvoiceMeta, 'invoiceNumber'> | null | undefined, order: { orderNumber: string }) {
+  return invoice?.invoiceNumber || order.orderNumber;
+}
+
 const qty = (v: number | string) => Number(v).toLocaleString('mn-MN', { maximumFractionDigits: 3 });
 export const dateTime = (iso?: string | null) =>
   new Intl.DateTimeFormat('mn-MN', {
@@ -178,19 +195,22 @@ export function InvoiceDoc({
   const { paid, due } = paidAndDue(order);
   const design = useDesign();
   const t = design?.t ?? template;
-  // A walk-in sale has no real buyer: print dotted lines so the company name, РД… are written by hand.
-  const unknownBuyer = !order.customerName?.trim() || order.customerName.trim() === 'Энгийн харилцагч';
+  // A walk-in sale (or an invoice made before the buyer was chosen) has no real buyer: print dotted lines so the
+  // company name, РД… are written by hand.
+  const unknownBuyer = isUnknownBuyer(order.customerName);
   const blankBuyer = Boolean(t?.blankBuyer) || (unknownBuyer && !design);
+  const reference = paymentReference(invoice, order);
+  // Phones (the buyer's link): one column; paper and wider screens keep the side-by-side layout.
   return (
     <div className="relative space-y-5">
       <Part k="watermark" label="Усан тэмдэг (лого)" t={template}>
         <Watermark company={company} />
       </Part>
-      <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-6 print:flex-row print:items-start print:justify-between print:gap-6">
         <Part k="seller" label="Компани" required t={template}>
           <SellerBlock company={company} />
         </Part>
-        <div className="text-right">
+        <div className="sm:text-right print:text-right">
           <Part k="title" label="Гарчиг" required t={template}>
             <h1 className="text-2xl font-bold tracking-wide">
               <EditText field="title" fallback="НЭХЭМЖЛЭХ" t={template} />
@@ -211,7 +231,7 @@ export function InvoiceDoc({
 
       <DocNote field="headerNote" t={template} />
 
-      <div className="grid grid-cols-2 gap-4 text-xs">
+      <div className="grid grid-cols-1 gap-4 text-xs sm:grid-cols-2 print:grid-cols-2">
         <Part k="bank" label="Нэхэмжлэгч, данс" t={template}>
           <div className="h-full rounded border border-slate-400 p-3">
             <p className="mb-1 font-semibold">Нэхэмжлэгч</p>
@@ -252,7 +272,9 @@ export function InvoiceDoc({
       </div>
 
       <Part k="items" label="Бараа, дүн" required t={template}>
-        <table>
+        {/* On a phone the table scrolls sideways inside its box; on paper it is never a scroll box (it must split across pages). */}
+        <div className="overflow-x-auto print:overflow-visible">
+        <table className="min-w-[520px] sm:min-w-0 print:min-w-0">
           <thead>
             <tr>
               <th className="w-8">№</th>
@@ -300,6 +322,7 @@ export function InvoiceDoc({
             </tr>
           </tbody>
         </table>
+        </div>
         <BlankRowsControl />
       </Part>
 
@@ -309,10 +332,11 @@ export function InvoiceDoc({
           <p className="whitespace-pre-line text-xs">{company.invoiceNote}</p>
         </Part>
       )}
-      {company.bankAccounts.length > 0 && (due > 0 || design) && (
+      {(company.bankAccounts.length > 0 || invoice) && (due > 0 || design) && (
         <Part k="paymentRef" label="Гүйлгээний утга" t={template}>
-          <p className="text-xs">
-            Гүйлгээний утга: <b>{invoice?.invoiceNumber ?? order.orderNumber}</b>
+          <p className="doc-keep inline-block rounded border border-black px-3 py-1.5 text-sm">
+            Гүйлгээний утга: <b className="font-mono">{reference}</b>
+            <span className="block text-[10px]">Шилжүүлэхдээ гүйлгээний утгад заавал бичнэ үү.</span>
           </p>
         </Part>
       )}

@@ -1,7 +1,8 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Modal } from '@/components/modal';
 import { Shell } from '@/components/shell';
 import { api } from '@/lib/api';
 import { AuthUser, ROLE_LABEL, Role, StaffUser, Warehouse } from '@/lib/types';
@@ -106,7 +107,7 @@ function RightRow({ info, role, value, onChange }: { info: PermissionInfo; role:
             key={c}
             type="button"
             aria-pressed={value === c}
-            className={`rounded-md px-2.5 py-1 text-xs ${value === c ? `${active[c]} font-semibold` : 'btn-ghost'}`}
+            className={`min-h-[36px] rounded-md px-2.5 py-1 text-xs ${value === c ? `${active[c]} font-semibold` : 'btn-ghost'}`}
             onClick={() => onChange(c)}
           >
             {label}
@@ -135,6 +136,8 @@ export default function AdminUsersPage() {
   const [catalog, setCatalog] = useState<PermissionInfo[]>([]);
   const [rightsFor, setRightsFor] = useState<StaffUser | null>(null);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
+  // The rights as the dialog opened: closing it with changes asks first.
+  const openedChoices = useRef('');
   const [rightsError, setRightsError] = useState('');
 
   const flash = useCallback((kind: Toast['kind'], text: string) => {
@@ -314,6 +317,7 @@ export default function AdminUsersPage() {
         fromRole && set.revoke.includes(p.key) ? 'revoke' : !fromRole && p.grantable && set.grant.includes(p.key) ? 'grant' : 'default';
     }
     setChoices(next);
+    openedChoices.current = JSON.stringify(next);
   }
 
   async function saveRights() {
@@ -340,6 +344,59 @@ export default function AdminUsersPage() {
   const grantCount = changed.filter((c) => c === 'grant').length;
   const revokeCount = changed.filter((c) => c === 'revoke').length;
 
+  const isActive = (row: StaffUser) => row.isActive !== false && row.active !== false;
+  /** Rights given / taken on top of the role, as a visible badge (not only a tooltip). */
+  const extraBadge = (row: StaffUser) => {
+    const extra = row.role === 'ADMIN' ? null : overrideCounts(row, catalog);
+    return extra && (extra.grant > 0 || extra.revoke > 0) ? (
+      <span
+        className="ml-1 inline-flex rounded-full border border-fuchsia-700 bg-fuchsia-950/50 px-2 py-0.5 text-[11px] font-semibold text-fuchsia-200"
+        title="Албан тушаалынхаас гадна нэмсэн / хассан эрх"
+      >
+        эрх +{extra.grant} / −{extra.revoke}
+      </span>
+    ) : null;
+  };
+  const warehouseText = (row: StaffUser) => (
+    <>
+      {row.role === 'ADMIN' || row.role === 'SUPER_MANAGER' ? 'Бүгд' : (row.warehouse?.name ?? 'Үндсэн (томилоогүй)')}
+      {(row.managedWarehouses ?? []).length > 0 && (
+        <p className="text-[11px] text-sky-300">+ {row.managedWarehouses!.map((w) => w.name).join(', ')}</p>
+      )}
+    </>
+  );
+  const statusBadge = (active: boolean) => (
+    <span
+      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+        active ? 'border-emerald-700 bg-emerald-950/50 text-emerald-200' : 'border-slate-600 text-slate-400'
+      }`}
+    >
+      {active ? 'Идэвхтэй' : 'Идэвхгүй'}
+    </span>
+  );
+  const actions = (row: StaffUser, active: boolean) => (
+    <>
+      <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
+        Засах
+      </button>
+      {row.role !== 'ADMIN' && (
+        <button className="btn-ghost text-xs px-3 py-1" onClick={() => void openRights(row)}>
+          Эрх
+        </button>
+      )}
+      {active && row.id !== me?.id && (
+        <button className="btn-danger text-xs px-3 py-1" onClick={() => setDeleting(row)}>
+          Идэвхгүй болгох
+        </button>
+      )}
+      {!active && (
+        <button className="btn-ghost text-xs px-3 py-1" onClick={() => void reactivate(row)}>
+          Идэвхжүүлэх
+        </button>
+      )}
+    </>
+  );
+
   return (
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
@@ -348,7 +405,7 @@ export default function AdminUsersPage() {
           <h2 className="text-xl font-bold">Хэрэглэгчийн удирдлага</h2>
           <p className="text-slate-400 text-sm mt-1">Ажилтны бүртгэл үүсгэх, эрх олгох, нууц үг солих, нэвтрэх эрхийг идэвхгүй болгох.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="btn-primary" onClick={openCreate}>
             Хэрэглэгч нэмэх
           </button>
@@ -358,7 +415,36 @@ export default function AdminUsersPage() {
         </div>
       </div>
 
-      <div className="card overflow-auto p-0">
+      {/* Phones: one card per person, buttons wrap under the details. */}
+      <div className="space-y-2 md:hidden">
+        {users.map((row) => {
+          const active = isActive(row);
+          return (
+            <article key={row.id} className={`card space-y-2 ${active ? '' : 'opacity-60'}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-medium">{row.fullName || row.name}</p>
+                  <p className="font-mono text-xs text-slate-400">{row.username}</p>
+                  {row.email && <p className="truncate text-xs text-slate-500">{row.email}</p>}
+                </div>
+                {statusBadge(active)}
+              </div>
+              <div className="flex flex-wrap items-center gap-1">
+                {roleBadge(row.role)}
+                {extraBadge(row)}
+              </div>
+              <div className="text-xs text-slate-300">
+                <span className="text-slate-500">Агуулах: </span>
+                {warehouseText(row)}
+              </div>
+              <div className="flex flex-wrap gap-2">{actions(row, active)}</div>
+            </article>
+          );
+        })}
+        {loading && <p className="p-3 text-slate-500">Ажилтнуудыг уншиж байна…</p>}
+      </div>
+
+      <div className="card hidden overflow-auto p-0 md:block">
         <table className="w-full text-sm min-w-[720px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
@@ -372,8 +458,7 @@ export default function AdminUsersPage() {
           </thead>
           <tbody>
             {users.map((row) => {
-              const active = row.isActive !== false && row.active !== false;
-              const extra = row.role === 'ADMIN' ? null : overrideCounts(row, catalog);
+              const active = isActive(row);
               return (
                 <tr key={row.id} className={`border-t border-slate-800 ${active ? '' : 'opacity-60'}`}>
                   <td className="p-3">
@@ -383,53 +468,12 @@ export default function AdminUsersPage() {
                   <td className="font-mono text-xs">{row.username}</td>
                   <td>
                     {roleBadge(row.role)}
-                    {extra && (extra.grant > 0 || extra.revoke > 0) && (
-                      <span
-                        className="ml-1 inline-flex rounded-full border border-fuchsia-700 bg-fuchsia-950/50 px-2 py-0.5 text-[11px] font-semibold text-fuchsia-200"
-                        title="Албан тушаалынхаас гадна нэмсэн / хассан эрх"
-                      >
-                        +{extra.grant} / −{extra.revoke}
-                      </span>
-                    )}
+                    {extraBadge(row)}
                   </td>
-                  <td className="text-xs text-slate-300">
-                    {row.role === 'ADMIN' || row.role === 'SUPER_MANAGER' ? 'Бүгд' : (row.warehouse?.name ?? 'Үндсэн (томилоогүй)')}
-                    {(row.managedWarehouses ?? []).length > 0 && (
-                      <p className="text-[11px] text-sky-300">+ {row.managedWarehouses!.map((w) => w.name).join(', ')}</p>
-                    )}
-                  </td>
-                  <td>
-                    <span
-                      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                        active
-                          ? 'border-emerald-700 bg-emerald-950/50 text-emerald-200'
-                          : 'border-slate-600 text-slate-400'
-                      }`}
-                    >
-                      {active ? 'Идэвхтэй' : 'Идэвхгүй'}
-                    </span>
-                  </td>
+                  <td className="text-xs text-slate-300">{warehouseText(row)}</td>
+                  <td>{statusBadge(active)}</td>
                   <td className="pr-3">
-                    <div className="flex justify-end gap-1">
-                      <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
-                        Засах
-                      </button>
-                      {row.role !== 'ADMIN' && (
-                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => void openRights(row)}>
-                          Эрх
-                        </button>
-                      )}
-                      {active && row.id !== me?.id && (
-                        <button className="btn-danger text-xs px-3 py-1" onClick={() => setDeleting(row)}>
-                          Идэвхгүй болгох
-                        </button>
-                      )}
-                      {!active && (
-                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => void reactivate(row)}>
-                          Идэвхжүүлэх
-                        </button>
-                      )}
-                    </div>
+                    <div className="flex flex-wrap justify-end gap-1">{actions(row, active)}</div>
                   </td>
                 </tr>
               );
@@ -440,9 +484,23 @@ export default function AdminUsersPage() {
       </div>
 
       {modal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={save} className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">{modal === 'create' ? 'Хэрэглэгч нэмэх' : 'Хэрэглэгч засах / нууц үг солих'}</h3>
+        <Modal
+          onClose={() => setModal(null)}
+          title={modal === 'create' ? 'Хэрэглэгч нэмэх' : 'Хэрэглэгч засах / нууц үг солих'}
+          size="md"
+          busy={saving}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
+                Болих
+              </button>
+              <button type="submit" form="user-form" className="btn-primary" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+              </button>
+            </>
+          }
+        >
+          <form id="user-form" onSubmit={save} className="space-y-3">
             {formError && <p className="text-red-400 text-sm">{formError}</p>}
             <label className="block text-xs text-slate-400">
               Овог нэр
@@ -521,11 +579,11 @@ export default function AdminUsersPage() {
             {form.role === 'MANAGER' && (
               <fieldset className="rounded border border-slate-700 p-2 text-xs text-slate-400">
                 <legend className="px-1">Мөн хянах дэлгүүр / агуулах</legend>
-                <div className="grid grid-cols-2 gap-1">
+                <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
                   {warehouses
                     .filter((w) => w.id !== form.warehouseId)
                     .map((w) => (
-                      <label key={w.id} className="flex items-center gap-2 text-sm text-slate-200">
+                      <label key={w.id} className="flex min-h-[36px] items-center gap-2 text-sm text-slate-200">
                         <input
                           type="checkbox"
                           checked={form.managedWarehouseIds.includes(w.id)}
@@ -544,25 +602,44 @@ export default function AdminUsersPage() {
                 </div>
               </fieldset>
             )}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
-                Болих
-              </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {rightsFor && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <div className="card flex max-h-[90vh] w-full max-w-3xl flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="font-semibold text-lg">Эрх — {rightsFor.fullName || rightsFor.name || rightsFor.username}</h3>
+        <Modal
+          onClose={() => setRightsFor(null)}
+          dirty={Boolean(openedChoices.current) && JSON.stringify(choices) !== openedChoices.current}
+          title={
+            <span className="flex flex-wrap items-center gap-2">
+              Эрх — {rightsFor.fullName || rightsFor.name || rightsFor.username}
               {roleBadge(rightsFor.role)}
-            </div>
+            </span>
+          }
+          size="xl"
+          busy={saving}
+          footer={
+            <>
+              <span className="mr-auto self-center text-xs text-slate-400">
+                {grantCount || revokeCount ? `Нэмсэн ${grantCount}, хассан ${revokeCount}` : 'Бүгд албан тушаалын анхдагчаар'}
+              </span>
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                disabled={!grantCount && !revokeCount}
+                onClick={() => setChoices(Object.fromEntries(Object.keys(choices).map((k) => [k, 'default' as Choice])))}
+              >
+                Бүгдийг анхдагч болгох
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => setRightsFor(null)}>
+                Болих
+              </button>
+              <button className="btn-primary" disabled={saving || !catalog.length} onClick={() => void saveRights()}>
+                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+              </button>
+            </>
+          }
+        >
             <ul className="list-disc space-y-0.5 pl-4 text-xs text-slate-400">
               <li>Хадгалмагц шууд хүчинтэй болно; ажилтан дахин нэвтрэх шаардлагагүй.</li>
               <li>«Анхдагч» — албан тушаалынх нь дагуу. «Нэмэх» — албан тушаалд нь байхгүй эрхийг өгнө. «Хасах» — байгаа эрхийг авна.</li>
@@ -570,7 +647,7 @@ export default function AdminUsersPage() {
               <li>Цалин, мөнгө гаргах, цуцлах зэрэг эрхийг өөр албан тушаалд өгөхгүй, зөвхөн хасна.</li>
               <li>Өөрчлөлт бүр «Тайлан → Засварын түүх»-д бичигдэнэ.</li>
             </ul>
-            <div className="min-h-0 flex-1 space-y-3 overflow-auto pr-1">
+            <div className="space-y-3">
               {groupRights(catalog).map(([group, items]) => (
                 <section key={group}>
                   <h4 className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-brand">{group}</h4>
@@ -590,53 +667,28 @@ export default function AdminUsersPage() {
               {!catalog.length && !rightsError && <p className="text-sm text-slate-500">Уншиж байна…</p>}
             </div>
             {rightsError && <p className="text-red-400 text-sm">{rightsError}</p>}
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-700 pt-3">
-              <span className="text-xs text-slate-400">
-                {grantCount || revokeCount ? `Нэмсэн ${grantCount}, хассан ${revokeCount}` : 'Бүгд албан тушаалын анхдагчаар'}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="btn-ghost text-sm"
-                  disabled={!grantCount && !revokeCount}
-                  onClick={() => setChoices(Object.fromEntries(Object.keys(choices).map((k) => [k, 'default' as Choice])))}
-                >
-                  Бүгдийг анхдагч болгох
-                </button>
-                <button type="button" className="btn-ghost" onClick={() => setRightsFor(null)}>
-                  Болих
-                </button>
-                <button className="btn-primary" disabled={saving || !catalog.length} onClick={() => void saveRights()}>
-                  {saving ? 'Хадгалж байна…' : 'Хадгалах'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {deleting && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <div className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">Хэрэглэгчийг идэвхгүй болгох</h3>
-            <p className="text-sm text-slate-300">
-              {deleting.fullName} ({deleting.username}) нэвтрэх боломжгүй болно. Дараа нь дахин идэвхжүүлж болно.
-            </p>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setDeleting(null)}>
-                Болих
-              </button>
-              <button className="btn-danger" disabled={saving} onClick={() => void confirmDeactivate()}>
-                {saving ? 'Түр хүлээнэ үү…' : 'Идэвхгүй болгох'}
-              </button>
-            </div>
+        <Modal onClose={() => setDeleting(null)} title="Хэрэглэгчийг идэвхгүй болгох" size="md" busy={saving}>
+          <p className="text-sm text-slate-300">
+            {deleting.fullName} ({deleting.username}) нэвтрэх боломжгүй болно. Дараа нь дахин идэвхжүүлж болно.
+          </p>
+          <div className="flex flex-wrap justify-end gap-2 pt-2">
+            <button type="button" className="btn-ghost" onClick={() => setDeleting(null)}>
+              Болих
+            </button>
+            <button className="btn-danger" disabled={saving} onClick={() => void confirmDeactivate()}>
+              {saving ? 'Түр хүлээнэ үү…' : 'Идэвхгүй болгох'}
+            </button>
           </div>
-        </div>
+        </Modal>
       )}
 
       {toast && (
         <div
-          className={`fixed bottom-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          className={`fixed bottom-4 left-4 right-4 z-[60] sm:left-auto rounded-lg border px-4 py-3 text-sm shadow-lg ${
             toast.kind === 'error'
               ? 'border-red-700 bg-red-950 text-red-100'
               : 'border-emerald-700 bg-emerald-950 text-emerald-100'

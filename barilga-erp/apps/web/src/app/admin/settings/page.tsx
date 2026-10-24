@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
 import { api, apiUpload, mediaUrl } from '@/lib/api';
+import { CATEGORY_MAX_LENGTH, UNIT_MAX_LENGTH, categoryLabel, categoryProblem, saveCategories, saveUnits, unitLabel } from '@/lib/catalog';
 import { homeForRole } from '@/lib/rbac';
 import { AuthUser, CompanySettings } from '@/lib/types';
 
@@ -100,6 +101,8 @@ export default function AdminSettingsPage() {
       {label}
       <input
         className="mt-1 w-full"
+        type={key === 'phone' ? 'tel' : key === 'email' ? 'email' : 'text'}
+        inputMode={key === 'regNumber' ? 'numeric' : undefined}
         required={required}
         value={form[key]}
         onChange={(e) => setForm({ ...form, [key]: e.target.value })}
@@ -128,7 +131,7 @@ export default function AdminSettingsPage() {
           {field('address', 'Хаяг')}
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs text-slate-400">Банкны данс (нэхэмжлэх дээр)</p>
               <button
                 type="button"
@@ -140,22 +143,34 @@ export default function AdminSettingsPage() {
               </button>
             </div>
             {form.bankAccounts.map((b, idx) => (
-              <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2">
-                <input placeholder="Банк" value={b.bankName} onChange={(e) => setBank(idx, { bankName: e.target.value })} />
-                <input
-                  placeholder="Дансны дугаар"
-                  className="font-mono"
-                  value={b.accountNumber}
-                  onChange={(e) => setBank(idx, { accountNumber: e.target.value })}
-                />
-                <input placeholder="Эзэмшигч" value={b.accountName} onChange={(e) => setBank(idx, { accountName: e.target.value })} />
+              <div
+                key={idx}
+                className="grid grid-cols-[1fr_auto] gap-2 rounded border border-slate-800 p-2 sm:grid-cols-[1fr_1fr_1fr_auto] sm:border-0 sm:p-0"
+              >
+                <input placeholder="Банк" aria-label="Банк" value={b.bankName} onChange={(e) => setBank(idx, { bankName: e.target.value })} />
                 <button
                   type="button"
-                  className="btn-ghost text-xs px-2"
+                  className="btn-ghost h-10 w-10 p-0 text-xs sm:order-last"
+                  aria-label="Дансыг хасах"
                   onClick={() => setForm({ ...form, bankAccounts: form.bankAccounts.filter((_, i) => i !== idx) })}
                 >
                   ✕
                 </button>
+                <input
+                  placeholder="Дансны дугаар"
+                  aria-label="Дансны дугаар"
+                  className="col-span-2 font-mono sm:col-span-1"
+                  inputMode="numeric"
+                  value={b.accountNumber}
+                  onChange={(e) => setBank(idx, { accountNumber: e.target.value })}
+                />
+                <input
+                  placeholder="Эзэмшигч"
+                  aria-label="Эзэмшигч"
+                  className="col-span-2 sm:col-span-1"
+                  value={b.accountName}
+                  onChange={(e) => setBank(idx, { accountName: e.target.value })}
+                />
               </div>
             ))}
           </div>
@@ -201,6 +216,8 @@ export default function AdminSettingsPage() {
         </form>
       )}
       <PrintSettingsForm />
+      <UnitsForm />
+      <CategoriesForm />
       <p className="mt-6 max-w-2xl text-sm text-slate-400">
         Баримтын гарчиг, нэмэлт текст, гарын үсгийг <a className="text-amber-brand hover:underline" href="/admin/documents">«Баримтын загвар»</a> хуудсанд тохируулна.
       </p>
@@ -255,54 +272,357 @@ function PrintSettingsForm() {
         </p>
       </div>
       {message && <p className={`text-sm ${message.ok ? 'text-emerald-300' : 'text-red-400'}`}>{message.text}</p>}
-      <table className="w-full text-sm">
-        <thead className="text-left text-xs text-slate-400">
-          <tr>
-            <th className="py-1">Баримт</th>
-            <th>Цаас</th>
-            <th>Чиглэл</th>
-            <th>Хувь</th>
-          </tr>
-        </thead>
-        <tbody>
-          {PRINT_DOCS.map(([doc, label]) => (
-            <tr key={doc} className="border-t border-slate-800">
-              <td className="py-2">{label}</td>
-              <td>
-                <select value={layouts[doc].paper} onChange={(e) => set(doc, { paper: e.target.value as Layout['paper'] })}>
-                  <option value="A4">A4</option>
-                  <option value="A5">A5</option>
-                  <option value="80MM">80мм (касс)</option>
-                </select>
-              </td>
-              <td>
-                <select
-                  value={layouts[doc].orientation}
-                  disabled={layouts[doc].paper === '80MM'}
-                  onChange={(e) => set(doc, { orientation: e.target.value as Layout['orientation'] })}
-                >
-                  <option value="portrait">Босоо</option>
-                  <option value="landscape">Хэвтээ</option>
-                </select>
-              </td>
-              <td>
-                <select value={layouts[doc].copies} onChange={(e) => set(doc, { copies: Number(e.target.value) })}>
-                  {[1, 2, 3, 4, 5].map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              </td>
+      <div className="table-scroll">
+        <table className="w-full min-w-[420px] text-sm">
+          <thead className="text-left text-xs text-slate-400">
+            <tr>
+              <th className="py-1">Баримт</th>
+              <th>Цаас</th>
+              <th>Чиглэл</th>
+              <th>Хувь</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {PRINT_DOCS.map(([doc, label]) => (
+              <tr key={doc} className="border-t border-slate-800">
+                <td className="py-2">{label}</td>
+                <td>
+                  <select value={layouts[doc].paper} onChange={(e) => set(doc, { paper: e.target.value as Layout['paper'] })}>
+                    <option value="A4">A4</option>
+                    <option value="A5">A5</option>
+                    <option value="80MM">80мм (касс)</option>
+                  </select>
+                </td>
+                <td>
+                  <select
+                    value={layouts[doc].orientation}
+                    disabled={layouts[doc].paper === '80MM'}
+                    onChange={(e) => set(doc, { orientation: e.target.value as Layout['orientation'] })}
+                  >
+                    <option value="portrait">Босоо</option>
+                    <option value="landscape">Хэвтээ</option>
+                  </select>
+                </td>
+                <td>
+                  <select value={layouts[doc].copies} onChange={(e) => set(doc, { copies: Number(e.target.value) })}>
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="flex justify-end">
         <button className="btn-primary" disabled={saving}>
           {saving ? 'Хадгалж байна…' : 'Хадгалах'}
         </button>
       </div>
     </form>
+  );
+}
+
+/**
+ * Хэмжих нэгж: the units offered in the product form, in the order shown there. Removing one only takes it
+ * out of the choices — products keep the unit they were saved with (and such a unit stays at the end).
+ */
+function UnitsForm() {
+  const [units, setUnits] = useState<string[] | null>(null);
+  const [saved, setSaved] = useState<string[]>([]);
+  // Written on products but not on the list (older English units): still offered in the product form.
+  const [inUse, setInUse] = useState<string[]>([]);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    api<{ units: string[]; inUse?: string[] }>('/settings/units')
+      .then((r) => {
+        setUnits(r.units);
+        setSaved(r.units);
+        setInUse(r.inUse ?? []);
+      })
+      .catch((err) => setMessage({ ok: false, text: err instanceof Error ? err.message : 'Ачаалж чадсангүй' }));
+  }, []);
+
+  if (!units) return message ? <p className="mt-6 max-w-2xl text-sm text-red-400">{message.text}</p> : null;
+
+  const changed = JSON.stringify(units) !== JSON.stringify(saved);
+
+  function add(e: FormEvent) {
+    e.preventDefault();
+    if (!units) return;
+    const unit = draft.trim();
+    if (!unit) return;
+    if (unit.length > UNIT_MAX_LENGTH) return setMessage({ ok: false, text: `Нэгж ${UNIT_MAX_LENGTH} тэмдэгтээс ихгүй байна` });
+    if (units.some((u) => u.toLowerCase() === unit.toLowerCase())) return setMessage({ ok: false, text: `«${unit}» жагсаалтад байна` });
+    setUnits([...units, unit]);
+    setDraft('');
+    setMessage(null);
+  }
+
+  function move(idx: number, by: -1 | 1) {
+    if (!units) return;
+    const to = idx + by;
+    if (to < 0 || to >= units.length) return;
+    const next = [...units];
+    [next[idx], next[to]] = [next[to], next[idx]];
+    setUnits(next);
+  }
+
+  async function save() {
+    if (!units) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await saveUnits(units);
+      // A unit removed from the list that products still carry stays offered in the product form.
+      const kept = res.inUse.filter((u) => saved.includes(u) && !res.units.includes(u));
+      setUnits(res.units);
+      setSaved(res.units);
+      setInUse(res.inUse);
+      setMessage({
+        ok: true,
+        text: kept.length
+          ? `Хадгалагдлаа. ${kept.join(', ')} нэгжтэй бараа байгаа тул бараа бүртгэх цонхонд сонголт хэвээр харагдана.`
+          : 'Хадгалагдлаа. Бараа бүртгэх цонхонд шууд харагдана.',
+      });
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Хадгалж чадсангүй' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="card mt-6 max-w-2xl space-y-3">
+      <div>
+        <h3 className="font-semibold">Хэмжих нэгж</h3>
+        <p className="text-xs text-slate-400">
+          Бараа бүртгэх, орлого авах цонхны «Хэмжих нэгж» сонголт. Дээрээс доош энэ дарааллаар харагдана (↑ ↓-аар зөөнө).
+        </p>
+      </div>
+      {message && <p className={`text-sm ${message.ok ? 'text-emerald-300' : 'text-red-400'}`}>{message.text}</p>}
+      <ol className="divide-y divide-slate-800 rounded-lg border border-slate-800">
+        {units.map((u, idx) => (
+          <li key={u} className="flex items-center gap-2 px-2 py-1">
+            <span className="w-6 text-right text-xs text-slate-500">{idx + 1}.</span>
+            <span className="min-w-0 flex-1 break-words">
+              {u}
+              {unitLabel(u) !== u && <span className="ml-1 text-xs text-slate-500">= {unitLabel(u)}</span>}
+            </span>
+            <button type="button" className="btn-ghost h-9 w-9 p-0" aria-label={`${u}: дээш`} disabled={idx === 0} onClick={() => move(idx, -1)}>
+              ↑
+            </button>
+            <button
+              type="button"
+              className="btn-ghost h-9 w-9 p-0"
+              aria-label={`${u}: доош`}
+              disabled={idx === units.length - 1}
+              onClick={() => move(idx, 1)}
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              className="btn-ghost h-9 w-9 p-0 text-red-300"
+              aria-label={`${u}: хасах`}
+              onClick={() => setUnits(units.filter((_, i) => i !== idx))}
+            >
+              ✕
+            </button>
+          </li>
+        ))}
+        {units.length === 0 && <li className="px-3 py-2 text-sm text-slate-500">Жагсаалт хоосон.</li>}
+      </ol>
+      {inUse.length > 0 && (
+        <p className="text-xs text-slate-500">
+          Жагсаалтад байхгүй ч бараанд бичигдсэн: {inUse.map((u) => (unitLabel(u) !== u ? `${u} (${unitLabel(u)})` : u)).join(', ')} — бараа бүртгэх цонхонд сонголт хэвээр харагдана.
+        </p>
+      )}
+      <form onSubmit={add} className="flex flex-wrap gap-2">
+        <input
+          className="min-w-0 flex-1"
+          placeholder="Шинэ нэгж (жишээ: рулон, боодол)"
+          aria-label="Шинэ нэгж"
+          maxLength={UNIT_MAX_LENGTH}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button className="btn-ghost" disabled={!draft.trim()}>
+          + Нэмэх
+        </button>
+      </form>
+      <p className="text-[11px] text-slate-500">
+        Нэгжийг хассан ч одоо байгаа бараанд бичигдсэн нэгж өөрчлөгдөхгүй; бараа бүртгэх цонхонд сонголт хэвээр харагдана.
+      </p>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {changed && <span className="mr-auto text-xs text-amber-300">Хадгалаагүй өөрчлөлт байна</span>}
+        {changed && (
+          <button type="button" className="btn-ghost" disabled={saving} onClick={() => setUnits(saved)}>
+            Буцаах
+          </button>
+        )}
+        <button type="button" className="btn-primary" disabled={saving || !changed || units.length === 0} onClick={() => void save()}>
+          {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Барааны ангилал: the categories offered in the product form, in the order shown there. Removing one only takes
+ * it out of the choices — products keep the category they were saved with (and such a category stays at the end).
+ */
+function CategoriesForm() {
+  const [categories, setCategories] = useState<string[] | null>(null);
+  const [saved, setSaved] = useState<string[]>([]);
+  // Written on products but not on the list: still offered in the product form, not part of this list.
+  const [inUse, setInUse] = useState<string[]>([]);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    api<{ categories: string[]; inUse?: string[] }>('/settings/categories')
+      .then((r) => {
+        setCategories(r.categories);
+        setSaved(r.categories);
+        setInUse(r.inUse ?? []);
+      })
+      .catch((err) => setMessage({ ok: false, text: err instanceof Error ? err.message : 'Ачаалж чадсангүй' }));
+  }, []);
+
+  if (!categories) return message ? <p className="mt-6 max-w-2xl text-sm text-red-400">{message.text}</p> : null;
+
+  const changed = JSON.stringify(categories) !== JSON.stringify(saved);
+
+  function add(e: FormEvent) {
+    e.preventDefault();
+    if (!categories) return;
+    const name = draft.trim();
+    if (!name) return;
+    const problem = categoryProblem(name);
+    if (problem) return setMessage({ ok: false, text: problem });
+    if (categories.some((c) => c.toLowerCase() === name.toLowerCase() || categoryLabel(c).toLowerCase() === name.toLowerCase())) {
+      return setMessage({ ok: false, text: `«${name}» жагсаалтад байна` });
+    }
+    setCategories([...categories, name]);
+    setDraft('');
+    setMessage(null);
+  }
+
+  function move(idx: number, by: -1 | 1) {
+    if (!categories) return;
+    const to = idx + by;
+    if (to < 0 || to >= categories.length) return;
+    const next = [...categories];
+    [next[idx], next[to]] = [next[to], next[idx]];
+    setCategories(next);
+  }
+
+  async function save() {
+    if (!categories) return;
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await saveCategories(categories);
+      // A category removed from the list that products still carry stays offered in the product form.
+      const kept = res.inUse.filter((c) => saved.includes(c) && !res.categories.includes(c));
+      setCategories(res.categories);
+      setSaved(res.categories);
+      setInUse(res.inUse);
+      setMessage({
+        ok: true,
+        text: kept.length
+          ? `Хадгалагдлаа. ${kept.map((c) => categoryLabel(c)).join(', ')} ангилалтай бараа байгаа тул бараа бүртгэх цонхонд сонголт хэвээр харагдана.`
+          : 'Хадгалагдлаа. Бараа бүртгэх цонхонд шууд харагдана.',
+      });
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : 'Хадгалж чадсангүй' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="card mt-6 max-w-2xl space-y-3">
+      <div>
+        <h3 className="font-semibold">Барааны ангилал</h3>
+        <p className="text-xs text-slate-400">
+          Бараа бүртгэх, орлого авах цонхны «Ангилал» сонголт; үнийн жагсаалт, тайлан үүгээр бүлэглэнэ. Дээрээс доош энэ дарааллаар харагдана (↑ ↓-аар зөөнө).
+        </p>
+      </div>
+      {message && <p className={`text-sm ${message.ok ? 'text-emerald-300' : 'text-red-400'}`}>{message.text}</p>}
+      <ol className="divide-y divide-slate-800 rounded-lg border border-slate-800">
+        {categories.map((c, idx) => (
+          <li key={c} className="flex items-center gap-2 px-2 py-1">
+            <span className="w-6 text-right text-xs text-slate-500">{idx + 1}.</span>
+            <span className="min-w-0 flex-1 break-words">
+              {c}
+              {categoryLabel(c) !== c && <span className="ml-1 text-xs text-slate-500">= {categoryLabel(c)}</span>}
+            </span>
+            <button type="button" className="btn-ghost h-9 w-9 p-0" aria-label={`${c}: дээш`} disabled={idx === 0} onClick={() => move(idx, -1)}>
+              ↑
+            </button>
+            <button
+              type="button"
+              className="btn-ghost h-9 w-9 p-0"
+              aria-label={`${c}: доош`}
+              disabled={idx === categories.length - 1}
+              onClick={() => move(idx, 1)}
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              className="btn-ghost h-9 w-9 p-0 text-red-300"
+              aria-label={`${c}: хасах`}
+              onClick={() => setCategories(categories.filter((_, i) => i !== idx))}
+            >
+              ✕
+            </button>
+          </li>
+        ))}
+        {categories.length === 0 && <li className="px-3 py-2 text-sm text-slate-500">Жагсаалт хоосон.</li>}
+      </ol>
+      {inUse.length > 0 && (
+        <p className="text-xs text-slate-500">
+          Жагсаалтад байхгүй ч бараанд бичигдсэн: {inUse.map((c) => categoryLabel(c)).join(', ')} — бараа бүртгэх цонхонд сонголт хэвээр харагдана.
+        </p>
+      )}
+      <form onSubmit={add} className="flex flex-wrap gap-2">
+        <input
+          className="min-w-0 flex-1"
+          placeholder="Шинэ ангилал (жишээ: Шал, Дээврийн материал)"
+          aria-label="Шинэ ангилал"
+          maxLength={CATEGORY_MAX_LENGTH}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button className="btn-ghost" disabled={!draft.trim()}>
+          + Нэмэх
+        </button>
+      </form>
+      <p className="text-[11px] text-slate-500">
+        Ангиллыг хассан ч одоо байгаа бараанд бичигдсэн ангилал өөрчлөгдөхгүй; бараа бүртгэх цонхонд сонголт хэвээр харагдана.
+      </p>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {changed && <span className="mr-auto text-xs text-amber-300">Хадгалаагүй өөрчлөлт байна</span>}
+        {changed && (
+          <button type="button" className="btn-ghost" disabled={saving} onClick={() => setCategories(saved)}>
+            Буцаах
+          </button>
+        )}
+        <button type="button" className="btn-primary" disabled={saving || !changed || categories.length === 0} onClick={() => void save()}>
+          {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+        </button>
+      </div>
+    </section>
   );
 }

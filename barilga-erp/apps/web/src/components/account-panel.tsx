@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { Modal } from '@/components/modal';
 import { api, tugrik } from '@/lib/api';
+import { unitLabel } from '@/lib/catalog';
 import { downloadCsv } from '@/lib/csv';
 import { useCan } from '@/lib/permissions';
 import type { AccountLineKind, AccountStatement, Product, Warehouse } from '@/lib/types';
@@ -43,7 +45,7 @@ function monthRange(offset: number) {
   return { from: f, to: l };
 }
 
-type Modal =
+type DialogState =
   | null
   | { kind: 'goods' }
   | { kind: 'receive' }
@@ -79,8 +81,10 @@ export function AccountPanel({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [range, setRange] = useState<{ from: string; to: string }>({ from: '', to: '' });
-  const [modal, setModal] = useState<Modal>(null);
+  const [modal, setModal] = useState<DialogState>(null);
   const [msg, setMsg] = useState('');
+  /** Phones: the from/to date fields stay folded behind «Хугацаа» until asked for. */
+  const [showDates, setShowDates] = useState(false);
   /** Order debt this user may collect (a branch manager: their own shops' orders only). */
   const [owedHere, setOwedHere] = useState<number | null>(null);
 
@@ -145,6 +149,22 @@ export function AccountPanel({
     ['Өнгөрсөн сар', monthRange(-1)],
     ['Бүгд', { from: '', to: '' }],
   ] as const;
+  // Why a button is greyed out, shown as text under the buttons (a tooltip cannot be seen on a phone).
+  const goodsWhyOff = !canTakeGoods
+    ? 'Бараа орлого авах болон өртөг оруулах эрх хэрэгтэй'
+    : !partnerIsSupplier
+      ? 'Харилцагчийг засаад «Нийлүүлэгч» эсвэл бартерын гэрээтэй гэж тэмдэглэнэ'
+      : '';
+  const payInGoodsWhyOff = !partnerIsSupplier
+    ? 'Зөвхөн нийлүүлэгч / бартерын харилцагчид'
+    : st.payableMnt <= 0
+      ? 'Бид тэдэнд өргүй байна'
+      : '';
+  const offsetWhyOff = offsetMax <= 0 ? 'Тэдний захиалгын өр ба бидний өглөг хоёулаа байх үед хийнэ' : '';
+  const closeDialog = () => {
+    setModal(null);
+    setError('');
+  };
 
   return (
     <div className="card space-y-3">
@@ -159,7 +179,7 @@ export function AccountPanel({
             <b className="text-sky-200">{tugrik(st.payableMnt)}</b>
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-2 text-xs">
+        <div className="flex w-full flex-wrap items-end gap-2 text-xs md:w-auto">
           {quick.map(([label, r]) => (
             <button
               key={label}
@@ -170,16 +190,26 @@ export function AccountPanel({
               {label}
             </button>
           ))}
-          <label className="text-slate-400">
-            Эхлэх
-            <input type="date" className="mt-1 block" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
-          </label>
-          <label className="text-slate-400">
-            Дуусах
-            <input type="date" className="mt-1 block" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
-          </label>
+          <button
+            type="button"
+            className={`${showDates || (range.from && !quick.some(([, r]) => r.from === range.from && r.to === range.to)) ? 'btn-primary' : 'btn-ghost'} text-xs md:hidden`}
+            aria-expanded={showDates}
+            onClick={() => setShowDates(!showDates)}
+          >
+            Хугацаа {showDates ? '▴' : '▾'}
+          </button>
+          <div className={`${showDates ? 'flex' : 'hidden'} w-full gap-2 md:flex md:w-auto`}>
+            <label className="min-w-0 flex-1 text-slate-400 md:flex-none">
+              Эхлэх
+              <input type="date" className="mt-1 block w-full" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
+            </label>
+            <label className="min-w-0 flex-1 text-slate-400 md:flex-none">
+              Дуусах
+              <input type="date" className="mt-1 block w-full" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
+            </label>
+          </div>
           <a className="btn-ghost text-xs" href={printHref} target="_blank" rel="noreferrer" title="Тооцоо нийлсэн акт — хоёр тал гарын үсэг зурна">
-            🖨 Акт
+            🖨 Тооцооны акт
           </a>
           <button type="button" className="btn-ghost text-xs" onClick={csv}>
             Excel
@@ -193,19 +223,14 @@ export function AccountPanel({
             type="button"
             className="btn-ghost text-xs"
             disabled={!partnerIsSupplier || !canTakeGoods}
-            title={
-              !canTakeGoods
-                ? 'Бараа орлого авах болон өртөг оруулах эрх хэрэгтэй'
-                : partnerIsSupplier
-                  ? ''
-                  : 'Харилцагчийг засаад «Нийлүүлэгч» эсвэл бартерын гэрээтэй гэж тэмдэглэнэ'
-            }
+            title={goodsWhyOff}
             onClick={() => setModal({ kind: 'goods' })}
           >
             📦 Бараа авсан (тоогоор)
           </button>
           <Link
             className={`btn-ghost text-xs ${partnerIsSupplier && st.payableMnt > 0 ? '' : 'pointer-events-none opacity-40'}`}
+            aria-disabled={!(partnerIsSupplier && st.payableMnt > 0)}
             href={`/pos?customer=${customerId}&pay=CONTRACT`}
             title="Касс дээр бараа сонгоод «Гэрээгээр олгох» — бидний өглөгөөс хасагдана"
           >
@@ -226,6 +251,16 @@ export function AccountPanel({
           <button type="button" className="btn-primary text-xs" disabled={offsetMax <= 0} onClick={() => setModal({ kind: 'offset' })}>
             ⇄ Хасалт {offsetMax > 0 ? `(${tugrik(offsetMax)} хүртэл)` : ''}
           </button>
+          {(goodsWhyOff || payInGoodsWhyOff || offsetWhyOff) && (
+            <ul className="w-full space-y-0.5 text-[11px] text-slate-500">
+              {goodsWhyOff && <li>📦 Бараа авсан: {goodsWhyOff}</li>}
+              {payInGoodsWhyOff && <li>🔁 Бараагаар төлөх: {payInGoodsWhyOff}</li>}
+              {offsetWhyOff && <li>⇄ Хасалт: {offsetWhyOff}</li>}
+            </ul>
+          )}
+          {!payInGoodsWhyOff && (
+            <p className="w-full text-[11px] text-slate-500">🔁 Бараагаар төлөх: касс дээр бараа сонгоод «Гэрээгээр олгох» — бидний өглөгөөс хасагдана.</p>
+          )}
         </div>
       )}
       {error && <p className="text-sm text-red-400">{error}</p>}
@@ -241,7 +276,7 @@ export function AccountPanel({
       )}
 
       <div className="max-h-96 overflow-auto rounded border border-slate-800">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[560px] text-sm">
           <thead className="sticky top-0 bg-steel-900 text-left text-xs text-slate-400">
             <tr>
               <th className="p-2">Огноо</th>
@@ -295,8 +330,8 @@ export function AccountPanel({
       </p>
 
       {modal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => !busy && (setModal(null), setError(''))}>
-          <div className="card w-full max-w-2xl max-h-[90vh] overflow-auto space-y-3" onClick={(e) => e.stopPropagation()}>
+        <Modal onClose={closeDialog} size="lg" busy={busy}>
+          <>
             {error && <p className="rounded border border-red-800 bg-red-950/40 p-2 text-sm text-red-300">{error}</p>}
             {modal.kind === 'goods' && (
               <GoodsForm
@@ -415,8 +450,8 @@ export function AccountPanel({
                 }
               />
             )}
-          </div>
-        </div>
+          </>
+        </Modal>
       )}
     </div>
   );
@@ -433,7 +468,7 @@ function Tile({ label, value, cls = '', bold = false }: { label: string; value: 
 
 function Buttons({ busy, onCancel, label = 'Хадгалах' }: { busy: boolean; onCancel: () => void; label?: string }) {
   return (
-    <div className="flex justify-end gap-2 pt-1">
+    <div className="flex flex-wrap justify-end gap-2 pt-1">
       <button type="button" className="btn-ghost" onClick={onCancel}>
         Болих
       </button>
@@ -737,7 +772,8 @@ function GoodsForm(props: {
         )}
       </div>
       {lines.length > 0 && (
-        <table className="w-full text-sm">
+        <div className="table-scroll">
+        <table className="w-full min-w-[480px] text-sm">
           <thead className="text-left text-xs text-slate-400">
             <tr>
               <th>Бараа</th>
@@ -755,12 +791,13 @@ function GoodsForm(props: {
                   <input
                     className="w-20 text-right"
                     type="number"
+                    inputMode="decimal"
                     min="0.001"
                     step="any"
                     value={l.quantity}
                     onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, quantity: e.target.value } : x)))}
                   />{' '}
-                  <span className="text-xs text-slate-400">{l.unit}</span>
+                  <span className="text-xs text-slate-400">{unitLabel(l.unit)}</span>
                 </td>
                 <td>
                   <input
@@ -773,7 +810,7 @@ function GoodsForm(props: {
                 </td>
                 <td className="text-right">{l.unitCost ? tugrik((Number(l.quantity) || 0) * toInt(l.unitCost)) : '—'}</td>
                 <td className="text-right">
-                  <button type="button" className="btn-ghost px-2 text-xs" onClick={() => setLines(lines.filter((_, j) => j !== i))}>
+                  <button type="button" className="btn-ghost px-2 text-xs" aria-label="Мөр хасах" onClick={() => setLines(lines.filter((_, j) => j !== i))}>
                     ✕
                   </button>
                 </td>
@@ -781,6 +818,7 @@ function GoodsForm(props: {
             ))}
           </tbody>
         </table>
+        </div>
       )}
       {lines.length > 0 && (
         <p className="text-right text-sm">

@@ -38,6 +38,8 @@ const TYPE_LABEL: Record<string, string> = {
   USER_PERMISSIONS: 'Хүний эрх',
   ATTENDANCE: 'Ирц',
   RECEIPT_PARTNER: 'Орлогын нийлүүлэгч',
+  SALE_PRICE: 'Касс дээр өөрчилсөн үнэ',
+  CUSTOMER_PRICE: 'Харилцагчийн хувийн үнэ',
 };
 
 const hm = (v: unknown) =>

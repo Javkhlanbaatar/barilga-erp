@@ -146,10 +146,10 @@ describe('customer price lists', () => {
     const w = await world();
     const c = await w.customers.create({ type: 'INDIVIDUAL', name: 'Бат', phone: '99112233', priceListId: w.list.id } as any, manager);
     await w.features.set('PRICE_LISTS', false, 'u-admin');
-    assert.equal((await (w.orders as any).resolveCustomer(c.id)).prices, undefined);
+    assert.equal((await (w.orders as any).resolveCustomer(c.id)).prices.list, undefined);
     await w.features.set('PRICE_LISTS', true, 'u-admin');
     await w.db.priceList.update({ where: { id: w.list.id }, data: { isActive: false } });
-    assert.equal((await (w.orders as any).resolveCustomer(c.id)).prices, undefined);
+    assert.equal((await (w.orders as any).resolveCustomer(c.id)).prices.list, undefined, "a customer's own prices are not a list: they stay");
   });
 
   it('only a manager or admin can put a customer on a price list', async () => {

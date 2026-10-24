@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Logger, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { OrderStatus, Role } from '@prisma/client';
 import { CurrentUser, AuthUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -12,6 +12,7 @@ import {
   AssignDriverDto,
   AssignSupplierDto,
   CancelOrderDto,
+  CheckoutPaymentMethod,
   CompleteFulfillmentDto,
   CreateOrderDto,
   OverrideFeesDto,
@@ -27,6 +28,8 @@ import { OrdersService } from './orders.service';
 @Controller('orders')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class OrdersController {
+  private readonly log = new Logger(OrdersController.name);
+
   constructor(
     private readonly orders: OrdersService,
     private readonly returns: ReturnsService,
@@ -36,19 +39,31 @@ export class OrdersController {
 
   @Post('quote')
   @Roles(...POS_ROLES)
-  quote(@Body() dto: QuoteOrderDto) {
-    return this.orders.quote(dto);
+  quote(@Body() dto: QuoteOrderDto, @CurrentUser() user: AuthUser) {
+    return this.orders.quote(dto, user);
   }
 
   @Post()
   @Roles(...POS_ROLES)
   async create(@Body() dto: CreateOrderDto, @CurrentUser() user: AuthUser) {
     const order = await this.orders.create(dto, user);
-    // "Pay by invoice" at the till: the invoice is made right away, ready to send from the order page.
-    if (dto.payments?.some((p) => p.method === 'INVOICE') || dto.paymentMethod === 'INVOICE') {
-      await this.invoices.create({ orderId: order.id }, user);
+    // The same methods the order was paid with (the splits when given, else the single method).
+    const methods = dto.payments?.length ? dto.payments.map((p) => p.method) : [dto.paymentMethod];
+    if (!methods.includes(CheckoutPaymentMethod.INVOICE)) return order;
+    // "Pay by invoice" at the till (also the standalone invoice with no buyer chosen): the invoice is made in the same
+    // request, so it can be printed or sent at once. The order already exists by now, so a failure here must not look
+    // like a failed sale (retrying would make a second order): the order comes back with `invoiceError`, and the
+    // invoice can be made again from the order page.
+    try {
+      return { ...order, invoice: await this.invoices.createForNewOrder(order.id, user) };
+    } catch (err) {
+      this.log.error(`Order ${order.orderNumber} created but its invoice was not: ${err instanceof Error ? err.message : String(err)}`);
+      return {
+        ...order,
+        invoice: null,
+        invoiceError: 'Захиалга үүссэн боловч нэхэмжлэх үүсгэж чадсангүй. Захиалгын хуудаснаас нэхэмжлэхээ дахин үүсгэнэ үү.',
+      };
     }
-    return order;
   }
 
   @Get()

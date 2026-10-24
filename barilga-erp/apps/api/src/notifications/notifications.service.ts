@@ -22,6 +22,7 @@ import {
   seesAllWarehouses,
   warehouseWhere,
 } from '../inventory/warehouse-scope';
+import { can } from '../auth/permissions';
 import { LATE_PAYMENT_MARKER } from '../payment/payment.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -108,11 +109,15 @@ export class NotificationsService {
     // Orders waiting for money for a long time.
     if (roleAllowed(user.role, POS_ROLES)) {
       checks.push(async () => {
+        // An order with a live invoice waits days for the transfer on purpose; the overdue-invoice alert covers
+        // it. One whose invoice was cancelled (or with the invoice module off) is counted here again.
+        const invoicesOn = await this.on('INVOICES');
         const n = await this.prisma.order.count({
           where: {
             AND: [orderScope],
             status: OrderStatus.PENDING_PAYMENT,
             createdAt: { lt: new Date(now - 2 * HOUR) },
+            ...(invoicesOn ? { NOT: { invoice: { is: { cancelledAt: null } } } } : {}),
             ...(user.role === Role.BORLUULAGCH ? { createdById: user.id } : {}),
           },
         });
@@ -137,7 +142,8 @@ export class NotificationsService {
       checks.push(async () => {
         if (!(await this.on('INVOICES'))) return null;
         const rows = await this.prisma.invoice.findMany({
-          where: { cancelledAt: null, dueDate: { lt: new Date(now) }, order: orderScope },
+          // A cancelled order's invoice is not owed any more (cancelling the order leaves the invoice row as it was).
+          where: { cancelledAt: null, dueDate: { lt: new Date(now) }, order: { AND: [orderScope, { status: { not: OrderStatus.CANCELLED } }] } },
           select: { order: { select: { totalMnt: true, payments: { where: { status: PaymentStatus.PAID }, select: { amountMnt: true } } } } },
         });
         const overdue = rows.filter((r) => r.order.payments.reduce((s, p) => s + p.amountMnt, 0) < r.order.totalMnt);
@@ -238,6 +244,67 @@ export class NotificationsService {
         return n ? { key: 'payroll-unpaid', level: 'warn', title: `${prev} сарын цалин олгоогүй`, count: n, href: '/admin/payroll' } : null;
       });
     }
+
+    // Attendance: leave requests to decide and check-ins people made themselves, for whoever records attendance.
+    if (can(user, 'ATTENDANCE_MANAGE')) {
+      checks.push(async () => {
+        if (!(await this.on('HR'))) return null;
+        const people: Prisma.UserWhereInput = seesAllWarehouses(user)
+          ? {}
+          : {
+              AND: [
+                warehouseWhere(user, def) as Prisma.UserWhereInput,
+                { role: { notIn: manager ? [Role.ADMIN, Role.SUPER_MANAGER] : [Role.ADMIN, Role.SUPER_MANAGER, Role.MANAGER] } },
+              ],
+            };
+        // Only what the board lets them act on: active staff, and no punch in a month already marked paid.
+        const active: Prisma.UserWhereInput = { AND: [people, { isActive: true }] };
+        const [pending, punches] = await Promise.all([
+          this.prisma.leaveRequest.count({ where: { status: 'PENDING', userId: { not: user.id }, user: active } }),
+          this.prisma.attendance.findMany({
+            where: { source: 'SELF', confirmedAt: null, userId: { not: user.id }, user: active, checkIn: { gte: new Date(now - 31 * DAY) } },
+            select: { userId: true, checkIn: true },
+          }),
+        ]);
+        const paid = punches.length
+          ? await this.prisma.payroll.findMany({
+              where: { userId: { in: [...new Set(punches.map((p) => p.userId))] }, status: 'PAID' },
+              select: { userId: true, periodMonth: true },
+            })
+          : [];
+        const paidKey = new Set(paid.map((p) => `${p.userId}:${p.periodMonth}`));
+        const ubMonth = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(d).slice(0, 7);
+        const waiting = punches.filter((p) => !paidKey.has(`${p.userId}:${ubMonth(p.checkIn)}`)).length;
+        const out: Alert[] = [];
+        if (pending) out.push({ key: 'leave-pending', level: 'warn', title: 'Чөлөөний хүсэлт шийдэх', count: pending, href: '/admin/attendance?tab=requests' });
+        if (waiting) out.push({ key: 'attendance-unconfirmed', level: 'info', title: 'Ажилтны өөрөө бүртгүүлсэн ирц батлах', count: waiting, href: '/admin/attendance' });
+        return out;
+      });
+    }
+
+    // Everyone: an answer to their own leave request (shown for 3 days).
+    checks.push(async () => {
+      if (!(await this.on('HR'))) return null;
+      // A manager cancelling or shortening an approved leave counts too (not one the person took back themselves).
+      const rows = (
+        await this.prisma.leaveRequest.findMany({
+          where: { userId: user.id, status: { in: ['APPROVED', 'REJECTED', 'CANCELLED'] }, decidedAt: { gte: new Date(now - 3 * DAY) } },
+          select: { status: true, decidedById: true },
+        })
+      ).filter((r) => r.status !== 'CANCELLED' || (r.decidedById && r.decidedById !== user.id));
+      if (!rows.length) return null;
+      const ok = rows.filter((r) => r.status === 'APPROVED').length;
+      const no = rows.filter((r) => r.status === 'REJECTED').length;
+      const off = rows.length - ok - no;
+      return {
+        key: 'leave-decided',
+        level: 'info',
+        title: 'Чөлөөний хүсэлтэд хариу ирсэн',
+        detail: [ok ? `${ok} зөвшөөрсөн` : '', no ? `${no} татгалзсан` : '', off ? `${off} менежер цуцалсан` : ''].filter(Boolean).join(', '),
+        count: rows.length,
+        href: '/me/attendance',
+      };
+    });
 
     // Documents print without a seller until the company details are filled in.
     if (user.role === Role.ADMIN) {

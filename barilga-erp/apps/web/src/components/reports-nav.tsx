@@ -94,12 +94,13 @@ export function ReportsNav() {
   const reports = useAvailableReports();
   if (reports.length < 2) return null;
   return (
-    <div className="flex flex-wrap gap-1 mb-4 print:hidden">
+    // Phones: one row that scrolls sideways; wider screens wrap the tabs.
+    <div className="mb-4 flex gap-1 overflow-x-auto pb-1 md:flex-wrap md:overflow-visible md:pb-0 print:hidden">
       {reports.map((r) => (
         <Link
           key={r.href}
           href={r.href}
-          className={`rounded-md px-3 py-1.5 text-sm ${
+          className={`inline-flex min-h-[36px] shrink-0 items-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm ${
             pathname === r.href ? 'bg-amber-brand text-steel-950 font-semibold' : 'btn-ghost'
           }`}
         >

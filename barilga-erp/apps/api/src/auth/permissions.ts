@@ -20,6 +20,12 @@ const POS = [ADMIN, MANAGER, BORLUULAGCH];
 export const PERMISSIONS = {
   PRODUCT_WRITE: { group: 'Бараа, үнэ', label: 'Бараа нэмэх, засах, идэвхгүй болгох (үнэ, ангилал, хэмжээ, жин)', roles: TOP, grantable: true },
   PRICE_LIST_WRITE: { group: 'Бараа, үнэ', label: 'Үнийн жагсаалт үүсгэх, үнэ засах, илгээх', roles: TOP, grantable: true },
+  PRICE_OVERRIDE: {
+    group: 'Бараа, үнэ',
+    label: 'Касс дээр барааны үнэ өөрчлөх (өртгөөс доош биш; харилцагч сонгосон бол түүний хувийн үнэ болно)',
+    roles: OVERSIGHT,
+    grantable: true,
+  },
   ORDER_CANCEL: { group: 'Борлуулалт', label: 'Захиалга цуцлах', roles: POS, grantable: false },
   RETURN_CREATE: { group: 'Борлуулалт', label: 'Буцаалт хийх', roles: POS, grantable: false },
   FEE_OVERRIDE: { group: 'Борлуулалт', label: 'Хүргэлт, буулгалтын төлбөрийг гараар өөрчлөх', roles: [BORLUULAGCH], grantable: false },

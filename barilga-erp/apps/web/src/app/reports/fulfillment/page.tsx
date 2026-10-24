@@ -123,7 +123,7 @@ export default function FulfillmentReportPage() {
 
       {report && s && (
         <>
-          <section className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6 mb-4">
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6 mb-4">
             {[
               ['Бэлдэж дууссан', String(s.completed)],
               ['Дундаж бэлтгэл', mins(s.avgPrepareMinutes)],

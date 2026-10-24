@@ -8,6 +8,7 @@ import type { AuthUser, Role } from '@/lib/types';
 export type PermissionKey =
   | 'PRODUCT_WRITE'
   | 'PRICE_LIST_WRITE'
+  | 'PRICE_OVERRIDE'
   | 'ORDER_CANCEL'
   | 'RETURN_CREATE'
   | 'FEE_OVERRIDE'
@@ -31,6 +32,7 @@ export type PermissionInfo = { key: PermissionKey; group: string; label: string;
 const ROLE_DEFAULTS: Record<PermissionKey, Role[]> = {
   PRODUCT_WRITE: ['ADMIN', 'SUPER_MANAGER'],
   PRICE_LIST_WRITE: ['ADMIN', 'SUPER_MANAGER'],
+  PRICE_OVERRIDE: ['ADMIN', 'MANAGER'],
   ORDER_CANCEL: ['ADMIN', 'MANAGER', 'BORLUULAGCH'],
   RETURN_CREATE: ['ADMIN', 'MANAGER', 'BORLUULAGCH'],
   FEE_OVERRIDE: ['BORLUULAGCH'],

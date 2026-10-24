@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { api, tugrik } from '@/lib/api';
 import { DailyReport } from '@/lib/types';
 
@@ -40,7 +41,9 @@ export function CashierSummary() {
       <button type="button" className="btn-ghost w-full text-xs py-1.5" onClick={() => void openDrawer()}>
         Өнөөдрийн борлуулалт
       </button>
-      {open && (
+      {/* Drawn at the page root: inside the phone menu it would sit under the top bar. */}
+      {open &&
+        createPortal(
         <div className="fixed inset-0 z-[70] flex justify-end bg-black/55" onClick={() => setOpen(false)}>
           <aside
             className="h-full w-full max-w-sm border-l border-slate-700 bg-steel-900 p-5 shadow-2xl overflow-auto"
@@ -88,8 +91,9 @@ export function CashierSummary() {
               </div>
             )}
           </aside>
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </>
   );
 }

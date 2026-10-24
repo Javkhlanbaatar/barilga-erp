@@ -80,7 +80,8 @@ export function GatherPanel({ orderId, onChanged }: { orderId: string; onChanged
       </div>
       {error && <p className="text-sm text-red-400">{error}</p>}
 
-      <table className="w-full text-sm">
+      <div className="table-scroll">
+      <table className="w-full min-w-[520px] text-sm">
         <thead className="text-left text-xs text-slate-400">
           <tr>
             <th className="py-1">Бараа</th>
@@ -106,6 +107,7 @@ export function GatherPanel({ orderId, onChanged }: { orderId: string; onChanged
           ))}
         </tbody>
       </table>
+      </div>
 
       {needsGather && (
         <ul className="text-xs text-slate-300 space-y-0.5">

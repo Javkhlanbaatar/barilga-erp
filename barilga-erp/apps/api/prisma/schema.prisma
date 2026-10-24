@@ -119,6 +119,39 @@ enum AttendanceStatus {
   OVERTIME
 }
 
+/// Who recorded a check-in: a manager, the person themselves, a correction, or the automatic close.
+enum AttendanceSource {
+  MANAGER
+  SELF
+  FIX
+  AUTO_CLOSE
+}
+
+/// A whole day's status for one person (instead of, or as well as, check-ins).
+enum DayMark {
+  /// Цалинтай чөлөө
+  PAID_LEAVE
+  /// Цалингүй чөлөө
+  UNPAID_LEAVE
+  /// Өвчтэй
+  SICK
+  /// Ээлжийн амралт
+  ANNUAL_LEAVE
+  /// Томилолт
+  BUSINESS_TRIP
+  /// Тасалсан (ирээгүй, мэдэгдээгүй)
+  ABSENT
+  /// Амралтын өдөр
+  DAY_OFF
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 enum PayrollStatus {
   DRAFT
   PAID
@@ -186,6 +219,11 @@ model User {
   invoices             Invoice[]                  @relation("InvoiceBy")
   salaryRates          SalaryRate[]               @relation("SalaryRateOf")
   salaryRatesSet       SalaryRate[]               @relation("SalaryRateBy")
+  attendanceDays       AttendanceDay[]            @relation("AttendanceDayOf")
+  attendanceDaysSet    AttendanceDay[]            @relation("AttendanceDayBy")
+  leaveRequests        LeaveRequest[]             @relation("LeaveRequestOf")
+  leaveDecisions       LeaveRequest[]             @relation("LeaveRequestDecidedBy")
+  priceShares          PriceShare[]               @relation("PriceShareBy")
   /// Rights added to or taken from this person on top of their role: { "grant": [...], "revoke": [...] }
   /// (keys from auth/permissions.ts). Empty = exactly what the role allows.
   permissions          Json?                      @map("permissions")
@@ -260,6 +298,7 @@ model Product {
   transferItems  StockTransferItem[]
   receiptItems   StockReceiptItem[]
   priceListItems PriceListItem[]
+  customerPrices CustomerPrice[]
 
   @@map("inv_products")
 }
@@ -362,6 +401,9 @@ model OrderItem {
   lengthM              Decimal                    @db.Decimal(10, 2)
   volumeM3             Decimal                    @db.Decimal(14, 6)
   lineTotal            Int
+  /// Set when a person changed the price at the till: the price the line would have had (the customer's own
+  /// price, their list or retail). Null when the price was not changed.
+  listPriceMnt         Int?                       @map("list_price_mnt")
   sourceType           SourceType                 @default(INTERNAL) @map("source_type")
   supplierName         String?                    @map("supplier_name")
   /// Picking checklist: set when a warehouse worker ticks this line as prepared (several people can pick one order).
@@ -596,18 +638,68 @@ model FeeOverrideAudit {
 }
 
 model Attendance {
-  id        String           @id @default(uuid())
-  userId    String
-  user      User             @relation(fields: [userId], references: [id])
-  checkIn   DateTime
-  checkOut  DateTime?
-  status    AttendanceStatus @default(ON_TIME)
-  notes     String?
-  createdAt DateTime         @default(now())
-  updatedAt DateTime         @updatedAt
+  id            String           @id @default(uuid())
+  userId        String
+  user          User             @relation(fields: [userId], references: [id])
+  checkIn       DateTime
+  checkOut      DateTime?
+  status        AttendanceStatus @default(ON_TIME)
+  notes         String?
+  /// How it was recorded; a SELF check-in waits for a manager until confirmedAt is set.
+  source        AttendanceSource @default(MANAGER)
+  recordedById  String?          @map("recorded_by_id")
+  confirmedById String?          @map("confirmed_by_id")
+  confirmedAt   DateTime?        @map("confirmed_at")
+  /// The shop the person worked in that day (their home shop when recorded).
+  warehouseId   String?          @map("warehouse_id")
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   @@index([userId, checkIn])
   @@map("hr_attendance")
+}
+
+/// One person's status for one day (YYYY-MM-DD, Ulaanbaatar): leave, sick, absent… set by a manager or by an
+/// approved request. It does not change pay by itself: the payroll shows the counts for the manager to act on.
+model AttendanceDay {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  user        User     @relation("AttendanceDayOf", fields: [userId], references: [id])
+  date        String
+  mark        DayMark
+  note        String?
+  requestId   String?  @map("request_id")
+  createdById String   @map("created_by_id")
+  createdBy   User     @relation("AttendanceDayBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([date])
+  @@map("hr_attendance_days")
+}
+
+/// An employee asks for leave (чөлөө, амралт…) for some days; a manager approves or rejects it.
+model LeaveRequest {
+  id           String      @id @default(uuid())
+  userId       String      @map("user_id")
+  user         User        @relation("LeaveRequestOf", fields: [userId], references: [id])
+  kind         DayMark
+  fromDate     String      @map("from_date")
+  toDate       String      @map("to_date")
+  reason       String
+  status       LeaveStatus @default(PENDING)
+  /// The requester's shop when they asked (decides which manager sees it).
+  warehouseId  String?     @map("warehouse_id")
+  decidedById  String?     @map("decided_by_id")
+  decidedBy    User?       @relation("LeaveRequestDecidedBy", fields: [decidedById], references: [id])
+  decidedAt    DateTime?   @map("decided_at")
+  decisionNote String?     @map("decision_note")
+  createdAt    DateTime    @default(now())
+
+  @@index([status, warehouseId])
+  @@index([userId, fromDate])
+  @@map("hr_leave_requests")
 }
 
 /// A person's monthly base salary from a month on (until a later row). Changing a salary never rewrites
@@ -715,10 +807,30 @@ model Customer {
   accountEntries AccountEntry[]
   invoices       Invoice[]
   receipts       StockReceipt[]
+  ownPrices      CustomerPrice[]
 
   @@index([phone])
   @@index([name])
   @@map("crm_customers")
+}
+
+/// One customer's own price for one product: saved when someone with the right changes the price at the till
+/// for that customer. Comes before the customer's price list and retail; the next sale shows it by itself.
+model CustomerPrice {
+  id          String   @id @default(uuid())
+  customerId  String   @map("customer_id")
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  productId   String   @map("product_id")
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceMnt    Int      @map("price_mnt")
+  /// Who set it last (the edit history has every change).
+  updatedById String?  @map("updated_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([customerId, productId])
+  @@index([productId])
+  @@map("crm_customer_prices")
 }
 
 /// Moving stock from one shop/warehouse to another. Sending takes it out of the source (TRANSFER_OUT);
@@ -859,8 +971,32 @@ model PriceList {
   items     PriceListItem[]
   customers Customer[]
   orders    Order[]
+  shares    PriceShare[]
 
   @@map("crm_price_lists")
+}
+
+/// A link sent to a customer: a price list (or the retail prices) limited to chosen products or categories.
+/// Prices stay live; the selection is fixed per link, so changing one link never changes what others see.
+model PriceShare {
+  id              String     @id @default(uuid())
+  token           String     @unique
+  label           String?
+  /// null = the retail prices.
+  priceListId     String?    @map("price_list_id")
+  priceList       PriceList? @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  productIds      String[]   @default([]) @map("product_ids")
+  categories      String[]   @default([])
+  /// Also show products not on the list (at retail).
+  includeUnlisted Boolean    @default(false) @map("include_unlisted")
+  expiresAt       DateTime?  @map("expires_at") @db.Date
+  revokedAt       DateTime?  @map("revoked_at")
+  createdById     String?    @map("created_by_id")
+  createdBy       User?      @relation("PriceShareBy", fields: [createdById], references: [id])
+  createdAt       DateTime   @default(now())
+
+  @@index([priceListId])
+  @@map("crm_price_shares")
 }
 
 model PriceListItem {

@@ -45,10 +45,15 @@ function isUniqueViolation(err: unknown) {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 }
 
-/** Stored as a plain JSON list; an empty list is stored as nothing. */
+/** Stored as a plain JSON list; an empty list is stored as nothing. A companion picked from the catalog keeps its productId. */
 function companionsValue(list: CreateProductDto['companions']): Prisma.InputJsonValue | undefined {
   if (!list?.length) return undefined;
-  return list.map((c) => ({ name: c.name, qtyPerUnit: c.qtyPerUnit, unit: c.unit || 'ш' }));
+  return list.map((c) => ({
+    name: c.name,
+    qtyPerUnit: c.qtyPerUnit,
+    unit: c.unit || 'ш',
+    ...(c.productId ? { productId: c.productId } : {}),
+  }));
 }
 
 @Controller('products')
@@ -57,6 +62,25 @@ export class ProductsController {
     private readonly prisma: PrismaService,
     private readonly inventory: InventoryService,
   ) {}
+
+  /**
+   * Companions picked from the catalog: the products must exist (looked up together), a product cannot go
+   * out with itself, and a name or unit the form left empty is copied from the picked product. Only the
+   * stored list changes; stock, prices and orders are not touched.
+   */
+  private async resolveCompanions(list: CreateProductDto['companions'], selfId?: string): Promise<CreateProductDto['companions']> {
+    if (!list?.length) return list;
+    const ids = [...new Set(list.map((c) => c.productId).filter((id): id is string => Boolean(id)))];
+    if (!ids.length) return list;
+    if (selfId && ids.includes(selfId)) throw new BadRequestException('Бараа өөрийгөө дагахгүй / A product cannot be its own companion');
+    const found = await this.prisma.product.findMany({ where: { id: { in: ids } }, select: { id: true, nameMn: true, unit: true } });
+    const byId = new Map(found.map((p) => [p.id, p]));
+    if (ids.some((id) => !byId.has(id))) throw new BadRequestException('Дагах бараа олдсонгүй / Companion product not found');
+    return list.map((c) => {
+      const p = c.productId ? byId.get(c.productId) : undefined;
+      return p ? { ...c, name: c.name || p.nameMn, unit: c.unit || p.unit } : c;
+    });
+  }
 
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -87,7 +111,8 @@ export class ProductsController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Permission('PRODUCT_WRITE')
   async create(@Body() dto: CreateProductDto, @CurrentUser() user: AuthUser) {
-    const { stockQty, warehouseId, companions, barcode, ...rest } = dto;
+    const { stockQty, warehouseId, companions: picked, barcode, ...rest } = dto;
+    const companions = await this.resolveCompanions(picked);
     try {
       // The product starts at 0; any starting quantity is booked as an OPENING movement in one warehouse
       // so the ledger and the balances always agree.
@@ -170,7 +195,8 @@ if (isUniqueViolation(err)) {
   async update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: AuthUser) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Product not found');
-    const { stockQty, companions, barcode, ...rest } = dto;
+    const { stockQty, companions: picked, barcode, ...rest } = dto;
+    const companions = await this.resolveCompanions(picked, id);
     // The form always sends the quantity back; only a real change is a stock adjustment.
     const wantsStockChange = stockQty !== undefined && Number(existing.stockQty) !== stockQty;
     try {

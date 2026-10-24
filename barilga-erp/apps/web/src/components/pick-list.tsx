@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { api } from '@/lib/api';
+import { unitLabel } from '@/lib/catalog';
 import { companionLines, type Order } from '@/lib/types';
 
 type Item = Order['items'][number];
@@ -68,7 +69,7 @@ export function PickList({ order, onChange }: { order: Order; onChange?: (items:
       <ul className="divide-y divide-slate-800 rounded-lg border border-slate-700">
         {items.map((i) => (
           <li key={i.id}>
-            <label className={`flex items-center gap-3 px-3 py-2 cursor-pointer ${i.pickedAt ? 'bg-emerald-950/30' : ''}`}>
+            <label className={`flex min-h-[44px] flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-2 cursor-pointer ${i.pickedAt ? 'bg-emerald-950/30' : ''}`}>
               <input
                 type="checkbox"
                 className="h-5 w-5 accent-emerald-500"
@@ -76,7 +77,7 @@ export function PickList({ order, onChange }: { order: Order; onChange?: (items:
                 disabled={busy === i.id}
                 onChange={() => void toggle(i)}
               />
-              <span className={`flex-1 text-sm ${i.pickedAt ? 'text-slate-400 line-through' : 'text-white'}`}>
+              <span className={`min-w-0 flex-1 text-sm ${i.pickedAt ? 'text-slate-400 line-through' : 'text-white'}`}>
                 <span className="font-mono text-[11px] text-slate-500">{i.product.sku}</span> {i.product.nameMn}
                 {i.sourceType === 'EXTERNAL_SUPPLIER' && <span className="ml-1 text-[11px] text-amber-300">(нийлүүлэгчээс)</span>}
                       {companionLines(i.product.companions, Number(i.quantity)).map((c) => (
@@ -86,9 +87,9 @@ export function PickList({ order, onChange }: { order: Order; onChange?: (items:
                       ))}
               </span>
               <span className="text-sm font-semibold whitespace-nowrap">
-                {qty(i.quantity)} {i.product.unit}
+                {qty(i.quantity)} {unitLabel(i.product.unit)}
               </span>
-              <span className="w-28 text-right text-[11px] text-emerald-300">
+              <span className={`${i.pickedAt ? "" : "hidden sm:block"} w-full pl-8 text-left text-[11px] text-emerald-300 sm:w-28 sm:pl-0 sm:text-right`}>
                 {i.pickedAt ? `${i.pickedBy?.fullName ?? ''} ${time(i.pickedAt)}` : ''}
               </span>
             </label>

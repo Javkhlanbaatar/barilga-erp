@@ -101,7 +101,7 @@ export default function ReturnsReportPage() {
           <h2 className="text-xl font-bold">Буцаалт</h2>
           <p className="text-sm text-slate-400">Буцаасан бараа, шалтгаан, буцаасан мөнгө ба хэлбэр, хэн хийсэн.</p>
         </div>
-        <div className="flex items-end gap-2">
+        <div className="flex flex-wrap items-end gap-2">
           <label className="text-xs text-slate-400">
             Эхлэх
             <input type="date" className="mt-1 block" value={from} onChange={(e) => setFrom(e.target.value)} />
@@ -118,18 +118,18 @@ export default function ReturnsReportPage() {
       {error && <p className="mb-2 text-sm text-red-400">{error}</p>}
       {report && (
         <>
-          <div className="mb-4 grid gap-3 sm:grid-cols-3">
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
             <article className="card">
               <p className="text-xs text-slate-400">Буцаалт</p>
-              <p className="text-xl font-bold">{report.totals.count}</p>
+              <p className="break-words text-lg font-bold sm:text-xl">{report.totals.count}</p>
             </article>
             <article className="card">
               <p className="text-xs text-slate-400">Буцаасан нийт дүн</p>
-              <p className="text-xl font-bold text-amber-brand">{tugrik(report.totals.amountMnt)}</p>
+              <p className="break-words text-lg font-bold sm:text-xl text-amber-brand">{tugrik(report.totals.amountMnt)}</p>
             </article>
             <article className="card">
               <p className="text-xs text-slate-400">Хараахан буцааж өгөөгүй</p>
-              <p className="text-xl font-bold text-red-300">{tugrik(report.totals.pendingMnt)}</p>
+              <p className="break-words text-lg font-bold sm:text-xl text-red-300">{tugrik(report.totals.pendingMnt)}</p>
               {report.totals.pendingMnt > 0 && (
                 <Link className="text-xs text-amber-brand hover:underline" href="/reports/refunds">
                   Шилжүүлэх жагсаалт →

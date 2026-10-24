@@ -67,6 +67,7 @@ const NESTED_ITEMS: Record<string, { table: string; fk: string }> = {
   stockTransfer: { table: 'stockTransferItem', fk: 'transferId' },
   salesReturn: { table: 'returnItem', fk: 'returnId' },
   stockReceipt: { table: 'stockReceiptItem', fk: 'receiptId' },
+  order: { table: 'orderItem', fk: 'orderId' },
 };
 
 /** Relation names that differ from the table name. */
@@ -94,7 +95,7 @@ class Table {
         if (this.matches(row, cond)) return false;
         continue;
       }
-      if (key === 'warehouseId_productId' || key === 'userId_periodMonth' || key === 'userId_fromMonth') {
+      if (key === 'warehouseId_productId' || key === 'userId_periodMonth' || key === 'userId_fromMonth' || key === 'userId_date' || key === 'customerId_productId') {
         // Compound unique keys: every named field must match.
         for (const [field, v] of Object.entries(cond as Row)) if (row[field] !== v) return false;
         continue;
@@ -135,6 +136,7 @@ class Table {
     const TO_MANY: Record<string, Record<string, [string, string]>> = {
       cashSession: { movements: ['cashMovement', 'sessionId'] },
       priceList: { items: ['priceListItem', 'priceListId'] },
+      customer: { ownPrices: ['customerPrice', 'customerId'] },
       order: { returns: ['salesReturn', 'orderId'] },
     };
     for (const [rel, [table, fk]] of Object.entries(TO_MANY[this.name] ?? {})) {
@@ -229,6 +231,11 @@ class Table {
     if (i < 0) throw new Error(`fake-db: ${this.name} not found for delete`);
     return this.rows.splice(i, 1)[0];
   }
+  async deleteMany(args: Row = {}) {
+    const before = this.rows.length;
+    this.rows = this.rows.filter((r) => !this.matches(r, args.where));
+    return { count: before - this.rows.length };
+  }
   async count(args: Row = {}) {
     return this.rows.filter((r) => this.matches(r, args.where)).length;
   }
@@ -290,7 +297,7 @@ export class FakeDb {
     status: 'UNPAID', provider: 'QPAY', method: 'QPAY', qpayInvoiceId: null, qpayPayload: null,
     paidAt: null, pollAttempts: 0, nextPollAt: null, lastPollError: null,
   }));
-  orderItem = new Table(this, 'orderItem', () => ({ sourceType: 'INTERNAL', supplierName: null, pickedAt: null, pickedById: null }));
+  orderItem = new Table(this, 'orderItem', () => ({ sourceType: 'INTERNAL', supplierName: null, pickedAt: null, pickedById: null, listPriceMnt: null }));
   product = new Table(this, 'product', () => ({ stockQty: new Prisma.Decimal(0), active: true }));
   returnItem = new Table(this, 'returnItem', () => ({}));
   supplierPayable = new Table(this, 'supplierPayable', () => ({ status: 'OPEN' }));
@@ -313,10 +320,14 @@ export class FakeDb {
   stockReceipt = new Table(this, 'stockReceipt', () => ({ supplierInvoiceNo: null, supplierCustomerId: null, notes: null, receivedAt: new Date() }));
   stockReceiptItem = new Table(this, 'stockReceiptItem', () => ({ unitCostMnt: null }));
   appSetting = new Table(this, 'appSetting', () => ({ updatedById: null }));
-  attendance = new Table(this, 'attendance', () => ({ checkOut: null, status: 'ON_TIME', notes: null }));
+  attendance = new Table(this, 'attendance', () => ({ checkOut: null, status: 'ON_TIME', notes: null, source: 'MANAGER', recordedById: null, confirmedById: null, confirmedAt: null, warehouseId: null }));
   payroll = new Table(this, 'payroll', () => ({ status: 'DRAFT', paidAt: null, paidById: null }));
   payrollAdjustment = new Table(this, 'payrollAdjustment', () => ({}));
   salaryRate = new Table(this, 'salaryRate', () => ({ reason: null, createdAt: new Date() }));
+  attendanceDay = new Table(this, 'attendanceDay', () => ({ note: null, requestId: null }));
+  leaveRequest = new Table(this, 'leaveRequest', () => ({ status: 'PENDING', warehouseId: null, decidedById: null, decidedAt: null, decisionNote: null }));
+  customerPrice = new Table(this, 'customerPrice', () => ({ updatedById: null, createdAt: new Date(), updatedAt: new Date() }));
+  priceShare = new Table(this, 'priceShare', () => ({ label: null, priceListId: null, productIds: [], categories: [], includeUnlisted: false, expiresAt: null, revokedAt: null, createdById: null }));
   cashSession = new Table(this, 'cashSession', () => ({ status: 'OPEN', openedAt: new Date(), closedAt: null, closedById: null, expectedCashMnt: null, countedCashMnt: null, differenceMnt: null, closingNote: null, warehouseId: null }));
   cashMovement = new Table(this, 'cashMovement', () => ({}));
   priceList = new Table(this, 'priceList', () => ({ isActive: true, notes: null }));
@@ -370,7 +381,7 @@ export class FakeDb {
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
-      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.attendance, this.payroll, this.payrollAdjustment, this.salaryRate, this.cashSession, this.cashMovement, this.priceList, this.priceListItem,
+      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.attendance, this.payroll, this.payrollAdjustment, this.salaryRate, this.attendanceDay, this.leaveRequest, this.priceShare, this.customerPrice, this.cashSession, this.cashMovement, this.priceList, this.priceListItem,
       this.accountEntry, this.editAudit, this.invoice,
     ];
   }

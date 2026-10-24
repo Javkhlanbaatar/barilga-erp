@@ -116,7 +116,7 @@ export function CustomerPicker({
       {allowCreate && (
         <button
           type="button"
-          className="absolute right-1 top-1 z-10 rounded px-2 py-1 text-xs text-amber-brand hover:underline"
+          className="absolute right-1 top-1/2 z-10 min-h-[36px] -translate-y-1/2 rounded px-2 text-xs text-amber-brand hover:underline"
           onClick={() => {
             setNc({ ...nc, name: q.trim() });
             setCreating(true);
@@ -127,7 +127,7 @@ export function CustomerPicker({
       )}
       <input
         placeholder="Бүртгэлтэй харилцагч хайх (нэр, утас, РД)…"
-        className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
+        className={`w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm ${allowCreate ? 'pr-20' : ''}`}
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => results.length && setOpen(true)}

@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { Modal } from '@/components/modal';
 import { ProductImage } from '@/components/product-image';
 import { Shell } from '@/components/shell';
 import { api, apiUpload, tugrik } from '@/lib/api';
@@ -13,8 +14,21 @@ import {
   productMatchesQuery,
   productStockStatus,
 } from '@/lib/types';
-import { CATEGORIES, UNITS, categoryKey, categoryLabel, missingInfo, unitLabel, withVolume } from '@/lib/catalog';
-import { useFeatures } from '@/lib/features';
+import {
+  NEW_CATEGORY,
+  NEW_UNIT,
+  UNIT_MAX_LENGTH,
+  categoryLabel,
+  isNoCategory,
+  categoryOptions,
+  missingInfo,
+  parseDecimal,
+  unitLabel,
+  unitOptions,
+  useCategories,
+  useUnits,
+  withVolume,
+} from '@/lib/catalog';
 import { can, savedUser, useCan } from '@/lib/permissions';
 import { OVERSIGHT_ROLES, hasRole } from '@/lib/rbac';
 
@@ -39,8 +53,14 @@ const MOVEMENT_LABEL: Record<string, string> = {
 /** INCOMPLETE: products still missing a category, weight, length or volume. */
 type StockFilter = 'ALL' | 'NEGATIVE_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'INCOMPLETE';
 
+/** The printed price list takes at most this many hand-picked products (same limit as the API). */
+const MAX_SHEET_PRODUCTS = 200;
+
 /** A saved size or weight for the form: empty when not registered (0). */
 const dim = (v?: number | string | null) => (Number(v) > 0 ? String(Number(v)) : '');
+
+/** One "goes with it" line in the form; `productId` is set when it was picked from the catalog. */
+type CompanionDraft = { name: string; qtyPerUnit: string; unit: string; productId?: string };
 
 const emptyForm = {
   barcode: '',
@@ -50,7 +70,7 @@ const emptyForm = {
   unit: 'ш',
   category: '',
   priceMnt: 0,
-  // Sizes are typed as text so an empty box stays empty (width / height are optional).
+  // Sizes are typed as text so an empty box stays empty (width / height are optional) and "0,5" works.
   weightKg: '',
   lengthM: '',
   widthM: '',
@@ -61,10 +81,24 @@ const emptyForm = {
   imageUrl: '',
   description: '',
   active: true,
-  companions: [] as Array<{ name: string; qtyPerUnit: string; unit: string }>,
+  companions: [] as CompanionDraft[],
 };
 
 type Toast = { kind: 'error' | 'ok'; text: string };
+
+/** Why a companion's "per unit" quantity cannot be saved (null when it is fine or the line is empty). */
+function companionQtyError(c: CompanionDraft): string | null {
+  if (!c.name.trim() && !c.productId) return null;
+  if (!c.qtyPerUnit.trim()) return '1 нэгжид ногдох тоог бичнэ үү';
+  const n = parseDecimal(c.qtyPerUnit);
+  if (!Number.isFinite(n) || n <= 0) return 'Тоог зөв бичнэ үү (жишээ: 1, 2 эсвэл 0,5; «1,250» гэж мянгатын таслал бичихгүй)';
+  if (n > 1000) return '1000-аас ихгүй тоо бичнэ үү';
+  if (Math.abs(Math.round(n * 1000) - n * 1000) > 1e-6) return 'Таслалаас хойш 3 орон хүртэл (жишээ: 0,125)';
+  return null;
+}
+
+/** A size typed in the form: null when empty, NaN when it is not a number. */
+const sizeValue = (v: string) => (v.trim() ? parseDecimal(v) : null);
 
 function Badge({ status }: { status: StockStatus }) {
   const cls =
@@ -82,17 +116,38 @@ function Badge({ status }: { status: StockStatus }) {
   );
 }
 
+function ActiveBadge({ active }: { active: boolean }) {
+  return (
+    <span
+      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+        active ? 'border-emerald-700 bg-emerald-950/50 text-emerald-200' : 'border-slate-600 text-slate-400'
+      }`}
+    >
+      {active ? 'Идэвхтэй' : 'Идэвхгүй'}
+    </span>
+  );
+}
+
 /** "Дутуу: жин, урт" under a product whose registration is not complete; a link to the form for those who can fix it. */
 function MissingNote({ missing, onFix }: { missing: string[]; onFix?: () => void }) {
   if (!missing.length) return null;
   const text = `Дутуу: ${missing.join(', ')}`;
   return onFix ? (
-    <button type="button" className="mt-0.5 block text-left text-[11px] text-amber-300 hover:underline" onClick={onFix} title="Засаж бөглөх">
-      {text}
+    <button type="button" className="mt-0.5 block py-1 text-left text-[11px] text-amber-300 hover:underline" onClick={onFix}>
+      {text} — засах
     </button>
   ) : (
     <p className="mt-0.5 text-[11px] text-amber-300">{text}</p>
   );
+}
+
+/** A checkbox that can also show "some are chosen" (the dash), for "select all visible". */
+function SelectAllBox({ all, some, onChange, label }: { all: boolean; some: boolean; onChange: () => void; label: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = some && !all;
+  }, [all, some]);
+  return <input ref={ref} type="checkbox" className="h-5 w-5 cursor-pointer" checked={all} onChange={onChange} aria-label={label} />;
 }
 
 export default function InventoryPage() {
@@ -111,15 +166,21 @@ export default function InventoryPage() {
   const [filter, setFilter] = useState<StockFilter>('ALL');
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
+  /** Products chosen for printing labels or a price list. */
   const [picked, setPicked] = useState<string[]>([]);
   const [warehouseId, setWarehouseId] = useState('');
   const [adjusting, setAdjusting] = useState<Product | null>(null);
   const [adjustForm, setAdjustForm] = useState({ warehouseId: '', counted: '', reason: '' });
   const [ledger, setLedger] = useState<{ product: Product; rows: StockMovement[] } | null>(null);
   const [openingWarehouse, setOpeningWarehouse] = useState('');
+  /** The companion line whose product suggestions are open. */
+  const [companionFocus, setCompanionFocus] = useState<number | null>(null);
+  /** The form as it was opened, so closing it by accident asks before throwing typed changes away. */
+  const openedForm = useRef(emptyForm);
 
-  const features = useFeatures();
   const canDo = useCan();
+  const { units, addNew: addNewUnit } = useUnits();
+  const { categories: categoryList, addNew: addNewCategory } = useCategories();
   const canManage = hasRole(user?.role, OVERSIGHT_ROLES);
   // The catalog and prices are shared by every shop: admin and the general manager by default, or whoever the admin allows.
   const canEditCatalog = canDo('PRODUCT_WRITE');
@@ -171,6 +232,10 @@ export default function InventoryPage() {
   async function submitAdjust(e: FormEvent) {
     e.preventDefault();
     if (!adjusting) return;
+    const counted = parseDecimal(adjustForm.counted);
+    if (!Number.isFinite(counted) || counted < 0 || Math.abs(Math.round(counted * 1000) - counted * 1000) > 1e-6) {
+      return setError('Тоолсон тоог зөв бичнэ үү (0 эсвэл түүнээс их, таслалаас хойш 3 орон хүртэл; мянгатын таслал бичихгүй — 1200)');
+    }
     setSaving(true);
     setError('');
     try {
@@ -179,7 +244,7 @@ export default function InventoryPage() {
         body: JSON.stringify({
           warehouseId: adjustForm.warehouseId,
           productId: adjusting.id,
-          countedQuantity: Number(adjustForm.counted),
+          countedQuantity: counted,
           reason: adjustForm.reason.trim(),
         }),
       });
@@ -206,21 +271,25 @@ export default function InventoryPage() {
 
   function openCreate() {
     setEditing(null);
+    setError('');
     setForm(emptyForm);
+    openedForm.current = emptyForm;
     setFile(null);
     setModal('create');
   }
 
   function openEdit(row: Product) {
     setEditing(row);
-    setForm({
+    setError('');
+    const next = {
       sku: row.sku,
       barcode: row.barcode ?? '',
       nameMn: row.nameMn,
       nameEn: row.nameEn,
       unit: unitLabel(row.unit),
       // "General" is not a real choice: the box starts empty so a category has to be picked.
-      category: row.category && row.category !== 'General' ? categoryLabel(row.category) : '',
+      // The stored name (an old English key stays as it is; the list shows it in Mongolian).
+      category: row.category && !isNoCategory(row.category) ? row.category : '',
       priceMnt: Number(row.priceMnt),
       weightKg: dim(row.weightKg),
       lengthM: dim(row.lengthM),
@@ -232,36 +301,111 @@ export default function InventoryPage() {
       imageUrl: row.imageUrl ?? '',
       description: row.description ?? '',
       active: row.active !== false,
-      companions: (row.companions ?? []).map((c) => ({ name: c.name, qtyPerUnit: String(c.qtyPerUnit), unit: c.unit })),
-    });
+      companions: (row.companions ?? []).map((c) => ({
+        name: c.name,
+        qtyPerUnit: String(c.qtyPerUnit),
+        unit: unitLabel(c.unit),
+        ...(c.productId ? { productId: c.productId } : {}),
+      })),
+    };
+    setForm(next);
+    openedForm.current = next;
     setFile(null);
     setModal('edit');
+  }
+
+  /** Tap outside / Esc / Болих: asks first when something was typed. */
+  function closeForm() {
+    const changed = Boolean(file) || JSON.stringify(form) !== JSON.stringify(openedForm.current);
+    if (changed && !window.confirm('Хадгалаагүй өөрчлөлт алга болно. Хаах уу?')) return;
+    setModal(null);
+  }
+
+  /** The unit <select>: a saved unit, or «+ Шинэ нэгж» which asks for the name, saves it and selects it. */
+  async function pickUnit(value: string) {
+    if (value !== NEW_UNIT) return setForm((f) => ({ ...f, unit: value }));
+    try {
+      const unit = await addNewUnit();
+      if (unit) {
+        setForm((f) => ({ ...f, unit }));
+        flash('ok', `«${unit}» нэгж нэмэгдлээ`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Нэгж нэмж чадсангүй');
+    }
+  }
+
+  /**
+   * The category <select>: a listed category, or «+ Шинэ ангилал» which asks for the name and selects it (added to
+   * the shop's list when this person may change the catalog, otherwise used for this product only).
+   */
+  async function pickCategory(value: string) {
+    if (value !== NEW_CATEGORY) return setForm((f) => ({ ...f, category: value }));
+    try {
+      const name = await addNewCategory(canEditCatalog);
+      if (name) {
+        setForm((f) => ({ ...f, category: name }));
+        // The list as it was before this pick: a name already there is only selected.
+        const existed = categoryList.some((c) => c.toLowerCase() === name.toLowerCase());
+        if (canEditCatalog) flash('ok', existed ? `«${name}» ангилал жагсаалтад байсан — сонгогдлоо` : `«${name}» ангилал жагсаалтад нэмэгдлээ`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ангилал нэмж чадсангүй');
+    }
+  }
+
+  const setCompanion = (idx: number, patch: Partial<CompanionDraft>) =>
+    setForm((f) => ({ ...f, companions: f.companions.map((c, j) => (j === idx ? { ...c, ...patch } : c)) }));
+
+  /** A product picked from the suggestions: its name and unit are filled in and it is linked by id. */
+  function pickCompanion(idx: number, p: Product) {
+    setCompanion(idx, { name: p.nameMn, unit: unitLabel(p.unit) || 'ш', productId: p.id });
+    setCompanionFocus(null);
   }
 
   async function save(e: FormEvent) {
     e.preventDefault();
     setError('');
-    const categoryValue = categoryKey(form.category);
-    if (!form.category.trim() || categoryValue === 'General') return setError('Ангиллаа сонгоно уу');
-    if (!(Number(form.weightKg) > 0)) return setError('Жинг кг-аар оруулна уу (0-ээс их)');
+    const categoryValue = form.category.trim();
+    if (!categoryValue || isNoCategory(categoryValue)) return setError('Ангиллаа сонгоно уу');
+    const weightKg = parseDecimal(form.weightKg);
+    if (!(weightKg > 0) || weightKg > 100000) return setError('Жинг кг-аар оруулна уу (0-ээс их, жишээ: 0,5 эсвэл 1250 — мянгатын таслал бичихгүй)');
+    const [lengthM, widthM, heightM] = [form.lengthM, form.widthM, form.heightM].map(sizeValue);
+    if ([lengthM, widthM, heightM].some((v) => v !== null && (!Number.isFinite(v) || v < 0 || v > 100))) {
+      return setError('Урт, өргөн, өндрийг метрээр 0–100 хооронд бичнэ үү (жишээ: 0,25 эсвэл 1.25; «1,250» гэж бичихгүй)');
+    }
+    const volumeM3 = sizeValue(form.volumeM3);
+    if (volumeM3 !== null && (!Number.isFinite(volumeM3) || volumeM3 < 0 || volumeM3 > 1000)) {
+      return setError('Эзлэхүүнийг м³-ээр 0–1000 хооронд бичнэ үү');
+    }
+    // A line without a name (and not picked from the catalog) is an unused empty row.
+    const companionRows = form.companions.filter((c) => c.name.trim() || c.productId);
+    for (const c of companionRows) {
+      const problem = companionQtyError(c);
+      if (problem) return setError(`Дагалдах бараа «${c.name.trim()}»: ${problem}`);
+      if (editing && c.productId === editing.id) return setError('Бараа өөрийгөө дагалдах бараа болгохгүй');
+    }
     setSaving(true);
     try {
       const payload = {
         ...form,
         priceMnt: Number(form.priceMnt),
-        weightKg: Number(form.weightKg),
-        lengthM: Number(form.lengthM) || 0,
-        widthM: form.widthM.trim() ? Number(form.widthM) : null,
-        heightM: form.heightM.trim() ? Number(form.heightM) : null,
-        volumeM3: Number(form.volumeM3) || 0,
+        weightKg,
+        lengthM: lengthM ?? 0,
+        widthM,
+        heightM,
+        volumeM3: volumeM3 ?? 0,
         stockQty: Number(form.stockQty),
         minStockLevel: Number(form.minStockLevel),
         imageUrl: form.imageUrl || null,
         description: form.description.trim() || null,
         category: categoryValue,
-        companions: form.companions
-          .filter((c) => c.name.trim() && Number(c.qtyPerUnit) > 0)
-          .map((c) => ({ name: c.name.trim(), qtyPerUnit: Number(c.qtyPerUnit), unit: c.unit.trim() || 'ш' })),
+        companions: companionRows.map((c) => ({
+          ...(c.productId ? { productId: c.productId } : {}),
+          name: c.name.trim(),
+          qtyPerUnit: Math.round(parseDecimal(c.qtyPerUnit) * 1000) / 1000,
+          unit: c.unit.trim() || 'ш',
+        })),
       };
       let product: Product;
       if (modal === 'create') {
@@ -338,6 +482,27 @@ export default function InventoryPage() {
   const categories = [...new Set(allRows.map((r) => r.category ?? 'General'))].sort((a, b) => categoryLabel(a).localeCompare(categoryLabel(b)));
   const missingBarcodes = catalog.filter((p) => !p.barcode).length;
 
+  // Selection: chosen products stay chosen when the filter changes; "all visible" works on what is shown.
+  const pickedSet = new Set(picked);
+  const visiblePicked = rows.filter((r) => pickedSet.has(r.id)).length;
+  const allVisiblePicked = rows.length > 0 && visiblePicked === rows.length;
+  const toggleOne = (id: string, on: boolean) => setPicked((prev) => (on ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((x) => x !== id)));
+  function toggleAllVisible() {
+    const visible = rows.map((r) => r.id);
+    if (allVisiblePicked) {
+      const hide = new Set(visible);
+      setPicked((prev) => prev.filter((id) => !hide.has(id)));
+    } else {
+      setPicked((prev) => [...prev, ...visible.filter((id) => !prev.includes(id))]);
+    }
+  }
+  /** Only the category box narrows the list: the price list can be printed for that category as a whole. */
+  const onlyCategory = Boolean(category) && filter === 'ALL' && !query.trim();
+  const categoryHref = `/print/price-list?id=retail&cat=${encodeURIComponent(category)}`;
+  const pickedIsCategory = onlyCategory && allVisiblePicked && picked.length === rows.length;
+  const pickedPriceHref = pickedIsCategory ? categoryHref : `/print/price-list?id=retail&ids=${picked.join(',')}`;
+  const tooManyForPrice = !pickedIsCategory && picked.length > MAX_SHEET_PRODUCTS;
+
   async function fillBarcodes() {
     try {
       const r = await api<{ assigned: number }>('/products/barcodes/fill', { method: 'POST', body: '{}' });
@@ -350,9 +515,50 @@ export default function InventoryPage() {
   const negativeCount =
     report?.summary.negativeStock ?? allRows.filter((r) => r.stockStatus === 'NEGATIVE_STOCK').length;
 
+  /** Buttons for one product, the same in the table and on the phone card. */
+  const actions = (row: Row, small: boolean) => {
+    const cls = small ? 'text-xs px-3 py-1' : 'text-sm px-3';
+    return (
+      <>
+        {canEditCatalog && (
+          <button className={`btn-ghost ${cls}`} onClick={() => openEdit(row)}>
+            Засах
+          </button>
+        )}
+        {canAdjust && (
+          <button className={`btn-ghost ${cls}`} onClick={() => openAdjust(row)}>
+            Тохируулах
+          </button>
+        )}
+        {canManage && (
+          <button className={`btn-ghost ${cls}`} onClick={() => void openLedger(row)}>
+            Түүх
+          </button>
+        )}
+        {canEditCatalog && row.active !== false && (
+          <button className={`btn-danger ${cls}`} onClick={() => setDeleting(row)}>
+            Идэвхгүй болгох
+          </button>
+        )}
+      </>
+    );
+  };
+
+  const stockBreakdown = (row: Row) =>
+    severalWarehouses && !report?.warehouseId && row.warehouses ? (
+      <p className="mt-0.5 text-[11px] font-normal text-slate-500">{row.warehouses.map((w) => `${w.code}: ${w.quantity}`).join(' · ')}</p>
+    ) : null;
+
+  const unitChoices = unitOptions(units, form.unit);
+  const categoryChoices = categoryOptions(categoryList, form.category);
+  const companionSuggestions = (c: CompanionDraft, idx: number) =>
+    companionFocus === idx && !c.productId && c.name.trim()
+      ? catalog.filter((p) => p.id !== editing?.id && p.active !== false && productMatchesQuery(p, c.name)).slice(0, 8)
+      : [];
+
   return (
     <Shell>
-      <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Үлдэгдэл</p>
           <h2 className="text-xl font-bold">Барааны удирдлага</h2>
@@ -360,27 +566,25 @@ export default function InventoryPage() {
             Бараа нэмэх, засах, идэвхгүй болгох. Агуулах захиалгыг олгоход үлдэгдэл хасагдана.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {canEditCatalog && (
             <button className="btn-primary" onClick={openCreate}>
               Бараа нэмэх
             </button>
           )}
-          {features.enabled('PRICE_LISTS') && (
-            <a className="btn-ghost" href="/print/price-list?id=retail" target="_blank" rel="noreferrer">
-              Үнийн жагсаалт хэвлэх
-            </a>
-          )}
+          <a className="btn-ghost" href={onlyCategory ? categoryHref : '/print/price-list?id=retail'} target="_blank" rel="noreferrer">
+            Үнийн жагсаалт хэвлэх{onlyCategory ? ` (${categoryLabel(category)})` : ''}
+          </a>
           <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
             Шинэчлэх
           </button>
         </div>
       </div>
 
-      {error && !modal && <p className="text-red-400 mb-3">{error}</p>}
+      {error && !modal && !adjusting && <p className="text-red-400 mb-3">{error}</p>}
 
       {report && (
-        <section className="grid gap-3 sm:grid-cols-4 mb-4">
+        <section className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
           <article className="card">
             <p className="text-xs text-slate-400 uppercase">Байгаа</p>
             <p className="text-2xl font-bold">{report.summary.inStock}</p>
@@ -403,9 +607,9 @@ export default function InventoryPage() {
       {severalWarehouses && (
         <div className="mb-3 flex flex-wrap items-end gap-3">
           {canPickWarehouse ? (
-            <label className="block text-xs text-slate-400">
+            <label className="block w-full text-xs text-slate-400 sm:w-auto">
               Агуулах / дэлгүүр
-              <select className="mt-1 block min-w-[220px]" value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
+              <select className="mt-1 block w-full sm:w-auto sm:min-w-[220px]" value={warehouseId} onChange={(e) => setWarehouseId(e.target.value)}>
                 <option value="">Бүгд (нийт)</option>
                 {warehouses.map((w) => (
                   <option key={w.id} value={w.id}>
@@ -423,19 +627,20 @@ export default function InventoryPage() {
       )}
 
       <div className="mb-3 flex flex-wrap items-end gap-2">
-        <label className="block flex-1 text-xs text-slate-400">
+        <label className="block w-full text-xs text-slate-400 sm:w-auto sm:flex-1">
           Нэр, тайлбар, SKU, баркодоор хайх
           <input
-            className="mt-1 w-full max-w-md"
+            className="mt-1 w-full sm:max-w-md"
+            type="search"
             value={query}
             autoComplete="off"
             placeholder="жишээ: суурь, цемент, CEM-42, 2000000000015"
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
-        <label className="text-xs text-slate-400">
+        <label className="block w-full text-xs text-slate-400 sm:w-auto">
           Ангилал
-          <select className="mt-1 block" value={category} onChange={(e) => setCategory(e.target.value)}>
+          <select className="mt-1 block w-full sm:w-auto" value={category} onChange={(e) => setCategory(e.target.value)}>
             <option value="">Бүгд</option>
             {categories.map((c) => (
               <option key={c} value={c}>
@@ -444,22 +649,18 @@ export default function InventoryPage() {
             ))}
           </select>
         </label>
-        <a
-          className="btn-ghost text-sm"
-          href={`/print/labels${picked.length ? `?ids=${picked.join(',')}` : ''}`}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Баркод хэвлэх{picked.length ? ` (${picked.length})` : ''}
+        <a className="btn-ghost text-sm" href="/print/labels" target="_blank" rel="noreferrer">
+          Баркод хэвлэх
         </a>
         {canEditCatalog && missingBarcodes > 0 && (
-          <button className="btn-ghost text-sm" onClick={() => void fillBarcodes()} title="Баркодгүй бараанд 200…-аар эхэлсэн дотоод баркод олгоно">
-            Баркодгүйд олгох ({missingBarcodes})
+          <button className="btn-ghost text-sm" onClick={() => void fillBarcodes()}>
+            Баркодгүй {missingBarcodes} бараанд баркод олгох
           </button>
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-4">
+      {/* One row that scrolls sideways on a phone instead of wrapping into several lines. */}
+      <div className="-mx-3 mb-4 flex gap-2 overflow-x-auto px-3 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
         {(
           [
             ['ALL', 'Бүгд'],
@@ -472,9 +673,8 @@ export default function InventoryPage() {
           <button
             key={key}
             type="button"
-            className={filter === key ? 'btn-primary text-xs px-3 py-1' : 'btn-ghost text-xs px-3 py-1'}
+            className={`shrink-0 whitespace-nowrap text-xs px-3 py-1 ${filter === key ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setFilter(key)}
-            title={key === 'INCOMPLETE' ? 'Ангилал, жин, урт эсвэл эзлэхүүн бүртгээгүй бараа' : undefined}
           >
             {label}
             {key === 'NEGATIVE_STOCK' && negativeCount > 0 ? ` (${negativeCount})` : ''}
@@ -484,7 +684,7 @@ export default function InventoryPage() {
 
       {filter === 'INCOMPLETE' && incompleteCount > 0 && (
         <div className="mb-4 rounded-xl border border-amber-700 bg-amber-950/40 px-4 py-3 text-sm text-amber-200">
-          {incompleteCount} барааны ангилал, жин эсвэл хэмжээ бүртгэгдээгүй.
+          {incompleteCount} барааны ангилал, жин эсвэл хэмжээ (урт, эзлэхүүн) бүртгэгдээгүй.
           {canEditCatalog ? ' Бараа бүрийн «Дутуу» дээр дарж бөглөнө үү.' : ' Бараа бүртгэх эрхтэй ажилтнаар бөглүүлнэ үү.'}
         </div>
       )}
@@ -501,11 +701,82 @@ export default function InventoryPage() {
         </div>
       )}
 
-      <div className="card overflow-auto p-0">
-        <table className="w-full text-sm min-w-[720px]">
+      {rows.length > 0 && (
+        <label className="mb-2 flex min-h-[40px] cursor-pointer items-center gap-2 text-sm text-slate-300">
+          <SelectAllBox
+            all={allVisiblePicked}
+            some={visiblePicked > 0}
+            onChange={toggleAllVisible}
+            label="Харагдаж буй бүх барааг сонгох"
+          />
+          {allVisiblePicked ? `Харагдаж буй ${rows.length} барааг сонгосон` : `Харагдаж буй ${rows.length} барааг сонгох`}
+          <span className="text-xs text-slate-500">— баркод эсвэл үнийн жагсаалт хэвлэхэд</span>
+        </label>
+      )}
+
+      {/* Phones: one card per product. */}
+      <div className="space-y-2 md:hidden">
+        {rows.map((row) => {
+          const on = pickedSet.has(row.id);
+          return (
+            <article
+              key={row.id}
+              className={`card p-3 ${row.active === false ? 'opacity-60' : ''} ${on ? 'border-amber-500/70' : ''}`}
+            >
+              <div className="flex gap-3">
+                <label className="-ml-1 flex w-9 shrink-0 cursor-pointer justify-center pt-1">
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5"
+                    checked={on}
+                    onChange={(e) => toggleOne(row.id, e.target.checked)}
+                    aria-label={`${row.nameMn} сонгох`}
+                  />
+                </label>
+                <ProductImage src={row.imageUrl} alt={row.nameMn} className="h-16 w-16 shrink-0 rounded-md" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium leading-snug">{row.nameMn}</p>
+                  <p className="break-all font-mono text-[11px] text-slate-400">
+                    {row.sku}
+                    {row.barcode ? ` · ${row.barcode}` : ''}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {categoryLabel(row.category)} · {tugrik(Number(row.priceMnt ?? 0))}
+                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <span className={`text-base font-semibold ${row.stockStatus === 'NEGATIVE_STOCK' ? 'text-rose-300' : ''}`}>
+                      {Number(row.stockQty)} <span className="text-xs font-normal text-slate-400">{unitLabel(row.unit)}</span>
+                    </span>
+                    <Badge status={row.stockStatus} />
+                    {row.active === false && <ActiveBadge active={false} />}
+                  </div>
+                  {stockBreakdown(row)}
+                  <MissingNote missing={missingInfo(row)} onFix={canEditCatalog ? () => openEdit(row) : undefined} />
+                </div>
+              </div>
+              {showActions && <div className="mt-2 flex flex-wrap gap-2">{actions(row, false)}</div>}
+            </article>
+          );
+        })}
+        {loading && <p className="p-3 text-slate-500">Бараа уншиж байна…</p>}
+        {!loading && rows.length === 0 && <p className="p-3 text-slate-500">Бараа олдсонгүй.</p>}
+      </div>
+
+      <div className="card hidden overflow-auto p-0 md:block">
+        <table className="w-full text-sm min-w-[760px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
-              <th className="p-3 w-16">Зураг</th>
+              <th className="w-10 p-3">
+                {rows.length > 0 && (
+                  <SelectAllBox
+                    all={allVisiblePicked}
+                    some={visiblePicked > 0}
+                    onChange={toggleAllVisible}
+                    label="Харагдаж буй бүх барааг сонгох"
+                  />
+                )}
+              </th>
+              <th className="w-16 py-3">Зураг</th>
               <th>SKU</th>
               <th>Барааны нэр</th>
               <th>Ангилал</th>
@@ -517,20 +788,24 @@ export default function InventoryPage() {
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className={`border-t border-slate-800 ${row.active === false ? 'opacity-60' : ''}`}>
+              <tr
+                key={row.id}
+                className={`border-t border-slate-800 ${row.active === false ? 'opacity-60' : ''} ${pickedSet.has(row.id) ? 'bg-amber-950/20' : ''}`}
+              >
                 <td className="p-3">
+                  <input
+                    type="checkbox"
+                    className="h-5 w-5 cursor-pointer"
+                    checked={pickedSet.has(row.id)}
+                    onChange={(e) => toggleOne(row.id, e.target.checked)}
+                    aria-label={`${row.nameMn} сонгох`}
+                  />
+                </td>
+                <td className="py-3">
                   <ProductImage src={row.imageUrl} alt={row.nameMn} className="h-12 w-12 rounded-md" />
                 </td>
                 <td className="font-mono text-xs">
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="checkbox"
-                      checked={picked.includes(row.id)}
-                      onChange={(e) => setPicked(e.target.checked ? [...picked, row.id] : picked.filter((x) => x !== row.id))}
-                      title="Баркод хэвлэхэд сонгох"
-                    />
-                    {row.sku}
-                  </label>
+                  {row.sku}
                   {row.barcode && <span className="block text-[10px] text-slate-500">{row.barcode}</span>}
                 </td>
                 <td>
@@ -543,50 +818,17 @@ export default function InventoryPage() {
                 <td className="text-right">{tugrik(Number(row.priceMnt ?? 0))}</td>
                 <td className={`text-right font-semibold ${row.stockStatus === 'NEGATIVE_STOCK' ? 'text-rose-300' : ''}`}>
                   {Number(row.stockQty)} <span className="text-xs font-normal text-slate-400">{unitLabel(row.unit)}</span>
-                  {severalWarehouses && !report?.warehouseId && row.warehouses && (
-                    <p className="mt-0.5 text-[11px] font-normal text-slate-500">
-                      {row.warehouses.map((w) => `${w.code}: ${w.quantity}`).join(' · ')}
-                    </p>
-                  )}
+                  {stockBreakdown(row)}
                 </td>
                 <td>
                   <div className="flex flex-wrap gap-1">
                     <Badge status={row.stockStatus} />
-                    <span
-                      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                        row.active === false
-                          ? 'border-slate-600 text-slate-400'
-                          : 'border-emerald-700 bg-emerald-950/50 text-emerald-200'
-                      }`}
-                    >
-                      {row.active === false ? 'Идэвхгүй' : 'Идэвхтэй'}
-                    </span>
+                    <ActiveBadge active={row.active !== false} />
                   </div>
                 </td>
                 {showActions && (
                   <td className="pr-3">
-                    <div className="flex justify-end gap-1">
-                      {canEditCatalog && (
-                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
-                          Засах
-                        </button>
-                      )}
-                      {canAdjust && (
-                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => openAdjust(row)}>
-                          Тохируулах
-                        </button>
-                      )}
-                      {canManage && (
-                        <button className="btn-ghost text-xs px-3 py-1" onClick={() => void openLedger(row)}>
-                          Түүх
-                        </button>
-                      )}
-                      {canEditCatalog && row.active !== false && (
-                        <button className="btn-danger text-xs px-3 py-1" onClick={() => setDeleting(row)}>
-                          Идэвхгүй болгох
-                        </button>
-                      )}
-                    </div>
+                    <div className="flex flex-wrap justify-end gap-1">{actions(row, true)}</div>
                   </td>
                 )}
               </tr>
@@ -594,24 +836,80 @@ export default function InventoryPage() {
           </tbody>
         </table>
         {loading && <p className="p-3 text-slate-500">Бараа уншиж байна…</p>}
+        {!loading && rows.length === 0 && <p className="p-3 text-slate-500">Бараа олдсонгүй.</p>}
       </div>
 
+      {picked.length > 0 && (
+        <>
+          {/* Room for the bar below, so it never covers the last product. */}
+          <div className="h-28 md:h-20" aria-hidden />
+          <div className="fixed inset-x-0 bottom-0 z-30 border-t border-amber-700/60 bg-steel-900/95 px-3 py-2 shadow-lg shadow-black/40 backdrop-blur md:left-[240px] print:hidden">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-sm font-semibold text-amber-200">{picked.length} сонгосон:</span>
+              {picked.length > MAX_SHEET_PRODUCTS ? (
+                // The ids go in the link; more than this does not fit in one address.
+                <button className="btn-ghost text-sm" disabled title="">
+                  Баркод хэвлэх
+                </button>
+              ) : (
+                <a className="btn-ghost text-sm" href={`/print/labels?ids=${picked.join(',')}`} target="_blank" rel="noreferrer">
+                  Баркод хэвлэх
+                </a>
+              )}
+              {tooManyForPrice ? (
+                <button className="btn-ghost text-sm" disabled>
+                  Үнийн жагсаалт хэвлэх
+                </button>
+              ) : (
+                <a className="btn-ghost text-sm" href={pickedPriceHref} target="_blank" rel="noreferrer">
+                  Үнийн жагсаалт хэвлэх{pickedIsCategory ? ` (${categoryLabel(category)})` : ''}
+                </a>
+              )}
+              <button className="btn-ghost text-sm" onClick={() => setPicked([])}>
+                Цуцлах
+              </button>
+              {(tooManyForPrice || picked.length > MAX_SHEET_PRODUCTS) && (
+                <span className="w-full text-xs text-amber-300 sm:w-auto">
+                  Нэг удаад {MAX_SHEET_PRODUCTS} хүртэл бараа сонгож хэвлэнэ (үнийн жагсаалтад ангиллаар шүүгээд бүгдийг сонгож болно).
+                </span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
       {modal && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={save} className="card w-full max-w-lg space-y-3 max-h-[90vh] overflow-auto">
-            <h3 className="font-semibold text-lg">{modal === 'create' ? 'Бараа нэмэх' : 'Бараа засах'}</h3>
-            {error && <p className="text-red-400 text-sm">{error}</p>}
+        <Modal
+          title={modal === 'create' ? 'Бараа нэмэх' : 'Бараа засах'}
+          size="lg"
+          busy={saving}
+          onClose={closeForm}
+          guardTyping={false}
+          footer={
+            <>
+              {error && <p className="mr-auto w-full text-sm text-red-400 sm:w-auto sm:self-center">{error}</p>}
+              <button type="button" className="btn-ghost" onClick={closeForm} disabled={saving}>
+                Болих
+              </button>
+              <button className="btn-primary" type="submit" form="product-form" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+              </button>
+            </>
+          }
+        >
+          <form id="product-form" onSubmit={save} className="space-y-3">
             <div className="flex items-center gap-3">
               <ProductImage
                 src={file ? URL.createObjectURL(file) : form.imageUrl}
                 alt="Урьдчилан харах"
-                className="h-20 w-20 rounded-lg"
+                className="h-20 w-20 shrink-0 rounded-lg"
               />
-              <div className="flex-1 space-y-2">
+              <div className="min-w-0 flex-1 space-y-2">
                 <label className="block text-xs text-slate-400">
                   Зургийн холбоос (URL)
                   <input
                     className="mt-1 w-full"
+                    type="url"
                     value={form.imageUrl}
                     onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
                     placeholder="https://… эсвэл хоосон орхино"
@@ -635,22 +933,16 @@ export default function InventoryPage() {
               </label>
               <label className="text-xs text-slate-400">
                 Ангилал
-                <input
-                  className="mt-1 w-full"
-                  list="product-categories"
-                  required
-                  maxLength={60}
-                  placeholder="Сонгох эсвэл шинээр бичих"
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                />
-                <datalist id="product-categories">
-                  {[...new Set([...CATEGORIES, ...categories])]
-                    .filter((c) => c !== 'General')
-                    .map((c) => (
-                      <option key={c} value={categoryLabel(c)} />
-                    ))}
-                </datalist>
+                <select className="mt-1 w-full" required value={form.category} onChange={(e) => void pickCategory(e.target.value)}>
+                  {!form.category && <option value="">— сонгох —</option>}
+                  {categoryChoices.map((c) => (
+                    <option key={c} value={c}>
+                      {categoryLabel(c)}
+                    </option>
+                  ))}
+                  <option value={NEW_CATEGORY}>+ Шинэ ангилал…</option>
+                </select>
+                <span className="mt-1 block text-[11px] text-slate-500">Жагсаалтад байхгүй бол «+ Шинэ ангилал»-ыг сонгоно.</span>
               </label>
               <label className="text-xs text-slate-400 col-span-2">
                 Баркод
@@ -665,24 +957,22 @@ export default function InventoryPage() {
               </label>
               <label className="text-xs text-slate-400">
                 Хэмжих нэгж
-                <input
-                  className="mt-1 w-full"
-                  required
-                  maxLength={16}
-                  list="product-units"
-                  value={form.unit}
-                  onChange={(e) => setForm({ ...form, unit: e.target.value })}
-                />
-                <datalist id="product-units">
-                  {UNITS.map((u) => (
-                    <option key={u} value={u} />
+                <select className="mt-1 w-full" required value={form.unit} onChange={(e) => void pickUnit(e.target.value)}>
+                  {!form.unit && <option value="">— сонгох —</option>}
+                  {unitChoices.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
                   ))}
-                </datalist>
+                  {canEditCatalog && <option value={NEW_UNIT}>+ Шинэ нэгж…</option>}
+                </select>
+                <span className="mt-1 block text-[11px] text-slate-500">Жагсаалтад байхгүй бол «+ Шинэ нэгж»-ийг сонгоно.</span>
               </label>
               <label className="text-xs text-slate-400">
                 Үнэ ₮
                 <input
                   type="number"
+                  inputMode="numeric"
                   className="mt-1 w-full"
                   required
                   min={0}
@@ -701,38 +991,89 @@ export default function InventoryPage() {
               <fieldset className="col-span-2 rounded border border-slate-700 p-2 text-xs text-slate-400">
                 <legend className="px-1">Дагалдах бараа (жишээ: давирхайн будагт хатаагч)</legend>
                 <p className="mb-2 text-[11px] text-slate-500">
-                  Нэг ширхэг/нэгж зарах бүрт хамт олгох зүйл. Тасалбар, бэлтгэх хуудас, баримт дээр «+ Хатаагч × 2 ш» гэж гарна.
+                  Энэ барааны 1 нэгжийг зарах бүрт хамт олгох зүйл. Бараанаас хайж сонгох эсвэл нэрийг нь бичнэ. Тасалбар, бэлтгэх хуудас,
+                  баримт дээр «+ Хатаагч × 2 ш» гэж гарна; үлдэгдлээс хасагдахгүй.
                 </p>
-                {form.companions.map((c, idx) => (
-                  <div key={idx} className="mb-1 flex gap-1">
-                    <input
-                      className="flex-1"
-                      placeholder="Нэр (Хатаагч)"
-                      value={c.name}
-                      onChange={(e) => setForm({ ...form, companions: form.companions.map((x, j) => (j === idx ? { ...x, name: e.target.value } : x)) })}
-                    />
-                    <input
-                      className="w-20"
-                      inputMode="decimal"
-                      placeholder="1 нэгжид"
-                      value={c.qtyPerUnit}
-                      onChange={(e) => setForm({ ...form, companions: form.companions.map((x, j) => (j === idx ? { ...x, qtyPerUnit: e.target.value } : x)) })}
-                    />
-                    <input
-                      className="w-16"
-                      placeholder="ш"
-                      value={c.unit}
-                      onChange={(e) => setForm({ ...form, companions: form.companions.map((x, j) => (j === idx ? { ...x, unit: e.target.value } : x)) })}
-                    />
-                    <button type="button" className="btn-ghost px-2 text-xs" onClick={() => setForm({ ...form, companions: form.companions.filter((_, j) => j !== idx) })}>
-                      ✕
-                    </button>
-                  </div>
-                ))}
+                {form.companions.map((c, idx) => {
+                  const hits = companionSuggestions(c, idx);
+                  const qtyProblem = c.qtyPerUnit.trim() || c.name.trim() ? companionQtyError(c) : null;
+                  return (
+                    <div key={idx} className="mb-2 rounded border border-slate-800 p-2">
+                      <div className="flex flex-wrap items-end gap-2 sm:flex-nowrap">
+                        <div className="relative w-full sm:flex-1">
+                          <label className="block">
+                            Бараа эсвэл нэр
+                            <input
+                              className="mt-1 w-full"
+                              placeholder="Хайх: нэр, код, баркод…"
+                              autoComplete="off"
+                              maxLength={80}
+                              value={c.name}
+                              onFocus={() => setCompanionFocus(idx)}
+                              onBlur={() => window.setTimeout(() => setCompanionFocus((f) => (f === idx ? null : f)), 200)}
+                              // Typing after a pick turns it back into a free-text name.
+                              onChange={(e) => setCompanion(idx, { name: e.target.value, productId: undefined })}
+                            />
+                          </label>
+                          {hits.length > 0 && (
+                            <ul className="absolute z-20 mt-1 max-h-56 w-full divide-y divide-slate-800 overflow-auto rounded border border-slate-700 bg-steel-900">
+                              {hits.map((p) => (
+                                <li key={p.id}>
+                                  <button
+                                    type="button"
+                                    className="flex min-h-[40px] w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm text-slate-100 hover:bg-steel-800"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => pickCompanion(idx, p)}
+                                  >
+                                    <span className="min-w-0">
+                                      {p.nameMn} <span className="font-mono text-[11px] text-slate-500">{p.sku}</span>
+                                    </span>
+                                    <span className="shrink-0 text-xs text-slate-400">{unitLabel(p.unit)}</span>
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                        <label className="block min-w-0 flex-1 sm:w-24 sm:flex-none">
+                          1 нэгжид
+                          <input
+                            className={`mt-1 w-full text-right ${qtyProblem ? 'border-red-500' : ''}`}
+                            inputMode="decimal"
+                            autoComplete="off"
+                            placeholder="1"
+                            value={c.qtyPerUnit}
+                            onChange={(e) => setCompanion(idx, { qtyPerUnit: e.target.value })}
+                          />
+                        </label>
+                        <label className="block w-20 shrink-0">
+                          Нэгж
+                          <input
+                            className="mt-1 w-full"
+                            placeholder="ш"
+                            maxLength={UNIT_MAX_LENGTH}
+                            value={c.unit}
+                            onChange={(e) => setCompanion(idx, { unit: e.target.value })}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-ghost h-10 w-10 shrink-0 p-0"
+                          aria-label="Энэ мөрийг хасах"
+                          onClick={() => setForm((f) => ({ ...f, companions: f.companions.filter((_, j) => j !== idx) }))}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      {c.productId && <p className="mt-1 text-[11px] text-sky-300">✓ Бараанаас сонгосон</p>}
+                      {qtyProblem && <p className="mt-1 text-[11px] text-red-300">{qtyProblem}</p>}
+                    </div>
+                  );
+                })}
                 <button
                   type="button"
                   className="btn-ghost text-xs"
-                  onClick={() => setForm({ ...form, companions: [...form.companions, { name: '', qtyPerUnit: '1', unit: 'ш' }] })}
+                  onClick={() => setForm((f) => ({ ...f, companions: [...f.companions, { name: '', qtyPerUnit: '1', unit: 'ш' }] }))}
                 >
                   + Дагалдах бараа нэмэх
                 </button>
@@ -751,6 +1092,8 @@ export default function InventoryPage() {
                 {modal === 'create' && severalWarehouses ? 'Эхний үлдэгдэл' : 'Үлдэгдэл'}
                 <input
                   type="number"
+                  inputMode="decimal"
+                  step="any"
                   className="mt-1 w-full"
                   value={form.stockQty}
                   disabled={modal === 'edit' && (severalWarehouses || !canAdjust)}
@@ -780,6 +1123,8 @@ export default function InventoryPage() {
                 Доод үлдэгдэл
                 <input
                   type="number"
+                  inputMode="decimal"
+                  step="any"
                   className="mt-1 w-full"
                   value={form.minStockLevel}
                   onChange={(e) => setForm({ ...form, minStockLevel: Number(e.target.value) })}
@@ -788,24 +1133,18 @@ export default function InventoryPage() {
               <label className="text-xs text-slate-400">
                 Жин (кг)
                 <input
-                  type="number"
-                  min={0.001}
-                  max={100000}
-                  step="0.001"
+                  inputMode="decimal"
+                  autoComplete="off"
                   required
                   className="mt-1 w-full"
-                  placeholder="заавал"
+                  placeholder="заавал, жишээ: 0,5"
                   value={form.weightKg}
                   onChange={(e) => setForm({ ...form, weightKg: e.target.value })}
                 />
               </label>
               {modal === 'edit' && (
-                <label className="text-xs text-slate-400 flex items-center gap-2 mt-5">
-                  <input
-                    type="checkbox"
-                    checked={form.active}
-                    onChange={(e) => setForm({ ...form, active: e.target.checked })}
-                  />
+                <label className="text-xs text-slate-400 flex min-h-[40px] items-center gap-2 sm:mt-5">
+                  <input type="checkbox" className="h-5 w-5" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
                   Идэвхтэй (ПОС-д харагдана)
                 </label>
               )}
@@ -822,10 +1161,8 @@ export default function InventoryPage() {
                     <label key={key}>
                       {label}
                       <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        step="0.01"
+                        inputMode="decimal"
+                        autoComplete="off"
                         className="mt-1 w-full"
                         value={form[key]}
                         onChange={(e) => setForm(withVolume({ ...form, [key]: e.target.value }))}
@@ -835,10 +1172,8 @@ export default function InventoryPage() {
                   <label>
                     Эзлэхүүн (м³)
                     <input
-                      type="number"
-                      min={0}
-                      max={1000}
-                      step="0.000001"
+                      inputMode="decimal"
+                      autoComplete="off"
                       className="mt-1 w-full"
                       value={form.volumeM3}
                       onChange={(e) => setForm({ ...form, volumeM3: e.target.value })}
@@ -848,22 +1183,27 @@ export default function InventoryPage() {
                 <p className="mt-1 text-[11px] text-slate-500">Урт, өргөн, өндрийг бөглөхөд эзлэхүүн автоматаар бодогдоно (засаж болно).</p>
               </fieldset>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
-                Болих
-              </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {adjusting && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <form onSubmit={submitAdjust} className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">Үлдэгдэл тохируулах</h3>
+        <Modal
+          title="Үлдэгдэл тохируулах"
+          busy={saving}
+          onClose={() => setAdjusting(null)}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={() => setAdjusting(null)} disabled={saving}>
+                Болих
+              </button>
+              <button className="btn-primary" type="submit" form="adjust-form" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : 'Тохируулах'}
+              </button>
+            </>
+          }
+        >
+          <form id="adjust-form" onSubmit={submitAdjust} className="space-y-3">
             <p className="text-sm text-slate-300">
               <span className="font-semibold text-white">{adjusting.nameMn}</span> ({adjusting.sku})
             </p>
@@ -887,11 +1227,11 @@ export default function InventoryPage() {
             <label className="block text-xs text-slate-400">
               Бодит тоолсон тоо хэмжээ
               <input
-                type="number"
-                step="0.001"
-                min={0}
+                inputMode="decimal"
+                autoComplete="off"
                 required
                 className="mt-1 w-full"
+                placeholder="жишээ: 12 эсвэл 2,5"
                 value={adjustForm.counted}
                 onChange={(e) => setAdjustForm({ ...adjustForm, counted: e.target.value })}
               />
@@ -908,29 +1248,36 @@ export default function InventoryPage() {
               />
             </label>
             <p className="text-[11px] text-slate-500">Өөрчлөлт бүр хөдөлгөөний түүхэнд хэн, яагаад гэдгээр хадгалагдана.</p>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setAdjusting(null)}>
-                Болих
-              </button>
-              <button className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Тохируулах'}
-              </button>
-            </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {ledger && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <div className="card w-full max-w-3xl space-y-3 max-h-[85vh] overflow-auto">
-            <div className="flex items-start justify-between gap-3">
-              <h3 className="font-semibold text-lg">
-                Хөдөлгөөний түүх — {ledger.product.nameMn} ({ledger.product.sku})
-              </h3>
-              <button className="btn-ghost text-xs" onClick={() => setLedger(null)}>
-                Хаах
-              </button>
-            </div>
+        <Modal title={`Хөдөлгөөний түүх — ${ledger.product.nameMn} (${ledger.product.sku})`} size="xl" onClose={() => setLedger(null)}>
+          {/* Phones: one line per movement. */}
+          <ul className="space-y-2 md:hidden">
+            {ledger.rows.map((m) => (
+              <li key={m.id} className="rounded-lg border border-slate-800 p-2 text-sm">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span>{MOVEMENT_LABEL[m.type] ?? m.type}</span>
+                  <span className={`font-semibold ${Number(m.quantityDelta) < 0 ? 'text-rose-300' : 'text-emerald-300'}`}>
+                    {Number(m.quantityDelta) > 0 ? '+' : ''}
+                    {Number(m.quantityDelta)} → {Number(m.balanceAfter)}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  {new Date(m.createdAt).toLocaleString('mn-MN')} · {m.warehouse?.code}
+                </p>
+                {(m.reason || m.actor?.fullName) && (
+                  <p className="text-xs text-slate-500">
+                    {m.reason ?? ''}
+                    {m.actor?.fullName ? ` — ${m.actor.fullName}` : ''}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="table-scroll hidden md:block">
             <table className="w-full text-sm">
               <thead className="text-left text-slate-400 border-b border-slate-700">
                 <tr>
@@ -961,34 +1308,38 @@ export default function InventoryPage() {
                 ))}
               </tbody>
             </table>
-            {ledger.rows.length === 0 && <p className="text-slate-500 text-sm">Түүх алга.</p>}
           </div>
-        </div>
+          {ledger.rows.length === 0 && <p className="text-slate-500 text-sm">Түүх алга.</p>}
+        </Modal>
       )}
 
       {deleting && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
-          <div className="card w-full max-w-md space-y-3">
-            <h3 className="font-semibold text-lg">Бараа идэвхгүй болгох</h3>
-            <p className="text-sm text-slate-300">
-              <span className="font-semibold text-white">{deleting.nameMn}</span> ({deleting.sku})-г ПОС-оос хасах уу?
-              Өмнөх захиалгууд хэвээр үлдэнэ. Дараа нь «Засах»-аас дахин идэвхжүүлж болно.
-            </p>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" className="btn-ghost" onClick={() => setDeleting(null)}>
+        <Modal
+          title="Бараа идэвхгүй болгох"
+          size="sm"
+          busy={saving}
+          onClose={() => setDeleting(null)}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" onClick={() => setDeleting(null)} disabled={saving}>
                 Болих
               </button>
               <button className="btn-danger" disabled={saving} onClick={() => void confirmDelete()}>
                 {saving ? 'Түр хүлээнэ үү…' : 'Идэвхгүй болгох'}
               </button>
-            </div>
-          </div>
-        </div>
+            </>
+          }
+        >
+          <p className="text-sm text-slate-300">
+            <span className="font-semibold text-white">{deleting.nameMn}</span> ({deleting.sku})-г ПОС-оос хасах уу? Өмнөх захиалгууд
+            хэвээр үлдэнэ. Дараа нь «Засах»-аас дахин идэвхжүүлж болно.
+          </p>
+        </Modal>
       )}
 
       {toast && (
         <div
-          className={`fixed bottom-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          className={`fixed bottom-4 left-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm shadow-lg sm:left-auto ${
             toast.kind === 'error'
               ? 'border-red-700 bg-red-950 text-red-100'
               : 'border-emerald-700 bg-emerald-950 text-emerald-100'

@@ -17,6 +17,7 @@ const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; featu
   { href: '/orders', label: 'Захиалгууд', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
   { href: '/invoices', label: 'Нэхэмжлэх', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'INVOICES' },
   { href: '/warehouse/tickets', label: 'Агуулах / тасалбар', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
+  { href: '/me/attendance', label: 'Миний ирц', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'], feature: 'HR' },
   { href: '/admin/attendance', label: 'Ирц', roles: ['ADMIN', 'MANAGER'], feature: 'HR', permission: 'ATTENDANCE_MANAGE' },
   { href: '/admin/payroll', label: 'Цалин', roles: ['ADMIN', 'MANAGER'], feature: 'HR' },
   { href: '/reports', label: 'Тайлан', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
@@ -97,8 +98,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen md:grid md:grid-cols-[240px_1fr] print:block">
-      {/* Phone / tablet: a top bar with a menu button instead of the fixed sidebar. */}
-      <div className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-800 bg-steel-900 px-4 py-2 md:hidden print:hidden">
+      {/* Phone / tablet: a top bar with a menu button instead of the fixed sidebar (above the open menu, so the bell's list shows over it). */}
+      <div className="sticky top-0 z-[46] flex items-center justify-between border-b border-slate-800 bg-steel-900 px-4 py-2 md:hidden print:hidden">
         <span className="font-bold">Барилга Хангамж</span>
         <span className="ml-auto mr-2">
           <NotificationBell feed={alerts} align="right" />
@@ -107,10 +108,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
           ☰ Цэс{transfersWaiting > 0 ? ` (${transfersWaiting})` : ''}
         </button>
       </div>
+      {/* Tap outside the open menu to close it. */}
+      {menuOpen && <div className="fixed inset-0 top-14 z-[41] bg-black/50 md:hidden print:hidden" onClick={() => setMenuOpen(false)} />}
       <aside
         className={`bg-steel-900 border-r border-slate-800 p-4 flex-col print:hidden ${
-          menuOpen ? 'fixed inset-0 top-[49px] z-30 flex overflow-auto' : 'hidden'
-        } md:static md:flex md:min-h-screen`}
+          menuOpen ? 'fixed inset-y-0 left-0 top-14 z-[45] flex w-72 max-w-[85vw] overflow-auto' : 'hidden'
+        } md:static md:flex md:min-h-screen md:w-auto`}
       >
         <div className="mb-8 flex items-start justify-between gap-2">
           <div>
@@ -126,7 +129,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <Link
               key={n.href}
               href={n.href}
-              className={`block rounded-md px-3 py-2 text-sm ${
+              onClick={() => setMenuOpen(false)}
+              className={`block rounded-md px-3 py-2.5 text-sm md:py-2 ${
                 n.href === activeHref
                   ? 'bg-amber-brand text-steel-950 font-semibold'
                   : 'hover:bg-steel-800'
@@ -160,7 +164,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
-      <main className="p-4 md:p-6 overflow-auto print:p-0 print:overflow-visible">{children}</main>
+      <main className="min-w-0 overflow-auto p-3 sm:p-4 md:p-6 print:p-0 print:overflow-visible">{children}</main>
     </div>
   );
 }

@@ -1,22 +1,19 @@
 'use client';
 
-import { isManager } from '@/lib/rbac';
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { AuthUser } from '@/lib/types';
+import { can, savedUser } from '@/lib/permissions';
 
+/** «Хүний нөөц»: whoever looks after attendance goes to the staff board, everyone else to their own attendance. */
 export default function HrRedirectPage() {
   const router = useRouter();
   useEffect(() => {
-    const raw = localStorage.getItem('barilga_user');
-    const role = raw ? (JSON.parse(raw) as AuthUser).role : null;
-    router.replace(
-      isManager(role)
-        ? '/admin/attendance'
-        : role === 'ACHIGCH_BELTGEGCH'
-          ? '/warehouse/tickets'
-          : '/pos',
-    );
+    const user = savedUser();
+    if (!user) {
+      router.replace('/login');
+      return;
+    }
+    router.replace(can(user, 'ATTENDANCE_MANAGE') ? '/admin/attendance' : '/me/attendance');
   }, [router]);
   return <div className="p-8 text-slate-400">Уншиж байна…</div>;
 }
