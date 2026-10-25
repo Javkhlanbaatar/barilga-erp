@@ -25,6 +25,7 @@ const publicUser = {
   warehouse: { select: { id: true, code: true, name: true } },
   managedWarehouses: { select: { warehouse: { select: { id: true, code: true, name: true } } } },
   permissions: true,
+  googleEmail: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -80,9 +81,20 @@ export class UsersService {
     return rows.map(toStaff);
   }
 
+  /** One person per «Google Gmail»: the same address on two users would be ambiguous at sign-in. */
+  private async checkGoogleEmail(googleEmail: string | null | undefined, exceptId?: string) {
+    if (!googleEmail) return;
+    const taken = await this.prisma.user.findFirst({
+      where: { id: exceptId ? { not: exceptId } : undefined, googleEmail: { equals: googleEmail, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (taken) throw new ConflictException('Энэ Google Gmail өөр хэрэглэгчид бүртгэлтэй / This Google address is already set for another user');
+  }
+
   async create(dto: CreateUserDto, actorId?: string) {
     const username = dto.username.trim().toLowerCase();
     const email = dto.email?.trim().toLowerCase() || null;
+    await this.checkGoogleEmail(dto.googleEmail);
     const passwordHash = await bcrypt.hash(dto.password, 12);
     const warehouseId = await this.checkWarehouse(dto.warehouseId);
     const managed = await this.checkManaged(dto.role, warehouseId, dto.managedWarehouseIds ?? []);
@@ -97,6 +109,7 @@ export class UsersService {
           role: dto.role,
           isActive: true,
           warehouseId,
+          googleEmail: dto.googleEmail || null,
           managedWarehouses: { create: managed.map((warehouseId) => ({ warehouseId })) },
         },
         select: publicUser,
@@ -127,6 +140,20 @@ export class UsersService {
     if (id === actorId && dto.isActive === false) {
       throw new ForbiddenException('You cannot deactivate your own account');
     }
+    // One's own password and Google sign-in are changed on «Миний бүртгэл», where the current password is asked.
+    if (id === actorId && dto.password) {
+      throw new BadRequestException('Өөрийн нууц үгийг «Миний бүртгэл»-ээс солино / Change your own password under «Миний бүртгэл»');
+    }
+    if (id === actorId && (dto.unlinkGoogle || (dto.googleEmail !== undefined && (dto.googleEmail || null) !== (user.googleEmail ?? null)))) {
+      throw new BadRequestException('Өөрийн Google нэвтрэлтийг «Миний бүртгэл»-ээс тохируулна / Set up your own Google sign-in under «Миний бүртгэл»');
+    }
+    // A new «Google Gmail» replaces the link (the old Google account no longer signs in); clearing it unlinks.
+    const googleChange =
+      dto.unlinkGoogle ||
+      // A password reset is a reset of every way in: a Google account added by whoever knew the old password goes.
+      (Boolean(dto.password) && Boolean(user.googleSub || user.googleEmail) && dto.googleEmail === undefined) ||
+      (dto.googleEmail !== undefined && (dto.googleEmail || null) !== (user.googleEmail ?? null));
+    if (googleChange && dto.googleEmail) await this.checkGoogleEmail(dto.googleEmail, id);
 
     const passwordHash = dto.password ? await bcrypt.hash(dto.password, 12) : undefined;
     const warehouseId = dto.warehouseId === undefined ? undefined : await this.checkWarehouse(dto.warehouseId);
@@ -148,7 +175,10 @@ export class UsersService {
           ...(dto.phone !== undefined ? { phone: dto.phone } : {}),
           ...(dto.role ? { role: dto.role } : {}),
           ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+          // A password set by the admin, or a Google change, signs the person out everywhere.
+          ...(passwordHash || googleChange ? { sessionsValidFrom: new Date(Math.floor(Date.now() / 1000) * 1000) } : {}),
           ...(passwordHash ? { passwordHash } : {}),
+          ...(googleChange ? { googleSub: null, googleEmail: dto.unlinkGoogle || dto.googleEmail === undefined ? null : dto.googleEmail || null } : {}),
           // Replaced as a whole; anyone who is not a branch manager keeps none.
           managedWarehouses: { deleteMany: {}, create: managed.map((warehouseId) => ({ warehouseId })) },
         },
@@ -164,6 +194,9 @@ export class UsersService {
         changes.push(`хянах агуулах → ${row.managedWarehouses.map((m) => m.warehouse.name).join(', ') || 'байхгүй'}`);
       }
       if (passwordHash) changes.push('нууц үг солив');
+      if (googleChange) {
+        changes.push(row.googleEmail ? `Google Gmail → ${row.googleEmail}` : `Google бүртгэл ${user.googleEmail ?? ''} салгав`);
+      }
       if (changes.length) {
         await audit(this.prisma, {
           entityType: 'USER',

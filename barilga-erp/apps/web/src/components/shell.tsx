@@ -33,6 +33,7 @@ const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; featu
   { href: '/admin/documents', label: 'Баримтын загвар', roles: ['ADMIN', 'SUPER_MANAGER'] },
   { href: '/admin', label: 'Хяналтын самбар', roles: ['ADMIN', 'MANAGER'] },
   { href: '/devices', label: 'Төхөөрөмж шалгах', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
+  { href: '/me/account', label: 'Миний бүртгэл', roles: ['ADMIN', 'SUPER_MANAGER', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -80,6 +81,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
         if (fresh) setUser(JSON.parse(fresh));
       })
       .catch(() => undefined);
+    // A change on «Миний бүртгэл» (name, a new token) shows at once.
+    const onChange = () => {
+      const next = localStorage.getItem('barilga_user');
+      if (next) setUser(JSON.parse(next));
+    };
+    window.addEventListener('barilga-user', onChange);
+    return () => window.removeEventListener('barilga-user', onChange);
   }, [router]);
 
   if (!user) return <div className="p-8 text-slate-400">Уншиж байна…</div>;

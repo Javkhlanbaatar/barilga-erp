@@ -28,6 +28,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!user || !user.isActive) {
       throw new UnauthorizedException();
     }
+    // Signed in before the password changed (or before «бүх төхөөрөмжөөс гарах»): no longer valid.
+    if (user.sessionsValidFrom && (payload.iat ?? 0) * 1000 < user.sessionsValidFrom.getTime()) {
+      throw new UnauthorizedException();
+    }
     return {
       id: user.id,
       email: user.email,

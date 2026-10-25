@@ -48,6 +48,8 @@ export type StaffUser = {
   managedWarehouses?: Array<{ id: string; code: string; name: string }>;
   /** Rights the admin gave to (grant) or took from (revoke) this person on top of the role. */
   permissions?: { grant: string[]; revoke: string[] };
+  /** The Google account linked for «Google-ээр нэвтрэх» (null = none). */
+  googleEmail?: string | null;
   createdAt: string;
   updatedAt?: string;
 };

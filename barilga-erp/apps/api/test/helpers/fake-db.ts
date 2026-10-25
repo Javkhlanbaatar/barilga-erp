@@ -54,6 +54,10 @@ function matchValue(value: any, cond: any): boolean {
         if (!fold(String(value ?? '')).includes(fold(String(arg)))) return false;
         break;
       }
+      case 'equals':
+        // mode: 'insensitive' compares text ignoring letter case.
+        if (cond.mode === 'insensitive' ? String(value ?? '').toLowerCase() !== String(arg ?? '').toLowerCase() : !same(value, arg)) return false;
+        break;
       case 'mode':
         break;
       default:

@@ -9,7 +9,16 @@ function emptyToUndef(value: unknown) {
   return value;
 }
 
-export class CreateUserDto {
+/** «Google Gmail»: the address this person may sign in with through Google (empty = none). */
+class GoogleEmailField {
+  @IsOptional()
+  @Transform(({ value }) => (value === '' || value === null ? null : typeof value === 'string' ? value.trim().toLowerCase() : value))
+  @ValidateIf((_o, v) => v !== null)
+  @IsEmail({}, { message: 'Google Gmail хаяг буруу / googleEmail must be an e-mail address' })
+  googleEmail?: string | null;
+}
+
+export class CreateUserDto extends GoogleEmailField {
   @IsString()
   @Matches(USERNAME_RE, { message: 'Username must be 3–32 letters, numbers, dot, dash, or underscore' })
   username!: string;
@@ -48,7 +57,7 @@ export class CreateUserDto {
   managedWarehouseIds?: string[];
 }
 
-export class UpdateUserDto {
+export class UpdateUserDto extends GoogleEmailField {
   @IsOptional()
   @IsString()
   @Matches(USERNAME_RE, { message: 'Username must be 3–32 letters, numbers, dot, dash, or underscore' })
@@ -95,6 +104,11 @@ export class UpdateUserDto {
   @IsString()
   @MinLength(8)
   password?: string;
+
+  /** Takes off the Google account linked for signing in. */
+  @IsOptional()
+  @IsBoolean()
+  unlinkGoogle?: boolean;
 }
 
 export class UpdateUserStatusDto {

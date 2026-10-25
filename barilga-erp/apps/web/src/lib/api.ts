@@ -24,7 +24,7 @@ async function call(url: string, init: RequestInit) {
  * Reads a response: JSON on success; on failure a Mongolian message (see errors.ts). A 401 on a signed-in
  * call means the session ended: the stored login is cleared and the person is sent to the login page.
  */
-async function read<T>(res: Response, path: string): Promise<T> {
+async function read<T>(res: Response, path: string, method = 'GET'): Promise<T> {
   const text = await res.text();
   let data: { message?: unknown } | null = null;
   try {
@@ -33,7 +33,10 @@ async function read<T>(res: Response, path: string): Promise<T> {
     // an HTML error page from a proxy, etc.
   }
   if (!res.ok) {
-    if (res.status === 401 && !path.startsWith('/auth/') && typeof window !== 'undefined' && getToken()) {
+    // A wrong password at sign-in is not an expired session; anything else answering 401 is (e.g. signed out from
+    // another device or after a password change).
+    const signingIn = method.toUpperCase() === 'POST' && /^\/auth\/(login|google)$/.test(path);
+    if (res.status === 401 && !signingIn && typeof window !== 'undefined' && getToken()) {
       localStorage.removeItem('barilga_token');
       localStorage.removeItem('barilga_user');
       window.location.assign('/login?expired=1');
@@ -86,7 +89,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await call(`${API}${path}`, { ...init, headers });
-  return read<T>(res, path);
+  return read<T>(res, path, init.method);
 }
 
 export async function apiUpload<T>(path: string, file: File, field = 'file'): Promise<T> {

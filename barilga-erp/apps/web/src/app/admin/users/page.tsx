@@ -25,6 +25,8 @@ const emptyForm = {
   fullName: '',
   username: '',
   email: '',
+  /** «Google Gmail»: the address this person may sign in with through Google. */
+  googleEmail: '',
   password: '',
   role: 'BORLUULAGCH' as Role,
   warehouseId: '',
@@ -187,12 +189,28 @@ export default function AdminUsersPage() {
     setModal('create');
   }
 
+  /** Takes off the Google account a person signs in with (e.g. a wrong or a former employee's account). */
+  async function unlinkGoogle(row: StaffUser) {
+    if (!window.confirm(`${row.fullName || row.username}: ${row.googleEmail} Google бүртгэлийг салгах уу?`)) return;
+    try {
+      const next = await api<StaffUser>(`/users/${row.id}`, { method: 'PATCH', body: JSON.stringify({ unlinkGoogle: true }) });
+      setEditing(next);
+      // Saving the form afterwards must not put the address back.
+      setForm((f) => ({ ...f, googleEmail: '' }));
+      flash('ok', 'Google бүртгэл салгагдлаа');
+      await load();
+    } catch (err) {
+      flash('error', err instanceof Error ? err.message : 'Салгаж чадсангүй');
+    }
+  }
+
   function openEdit(row: StaffUser) {
     setEditing(row);
     setForm({
       fullName: row.fullName || row.name || '',
       username: row.username,
       email: row.email ?? '',
+      googleEmail: row.googleEmail ?? '',
       password: '',
       role: row.role,
       warehouseId: row.warehouseId ?? '',
@@ -236,6 +254,7 @@ export default function AdminUsersPage() {
             fullName: form.fullName.trim(),
             username: form.username.trim(),
             email: form.email.trim() || undefined,
+            googleEmail: form.googleEmail.trim() || undefined,
             password: form.password,
             role: form.role,
             warehouseId: form.warehouseId || undefined,
@@ -250,6 +269,7 @@ export default function AdminUsersPage() {
             fullName: form.fullName.trim(),
             username: form.username.trim(),
             email: form.email.trim() || null,
+            ...(form.googleEmail.trim().toLowerCase() !== (editing.googleEmail ?? '') ? { googleEmail: form.googleEmail.trim() || null } : {}),
             role: form.role,
             warehouseId: form.warehouseId || null,
             managedWarehouseIds: form.role === 'MANAGER' ? form.managedWarehouseIds : [],
@@ -348,14 +368,24 @@ export default function AdminUsersPage() {
   /** Rights given / taken on top of the role, as a visible badge (not only a tooltip). */
   const extraBadge = (row: StaffUser) => {
     const extra = row.role === 'ADMIN' ? null : overrideCounts(row, catalog);
+    const google = row.googleEmail ? (
+      <span className="ml-1 inline-flex rounded-full border border-sky-700 bg-sky-950/50 px-2 py-0.5 text-[11px] font-semibold text-sky-200" title={row.googleEmail}>
+        Google
+      </span>
+    ) : null;
     return extra && (extra.grant > 0 || extra.revoke > 0) ? (
+      <>
+        {google}
       <span
         className="ml-1 inline-flex rounded-full border border-fuchsia-700 bg-fuchsia-950/50 px-2 py-0.5 text-[11px] font-semibold text-fuchsia-200"
         title="Албан тушаалынхаас гадна нэмсэн / хассан эрх"
       >
         эрх +{extra.grant} / −{extra.revoke}
       </span>
-    ) : null;
+      </>
+    ) : (
+      google
+    );
   };
   const warehouseText = (row: StaffUser) => (
     <>
@@ -531,17 +561,49 @@ export default function AdminUsersPage() {
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
               />
             </label>
+            {modal === 'edit' && editing && editing.id === me?.id ? (
+              <p className="text-xs text-slate-400">Өөрийн Google нэвтрэлтийг «Миний бүртгэл» хэсгээс тохируулна.</p>
+            ) : (
             <label className="block text-xs text-slate-400">
-              {modal === 'create' ? 'Нууц үг' : 'Шинэ нууц үг (хэвээр үлдээх бол хоосон орхино)'}
+              Google Gmail (заавал биш)
               <input
                 className="mt-1 w-full"
-                type="password"
-                required={modal === 'create'}
-                minLength={modal === 'create' ? 8 : undefined}
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                type="email"
+                placeholder="нэр@gmail.com"
+                value={form.googleEmail}
+                onChange={(e) => setForm({ ...form, googleEmail: e.target.value })}
               />
+              <span className="mt-1 block text-[11px] text-slate-500">
+                Энэ Gmail-ээр «Google-ээр нэвтрэх» боломжтой болно (анх нэвтрэхэд холбогдоно). Өөрчилбөл хуучин Google холбоос салж, тэр хүн бүх төхөөрөмжөөс гарна.
+                Нууц үг шинэчлэхэд Google холбоос мөн салгагдана (энд шинэ Gmail бичвэл тэр үлдэнэ).
+              </span>
             </label>
+            )}
+            {modal === 'edit' && editing && editing.id === me?.id ? (
+              <p className="text-xs text-slate-400">Өөрийн нууц үгийг «Миний бүртгэл» хэсгээс одоогийн нууц үгээ оруулж солино.</p>
+            ) : (
+              <label className="block text-xs text-slate-400">
+                {modal === 'create' ? 'Нууц үг' : 'Шинэ нууц үг (хэвээр үлдээх бол хоосон орхино; солиход бүх төхөөрөмжөөс гарна)'}
+                <input
+                  className="mt-1 w-full"
+                  type="password"
+                  required={modal === 'create'}
+                  minLength={modal === 'create' ? 8 : undefined}
+                  value={form.password}
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                />
+              </label>
+            )}
+            {modal === 'edit' && editing?.googleEmail && editing.id !== me?.id && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 p-2 text-xs">
+                <span>
+                  Google-ээр нэвтэрдэг: <span className="font-semibold text-emerald-300">{editing.googleEmail}</span>
+                </span>
+                <button type="button" className="btn-ghost text-xs" disabled={saving} onClick={() => void unlinkGoogle(editing)}>
+                  Google холбоосыг салгах
+                </button>
+              </div>
+            )}
             <label className="block text-xs text-slate-400">
               Албан тушаал
               <select

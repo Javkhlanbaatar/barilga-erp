@@ -176,6 +176,12 @@ model User {
   username     String     @unique
   email        String?    @unique
   passwordHash String
+  /// Google account the person signs in with (its stable id), and its address as shown on «Миний бүртгэл».
+  googleSub    String?    @unique @map("google_sub")
+  googleEmail  String?    @map("google_email")
+  /// Sign-ins (tokens) issued before this moment no longer work: set when the password changes or the person
+  /// signs out of every device.
+  sessionsValidFrom DateTime? @map("sessions_valid_from")
   fullName     String     @map("name")
   phone        String?
   role         Role

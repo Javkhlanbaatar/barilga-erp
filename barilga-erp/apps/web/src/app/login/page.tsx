@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { GoogleButton } from '@/components/google-button';
 import { api } from '@/lib/api';
 import { AuthUser, ROLE_LABEL } from '@/lib/types';
 
@@ -11,10 +12,33 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Google's client id when the admin has set Google sign-in up (null = not offered).
+  const [googleClientId, setGoogleClientId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('expired')) setError('Нэвтрэх хугацаа дууссан тул дахин нэвтэрнэ үү.');
+    if (new URLSearchParams(window.location.search).get('expired')) setError('Нэвтрэх хугацаа дууссан эсвэл өөр төхөөрөмжөөс гарсан тул дахин нэвтэрнэ үү.');
+    api<{ googleClientId: string | null }>('/auth/config')
+      .then((c) => setGoogleClientId(c.googleClientId))
+      .catch(() => setGoogleClientId(null));
   }, []);
+
+  function signedIn(res: { accessToken: string; user: AuthUser }) {
+    localStorage.setItem('barilga_token', res.accessToken);
+    localStorage.setItem('barilga_user', JSON.stringify(res.user));
+    router.push(res.user.role === 'ACHIGCH_BELTGEGCH' ? '/warehouse/tickets' : '/pos');
+  }
+
+  async function withGoogle(credential: string) {
+    setBusy(true);
+    setError('');
+    try {
+      signedIn(await api<{ accessToken: string; user: AuthUser }>('/auth/google', { method: 'POST', body: JSON.stringify({ credential }) }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google-ээр нэвтэрч чадсангүй');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -25,9 +49,7 @@ export default function LoginPage() {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       });
-      localStorage.setItem('barilga_token', res.accessToken);
-      localStorage.setItem('barilga_user', JSON.stringify(res.user));
-      router.push(res.user.role === 'ACHIGCH_BELTGEGCH' ? '/warehouse/tickets' : '/pos');
+      signedIn(res);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Нэвтэрч чадсангүй');
     } finally {
@@ -60,6 +82,19 @@ export default function LoginPage() {
             {busy ? 'Нэвтэрч байна…' : 'Нэвтрэх'}
           </button>
         </form>
+        {googleClientId && (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span className="h-px flex-1 bg-slate-800" />
+              эсвэл
+              <span className="h-px flex-1 bg-slate-800" />
+            </div>
+            <GoogleButton clientId={googleClientId} onCredential={(c) => void withGoogle(c)} />
+            <p className="text-center text-[11px] text-slate-500">
+              Админы бүртгэсэн «Google Gmail» эсвэл «Миний бүртгэл»-ээс холбосон Google бүртгэлээр нэвтэрнэ.
+            </p>
+          </div>
+        )}
         {process.env.NODE_ENV === 'development' && (
         <ul className="mt-6 text-xs text-slate-400 space-y-1">
           {(['ADMIN', 'SUPER_MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] as const).map((role) => (
