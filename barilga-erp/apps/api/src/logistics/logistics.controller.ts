@@ -51,7 +51,7 @@ export class LogisticsController {
         subtotalMnt,
         weightKg: Number(weightKg.toFixed(3)),
         maxLengthM: Number(maxLengthM.toFixed(2)),
-        volumeM3: Number(volumeM3.toFixed(3)),
+        volumeM3: Number(volumeM3.toFixed(6)),
       },
     });
   }

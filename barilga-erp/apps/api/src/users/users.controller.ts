@@ -4,7 +4,7 @@ import { CurrentUser } from '../auth/current-user.decorator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import { CreateUserDto, UpdateUserDto, UpdateUserStatusDto } from './dto/upsert-user.dto';
+import { CreateUserDto, UpdateUserDto, UpdateUserStatusDto, UserPermissionsDto } from './dto/upsert-user.dto';
 import { UsersService } from './users.service';
 
 @Controller('users')
@@ -19,8 +19,8 @@ export class UsersController {
   }
 
   @Post()
-  create(@Body() dto: CreateUserDto) {
-    return this.users.create(dto);
+  create(@Body() dto: CreateUserDto, @CurrentUser() actor: { id: string }) {
+    return this.users.create(dto, actor.id);
   }
 
   @Patch(':id/status')
@@ -30,6 +30,12 @@ export class UsersController {
     @CurrentUser() actor: { id: string },
   ) {
     return this.users.setActive(id, dto.isActive, actor.id);
+  }
+
+  /** Rights added to or taken from this person: { grant: [...], revoke: [...] } (keys from GET /auth/permissions). */
+  @Patch(':id/permissions')
+  setPermissions(@Param('id') id: string, @Body() dto: UserPermissionsDto, @CurrentUser() actor: { id: string }) {
+    return this.users.setPermissions(id, dto, actor.id);
   }
 
   @Patch(':id')

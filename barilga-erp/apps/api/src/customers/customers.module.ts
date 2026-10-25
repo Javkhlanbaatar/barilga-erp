@@ -1,10 +1,18 @@
 import { Module } from '@nestjs/common';
+import { PaymentModule } from '../payment/payment.module';
+import { AccountsController } from './accounts.controller';
+import { AccountsService } from './accounts.service';
 import { CustomersController } from './customers.controller';
 import { CustomersService } from './customers.service';
+import { SettingsModule } from '../settings/settings.module';
+import { PriceListsController, PublicPriceListsController } from './price-lists.controller';
+import { PartnerTradeService } from './partner-trade.service';
+import { PriceListsService } from './price-lists.service';
 
 @Module({
-  controllers: [CustomersController],
-  providers: [CustomersService],
-  exports: [CustomersService],
+  imports: [PaymentModule, SettingsModule],
+  controllers: [CustomersController, PriceListsController, PublicPriceListsController, AccountsController],
+  providers: [CustomersService, PriceListsService, AccountsService, PartnerTradeService],
+  exports: [CustomersService, AccountsService],
 })
 export class CustomersModule {}

@@ -1,29 +1,36 @@
 'use client';
 
+import { homeForRole, isManager } from '@/lib/rbac';
+import { can } from '@/lib/permissions';
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { ReportsNav } from '@/components/reports-nav';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
-import { AuthUser, DailyReport } from '@/lib/types';
+import { useFeatures } from '@/lib/features';
+import { AuthUser, DailyReport, ORDER_STATUS_LABEL } from '@/lib/types';
 
 function todayYmd() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date());
 }
 
 const METHOD_LABEL: Record<DailyReport['payments'][number]['method'], string> = {
-  CASH: 'Cash',
+  CASH: 'Бэлэн',
   QPAY: 'QPay',
-  CARD: 'Card (POS)',
+  CARD: 'Карт',
+  TRANSFER: 'Шилжүүлэг',
 };
 
 const BAR_COLOR: Record<DailyReport['payments'][number]['method'], string> = {
   CASH: 'bg-emerald-500',
   QPAY: 'bg-sky-500',
   CARD: 'bg-violet-500',
+  TRANSFER: 'bg-amber-500',
 };
 
 export default function DailyReportPage() {
   const router = useRouter();
+  const features = useFeatures();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [startDate, setStartDate] = useState(todayYmd);
   const [endDate, setEndDate] = useState(todayYmd);
@@ -33,7 +40,7 @@ export default function DailyReportPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const canPickCashier = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const canPickCashier = isManager(user?.role);
 
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');
@@ -45,6 +52,11 @@ export default function DailyReportPage() {
     const parsed = JSON.parse(raw) as AuthUser;
     if (parsed.role === 'ACHIGCH_BELTGEGCH') {
       router.replace('/warehouse/tickets');
+      return;
+    }
+    // The admin can take this report away from one person; managers still have the other reports.
+    if (!can(parsed, 'REPORT_SALES')) {
+      router.replace(isManager(parsed.role) ? '/reports' : homeForRole(parsed.role));
       return;
     }
     setUser(parsed);
@@ -60,7 +72,7 @@ export default function DailyReportPage() {
       const data = await api<DailyReport>(`/reports/daily?${params.toString()}`);
       setReport(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load report');
+      setError(err instanceof Error ? err.message : 'Тайлан ачаалж чадсангүй');
       setReport(null);
     } finally {
       setLoading(false);
@@ -93,50 +105,51 @@ export default function DailyReportPage() {
 
   return (
     <Shell>
+      <ReportsNav />
       <div className="print:hidden flex flex-wrap items-end justify-between gap-4 mb-5">
         <div>
-          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Daily closure</p>
-          <h2 className="text-xl font-bold">Sales analytics</h2>
+          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Тайлан</p>
+          <h2 className="text-xl font-bold">Борлуулалтын тайлан</h2>
           <p className="text-slate-400 text-sm mt-1">
-            Paid splits from ord_payment_splits · Asia/Ulaanbaatar calendar days
+            Төлбөрийг төлсөн өдрөөр нь тооцно (Улаанбаатарын цаг)
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button className="btn-ghost" onClick={() => window.print()}>
-            Print Z-Report
+            Z тайлан хэвлэх
           </button>
         </div>
       </div>
 
       <form onSubmit={onSubmit} className="print:hidden card mb-5 grid gap-3 md:grid-cols-[1fr_1fr_1fr_auto] items-end">
         <label className="text-sm block">
-          Start date
+          Эхлэх огноо
           <input type="date" className="mt-1 w-full" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
         </label>
         <label className="text-sm block">
-          End date
+          Дуусах огноо
           <input type="date" className="mt-1 w-full" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
         </label>
         {canPickCashier ? (
           <label className="text-sm block">
-            Cashier
+            Кассчин
             <select className="mt-1 w-full" value={cashierId} onChange={(e) => setCashierId(e.target.value)}>
-              <option value="">All cashiers</option>
+              <option value="">Бүх кассчин</option>
               {cashiers.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} ({c.email})
+                  {c.name}{c.email ? ` (${c.email})` : ""}
                 </option>
               ))}
             </select>
           </label>
         ) : (
           <div className="text-sm text-slate-400">
-            Cashier
-            <p className="mt-2 text-white">{user.name} — own shift only</p>
+            Кассчин
+            <p className="mt-2 text-white">{user.name} — зөвхөн өөрийн ээлж</p>
           </div>
         )}
         <button className="btn-primary" disabled={loading}>
-          {loading ? 'Loading…' : 'Apply'}
+          {loading ? 'Уншиж байна…' : 'Харуулах'}
         </button>
       </form>
 
@@ -145,48 +158,48 @@ export default function DailyReportPage() {
       {report && (
         <>
           <header className="hidden print:block mb-6 border-b border-black pb-3">
-            <p className="text-xs tracking-[0.3em] uppercase">Barilga ERP · Z-Report</p>
-            <h1 className="text-2xl font-bold text-black">Daily closure</h1>
+            <p className="text-xs tracking-[0.3em] uppercase">Barilga ERP · Z тайлан</p>
+            <h1 className="text-2xl font-bold text-black">Борлуулалтын тайлан</h1>
             <p className="text-sm">
               {report.range.startDate} → {report.range.endDate} ({report.range.timeZone})
             </p>
             <p className="text-sm">
-              Cashier: {report.cashier ? `${report.cashier.name} · ${report.cashier.email}` : 'All cashiers'}
+              Кассчин: {report.cashier ? `${report.cashier.name} · ${report.cashier.email}` : 'Бүх кассчин'}
             </p>
-            <p className="text-xs">Printed {new Date().toLocaleString('mn-MN')}</p>
+            <p className="text-xs">Хэвлэсэн {new Date().toLocaleString('mn-MN')}</p>
           </header>
 
-          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-5">
-            <StatCard label="Total revenue" value={tugrik(report.totals.revenueMnt)} hint="Collected PAID splits" />
-            <StatCard label="Cash in drawer" value={tugrik(report.totals.cashMnt)} hint={`${report.payments[0]?.paidCount ?? 0} cash receipts`} />
-            <StatCard label="QPay total" value={tugrik(report.totals.qpayMnt)} hint="Paid QPay invoices only" />
-            <StatCard label="Card total" value={tugrik(report.totals.cardMnt)} hint="POS terminal" />
+          <section className="grid grid-cols-2 gap-3 xl:grid-cols-4 mb-5">
+            <StatCard label="Нийт орлого" value={tugrik(report.totals.revenueMnt)} hint="Энэ хугацаанд орсон, буцаалт хассан" />
+            <StatCard label="Кассанд бэлэн" value={tugrik(report.totals.cashMnt)} hint={`${report.payments[0]?.paidCount ?? 0} бэлэн төлбөр`} />
+            <StatCard label="QPay нийт" value={tugrik(report.totals.qpayMnt)} hint="Зөвхөн төлөгдсөн QPay нэхэмжлэх" />
+            <StatCard label="Карт нийт" value={tugrik(report.totals.cardMnt)} hint="POS терминал" />
             <StatCard
-              label="Refunds / Returns Total"
+              label="Буцаалт нийт"
               value={tugrik(report.refunds?.totalMnt ?? report.totals.refundsMnt ?? 0)}
-              hint={`${report.refunds?.count ?? 0} return(s) deducted from payment mix`}
+              hint={`${report.refunds?.count ?? 0} буцаалт төлбөрөөс хасагдсан`}
             />
           </section>
 
           <section className="grid gap-4 lg:grid-cols-2 mb-5">
             <article className="card">
-              <h3 className="font-semibold mb-3">Payment method breakdown</h3>
+              <h3 className="font-semibold mb-3">Төлбөрийн хэлбэрээр</h3>
               <div className="space-y-3">
                 {report.payments.map((p) => (
                   <div key={p.method}>
                     <div className="flex justify-between text-sm mb-1">
-                      <span>{METHOD_LABEL[p.method]}</span>
+                      <span>{METHOD_LABEL[p.method] ?? p.method}</span>
                       <span className="font-medium">{tugrik(p.paidMnt)}</span>
                     </div>
                     <div className="h-2 rounded bg-steel-800 overflow-hidden print:bg-slate-200">
                       <div
                         className={`h-full ${BAR_COLOR[p.method]} print:bg-black`}
-                        style={{ width: `${(p.paidMnt / maxPaid) * 100}%` }}
+                        style={{ width: `${Math.max(0, p.paidMnt / maxPaid) * 100}%` }}
                       />
                     </div>
                     {p.pendingMnt > 0 && (
                       <p className="text-xs text-amber-300 mt-1 print:text-black">
-                        Outstanding {tugrik(p.pendingMnt)}
+                        Төлөгдөөгүй {tugrik(p.pendingMnt)}
                       </p>
                     )}
                   </div>
@@ -194,62 +207,66 @@ export default function DailyReportPage() {
               </div>
               {report.totals.pendingMnt > 0 && (
                 <p className="text-xs text-slate-400 mt-3 print:text-black">
-                  Unpaid splits (not in revenue): {tugrik(report.totals.pendingMnt)}
+                  Төлөгдөөгүй хэсэг (орлогод ороогүй): {tugrik(report.totals.pendingMnt)}
                 </p>
               )}
             </article>
 
             <article className="card">
-              <h3 className="font-semibold mb-3">Logistics fees collected</h3>
+              <h3 className="font-semibold mb-3">{features.enabled('DELIVERY') ? 'Тээврийн хураамж' : 'Буцаалт'}</h3>
               <table className="w-full text-sm">
                 <tbody>
+                  {features.enabled('DELIVERY') && (
+                  <>
                   <tr className="border-b border-slate-800 print:border-slate-300">
-                    <td className="py-2 text-slate-400">Delivery</td>
+                    <td className="py-2 text-slate-400">Хүргэлт</td>
                     <td className="py-2 text-right font-medium">{tugrik(report.logistics.deliveryFeesMnt)}</td>
                   </tr>
                   <tr className="border-b border-slate-800 print:border-slate-300">
-                    <td className="py-2 text-slate-400">Unloading</td>
+                    <td className="py-2 text-slate-400">Буулгалт</td>
                     <td className="py-2 text-right font-medium">{tugrik(report.logistics.unloadingFeesMnt)}</td>
                   </tr>
                   <tr>
-                    <td className="py-2 text-slate-400">Night / express adj.</td>
+                    <td className="py-2 text-slate-400">Шөнө / яаралтай нэмэгдэл</td>
                     <td className="py-2 text-right font-medium">{tugrik(report.logistics.timeAdjustmentMnt)}</td>
                   </tr>
+                  </>
+                  )}
                   <tr className="border-t border-slate-800 print:border-slate-300">
-                    <td className="py-2 text-slate-400">Refunds / Returns Total</td>
+                    <td className="py-2 text-slate-400">Буцаалт нийт</td>
                     <td className="py-2 text-right font-medium text-red-300 print:text-black">
                       −{tugrik(report.refunds?.totalMnt ?? report.totals.refundsMnt ?? 0)}
                     </td>
                   </tr>
                 </tbody>
               </table>
-              <h3 className="font-semibold mt-4 mb-2">Orders by status</h3>
+              <h3 className="font-semibold mt-4 mb-2">Захиалга төлөвөөр</h3>
               <ul className="text-sm grid grid-cols-2 gap-2">
-                <li>COMPLETED · {report.ordersByStatus.COMPLETED}</li>
-                <li>PENDING_PAYMENT · {report.ordersByStatus.PENDING_PAYMENT}</li>
-                <li>READY_FOR_LOADING · {report.ordersByStatus.READY_FOR_LOADING}</li>
-                <li>CANCELLED · {report.ordersByStatus.CANCELLED}</li>
+                <li>{ORDER_STATUS_LABEL.COMPLETED} · {report.ordersByStatus.COMPLETED}</li>
+                <li>{ORDER_STATUS_LABEL.PENDING_PAYMENT} · {report.ordersByStatus.PENDING_PAYMENT}</li>
+                <li>{ORDER_STATUS_LABEL.READY_FOR_LOADING} · {report.ordersByStatus.READY_FOR_LOADING}</li>
+                <li>{ORDER_STATUS_LABEL.CANCELLED} · {report.ordersByStatus.CANCELLED}</li>
               </ul>
               <p className="text-xs text-slate-500 mt-2 print:text-black">
-                Billed orders (excl. cancelled): {report.totals.orderCount}
+                Төлөгдсөн захиалга: {report.totals.orderCount}
               </p>
             </article>
           </section>
 
-          {report.ebarimt && (
+          {features.enabled('EBARIMT') && report.ebarimt && (
             <article className="card overflow-auto mb-5">
               <h3 className="font-semibold mb-3">И-Баримт</h3>
               <p className="text-sm text-slate-400 mb-3">
-                Амжилттай {report.ebarimt.issued} · Амжилтгүй {report.ebarimt.failed} · Хүлээгдэж {report.ebarimt.pending}
+                Амжилттай {report.ebarimt.issued} · Амжилтгүй {report.ebarimt.failed} · Хүлээгдэж буй {report.ebarimt.pending}
               </p>
               {report.ebarimt.receipts.length === 0 ? (
-                <p className="text-slate-500 text-sm">No issued receipts in this range.</p>
+                <p className="text-slate-500 text-sm">Энэ хугацаанд олгосон баримт алга.</p>
               ) : (
                 <table className="w-full text-sm">
                   <thead className="text-left text-slate-400 border-b border-slate-700">
                     <tr>
                       <th className="py-2 pr-3">Захиалга</th>
-                      {canPickCashier && <th className="py-2 pr-3">Lottery</th>}
+                      {canPickCashier && <th className="py-2 pr-3">Сугалаа</th>}
                       <th className="py-2 pr-3">Баримтын дугаар</th>
                       <th className="py-2 pr-3">Төрөл</th>
                       <th className="py-2 text-right">Дүн</th>
@@ -274,17 +291,17 @@ export default function DailyReportPage() {
           )}
 
           <article className="card overflow-auto">
-            <h3 className="font-semibold mb-3">Top selling products</h3>
+            <h3 className="font-semibold mb-3">Их зарагдсан бараа</h3>
             {report.topProducts.length === 0 ? (
-              <p className="text-slate-500 text-sm">No sold lines in this range.</p>
+              <p className="text-slate-500 text-sm">Энэ хугацаанд борлуулалт алга.</p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="text-left text-slate-400 border-b border-slate-700">
                   <tr>
-                    <th className="py-2 pr-3">Product</th>
-                    <th className="py-2 pr-3">SKU</th>
-                    <th className="py-2 pr-3 text-right">Qty</th>
-                    <th className="py-2 text-right">Amount</th>
+                    <th className="py-2 pr-3">Бараа</th>
+                    <th className="py-2 pr-3">Код</th>
+                    <th className="py-2 pr-3 text-right">Тоо</th>
+                    <th className="py-2 text-right">Дүн</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -310,7 +327,7 @@ function StatCard({ label, value, hint }: { label: string; value: string; hint: 
   return (
     <article className="card">
       <p className="text-xs uppercase tracking-wide text-slate-400 print:text-black">{label}</p>
-      <p className="text-2xl font-bold mt-1">{value}</p>
+      <p className="mt-1 break-words text-xl font-bold sm:text-2xl">{value}</p>
       <p className="text-xs text-slate-500 mt-1 print:text-black">{hint}</p>
     </article>
   );

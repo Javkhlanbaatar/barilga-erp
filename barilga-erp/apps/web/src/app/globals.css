@@ -11,7 +11,8 @@ body {
 }
 
 input, select, textarea {
-  @apply bg-steel-800 border border-slate-600 rounded-md px-3 py-2 text-sm text-white outline-none focus:border-amber-brand;
+  /* 16px on phones: smaller text makes iOS zoom into every field. */
+  @apply bg-steel-800 border border-slate-600 rounded-md px-3 py-2 text-base md:text-sm text-white outline-none focus:border-amber-brand;
 }
 
 button {
@@ -24,6 +25,19 @@ button {
 
 .btn {
   @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold;
+}
+
+/* Phones: buttons big enough to tap. */
+@media (max-width: 767px) {
+  .btn {
+    min-height: 40px;
+  }
+}
+
+/* A table that scrolls sideways inside its own box on small screens (not the whole page). */
+.table-scroll {
+  @apply w-full overflow-x-auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .btn-primary {

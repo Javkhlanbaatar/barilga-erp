@@ -31,10 +31,16 @@ export default function PublicOrderPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [deliveryType, setDeliveryType] = useState<DeliveryType>('OUR_DELIVERY');
+  // Pickup until the shop says it delivers (the delivery module may be switched off).
+  const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
   const [isUnloading, setIsUnloading] = useState(false);
+  const [shop, setShop] = useState<{ shopOpen: boolean; delivery: boolean; unloading: boolean }>({
+    shopOpen: true,
+    delivery: false,
+    unloading: false,
+  });
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [address, setAddress] = useState('');
@@ -45,6 +51,17 @@ export default function PublicOrderPage() {
   const [busy, setBusy] = useState(false);
 
   const ourDelivery = deliveryType === 'OUR_DELIVERY';
+
+  // Which services the shop offers right now (admin module switches).
+  useEffect(() => {
+    publicApi<{ shopOpen: boolean; delivery: boolean; unloading: boolean }>('/public/config')
+      .then((c) => {
+        setShop(c);
+        if (!c.unloading) setIsUnloading(false);
+        if (!c.delivery) setDeliveryType('SELF_PICKUP');
+      })
+      .catch(() => undefined);
+  }, []);
   const items = useMemo(
     () => cart.map((line) => ({ productId: line.product.id, quantity: line.quantity })),
     [cart],
@@ -57,7 +74,7 @@ export default function PublicOrderPage() {
         setZones(data.zones);
         if (data.zones[0]) setZoneId(data.zones[0].id);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Catalog failed'));
+      .catch((err) => setError(err instanceof Error ? err.message : 'Бараа ачаалж чадсангүй'));
   }, []);
 
   useEffect(() => {
@@ -77,7 +94,7 @@ export default function PublicOrderPage() {
         }),
       })
         .then(setQuote)
-        .catch((err) => setError(err instanceof Error ? err.message : 'Quote failed'));
+        .catch((err) => setError(err instanceof Error ? err.message : 'Үнэ тооцоолж чадсангүй'));
     }, 250);
     return () => clearTimeout(t);
   }, [items, zoneId, deliveryType, time, isUnloading, ourDelivery]);
@@ -117,7 +134,7 @@ export default function PublicOrderPage() {
       });
       router.push(`/track/${order.trackingToken}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Create failed');
+      setError(err instanceof Error ? err.message : 'Захиалга үүсгэж чадсангүй');
     } finally {
       setBusy(false);
     }
@@ -127,14 +144,19 @@ export default function PublicOrderPage() {
 
   return (
     <main className="min-h-screen max-w-6xl mx-auto px-4 py-8">
+      {!shop.shopOpen && (
+        <p className="mb-4 rounded-lg border border-amber-700 bg-amber-950/50 px-4 py-3 text-sm text-amber-100">
+          Онлайн захиалга түр хаалттай байна. Дэлгүүрт ирж эсвэл утсаар захиална уу.
+        </p>
+      )}
       <header className="flex items-end justify-between gap-4 mb-6">
         <div>
           <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Barilga</p>
           <h1 className="text-2xl font-bold">Цахим захиалга</h1>
-          <p className="text-slate-400 text-sm">Хүргэлтийн машины дугаар, жолоочийн утсыг энд эсвэл дараа нь tracking холбоосоор оруулна.</p>
+          <p className="text-slate-400 text-sm">Хүргэлтийн машины дугаар, жолоочийн утсыг энд эсвэл дараа нь хяналтын холбоосоор оруулна.</p>
         </div>
         <Link href="/login" className="btn-ghost text-sm">
-          Ажилтны нэвтрэх
+          Ажилтан нэвтрэх
         </Link>
       </header>
       {error && <p className="text-red-400 mb-3">{error}</p>}
@@ -163,6 +185,8 @@ export default function PublicOrderPage() {
               </li>
             ))}
           </ul>
+          {!shop.delivery && <p className="text-sm text-slate-400">Бараагаа дэлгүүрээс өөрөө авна.</p>}
+          {shop.delivery && (
           <div className="grid grid-cols-3 gap-1">
             <button type="button" className={chipClass(deliveryType === 'OUR_DELIVERY')} onClick={() => setDeliveryType('OUR_DELIVERY')}>
               Хүргэлт
@@ -174,6 +198,7 @@ export default function PublicOrderPage() {
               Өөрийн жолооч
             </button>
           </div>
+          )}
           {ourDelivery && (
             <>
               <label className="block text-sm">
@@ -194,10 +219,12 @@ export default function PublicOrderPage() {
                   <option value="EXPRESS">Яаралтай</option>
                 </select>
               </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={isUnloading} onChange={(e) => setIsUnloading(e.target.checked)} />
-                Буулгалт
-              </label>
+              {shop.unloading && (
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={isUnloading} onChange={(e) => setIsUnloading(e.target.checked)} />
+                  Буулгалт
+                </label>
+              )}
               <label className="block text-sm">
                 Хаяг
                 <input className="mt-1 w-full" value={address} onChange={(e) => setAddress(e.target.value)} />
@@ -210,7 +237,7 @@ export default function PublicOrderPage() {
                 Жолоочийн утас (заавал биш)
                 <input className="mt-1 w-full" value={driverPhone} onChange={(e) => setDriverPhone(e.target.value)} placeholder="99112233" />
               </label>
-              <p className="text-xs text-slate-500">Хожим tracking холбоосоор нэмж болно.</p>
+              <p className="text-xs text-slate-500">Хожим хяналтын холбоосоор нэмж болно.</p>
             </>
           )}
           <label className="block text-sm">
@@ -223,7 +250,7 @@ export default function PublicOrderPage() {
           </label>
           {b && (
             <div className="text-sm space-y-1">
-              <p>Хэмжээ: {VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</p>
+              <p>Машин: {VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</p>
               <p>Нийт: <span className="font-bold text-amber-brand">{tugrik(b.totalMnt)}</span></p>
             </div>
           )}

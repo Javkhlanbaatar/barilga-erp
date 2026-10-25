@@ -36,6 +36,16 @@ export class OrderLineDto {
   @IsString()
   @MaxLength(120)
   supplierName?: string;
+
+  /**
+   * A unit price typed at the till (whole tugrik). Needs the PRICE_OVERRIDE right when it differs from the
+   * customer's own price, their list or retail; never below cost. The public shop drops it.
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1, { message: 'Үнэ 1₮-өөс бага байж болохгүй / unitPriceMnt must be at least 1' })
+  @Max(2_000_000_000)
+  unitPriceMnt?: number;
 }
 
 function toDeliveryMethod(value: unknown, obj: Record<string, unknown>): DeliveryMethod {
@@ -78,12 +88,47 @@ export class QuoteOrderDto {
   @ValidateNested({ each: true })
   @Type(() => OrderLineDto)
   items!: OrderLineDto[];
+
+  /**
+   * Registered customer (staff only; the public shop strips it). Picks the customer's price list for the
+   * quote and the order. Name/phone on an order are still required as the printed snapshot.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  customerId?: string;
 }
 
 export enum CheckoutPaymentMethod {
   QPAY = 'QPAY',
   CASH = 'CASH',
   CARD = 'CARD',
+  /** Released on account (зарлагын баримтаар): paid later; needs a registered customer. */
+  CREDIT = 'CREDIT',
+  /** Bank transfer into the company account, recorded by the cashier. */
+  TRANSFER = 'TRANSFER',
+  /**
+   * By contract (гэрээгээр): a supplier/barter partner takes goods against what we owe them. Deducted from our
+   * payable at once — no money moves and no debt is created.
+   */
+  CONTRACT = 'CONTRACT',
+  /** Invoice sent: the buyer will pay by bank transfer; the order waits until staff confirm the money arrived. */
+  INVOICE = 'INVOICE',
+}
+
+/** A customer paying (part of) what they owe on an order released on account. */
+export class SettleCreditDto {
+  @IsEnum(['CASH', 'CARD', 'TRANSFER'])
+  method!: 'CASH' | 'CARD' | 'TRANSFER';
+
+  @IsInt()
+  @Min(1)
+  amountMnt!: number;
+}
+
+export class PayRemainingDto {
+  @IsEnum(['CASH', 'CARD', 'TRANSFER'])
+  method!: 'CASH' | 'CARD' | 'TRANSFER';
 }
 
 export class PaymentSplitDto {
@@ -106,12 +151,6 @@ export class CreateOrderDto extends QuoteOrderDto {
   @IsString()
   @MaxLength(64)
   warehouseId?: string;
-
-  /** Registered customer (staff only; the public shop never sets it). Name/phone are still required as the snapshot. */
-  @IsOptional()
-  @IsString()
-  @MaxLength(64)
-  customerId?: string;
 
   @IsString()
   @MaxLength(120)
@@ -225,4 +264,10 @@ export class OverrideFeesDto {
 
   @IsString()
   reason!: string;
+}
+
+/** Picking checklist: tick (true) or untick (false) one order line as prepared. */
+export class PickItemDto {
+  @IsBoolean()
+  picked!: boolean;
 }

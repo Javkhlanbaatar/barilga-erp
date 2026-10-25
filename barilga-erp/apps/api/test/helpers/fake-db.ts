@@ -27,6 +27,9 @@ function matchValue(value: any, cond: any): boolean {
       case 'in':
         if (!(arg as any[]).includes(value)) return false;
         break;
+      case 'notIn':
+        if ((arg as any[]).includes(value)) return false;
+        break;
       case 'not':
         if (matchValue(value, arg)) return false;
         break;
@@ -51,6 +54,10 @@ function matchValue(value: any, cond: any): boolean {
         if (!fold(String(value ?? '')).includes(fold(String(arg)))) return false;
         break;
       }
+      case 'equals':
+        // mode: 'insensitive' compares text ignoring letter case.
+        if (cond.mode === 'insensitive' ? String(value ?? '').toLowerCase() !== String(arg ?? '').toLowerCase() : !same(value, arg)) return false;
+        break;
       case 'mode':
         break;
       default:
@@ -63,7 +70,12 @@ function matchValue(value: any, cond: any): boolean {
 const NESTED_ITEMS: Record<string, { table: string; fk: string }> = {
   stockTransfer: { table: 'stockTransferItem', fk: 'transferId' },
   salesReturn: { table: 'returnItem', fk: 'returnId' },
+  stockReceipt: { table: 'stockReceiptItem', fk: 'receiptId' },
+  order: { table: 'orderItem', fk: 'orderId' },
 };
+
+/** Relation names that differ from the table name. */
+const RELATION_TABLE: Record<string, string> = { receipt: 'stockReceipt', transfer: 'stockTransfer', createdBy: 'user' };
 
 class Table {
   rows: Row[] = [];
@@ -87,9 +99,9 @@ class Table {
         if (this.matches(row, cond)) return false;
         continue;
       }
-      if (key === 'warehouseId_productId') {
-        const k = cond as Row;
-        if (row.warehouseId !== k.warehouseId || row.productId !== k.productId) return false;
+      if (key === 'warehouseId_productId' || key === 'userId_periodMonth' || key === 'userId_fromMonth' || key === 'userId_date' || key === 'customerId_productId') {
+        // Compound unique keys: every named field must match.
+        for (const [field, v] of Object.entries(cond as Row)) if (row[field] !== v) return false;
         continue;
       }
       const rel = this.db.relation(this.name, row, key, cond);
@@ -104,7 +116,50 @@ class Table {
 
   private decorate(row: Row, args: Row = {}): Row {
     const out: Row = { ...row };
-    const include = args.include as Row | undefined;
+    // A `select` naming relations is treated like an include of those relations (scalars are all returned).
+    const select = isPlain(args.select) ? (args.select as Row) : undefined;
+    const include = (args.include as Row | undefined) ??
+      (select ? Object.fromEntries(Object.entries(select).filter(([, v]) => isPlain(v))) : undefined);
+    // Generic to-one include: `include: { receipt: ... }` on a row with `receiptId` attaches that parent,
+    // decorated with its own nested include/select.
+    for (const [key, value] of Object.entries(include ?? {})) {
+      const parentTable = (this.db as any)[RELATION_TABLE[key] ?? key];
+      if (parentTable instanceof Table && `${key}Id` in row && !(key in out && key !== 'order')) {
+        const parent = parentTable.rows.find((p: Row) => p.id === row[`${key}Id`]);
+        out[key] = parent ? parentTable.decorate(parent, isPlain(value) ? (value as Row) : {}) : null;
+      }
+    }
+    // To-many `items` on the parents that own item rows (transfers, returns, receipts).
+    const owned = NESTED_ITEMS[this.name];
+    if (include?.items && owned) {
+      const child = (this.db as any)[owned.table] as Table;
+      const sub = isPlain(include.items) ? (include.items as Row) : {};
+      out.items = child.rows.filter((r: Row) => r[owned.fk] === row.id).map((r: Row) => child.decorate(r, sub));
+    }
+    // Other to-many lists by parent table: relation name → [child table, foreign key].
+    const TO_MANY: Record<string, Record<string, [string, string]>> = {
+      cashSession: { movements: ['cashMovement', 'sessionId'] },
+      priceList: { items: ['priceListItem', 'priceListId'] },
+      customer: { ownPrices: ['customerPrice', 'customerId'] },
+      order: { returns: ['salesReturn', 'orderId'] },
+    };
+    for (const [rel, [table, fk]] of Object.entries(TO_MANY[this.name] ?? {})) {
+      if (include?.[rel]) {
+        const child = (this.db as any)[table] as Table;
+        const sub = isPlain(include[rel]) ? (include[rel] as Row) : {};
+        out[rel] = child.rows.filter((r: Row) => r[fk] === row.id).map((r: Row) => child.decorate(r, sub));
+      }
+    }
+    if (include?.invoice && this.name === 'order') {
+      const inv = this.db.invoice.rows.find((i) => i.orderId === row.id);
+      out.invoice = inv ? { ...inv } : null;
+    }
+    if (include?.priceList && this.name === 'customer') {
+      const list = this.db.priceList.rows.find((l) => l.id === row.priceListId);
+      out.priceList = list
+        ? { ...list, items: this.db.priceListItem.rows.filter((i) => i.priceListId === list.id).map((i) => ({ ...i })) }
+        : null;
+    }
     if (include && this.name === 'order') {
       if (include.payments) out.payments = this.db.payment.rows.filter((p) => p.orderId === row.id).map((p) => ({ ...p }));
       if (include.items) {
@@ -112,7 +167,7 @@ class Table {
           .filter((i) => i.orderId === row.id)
           .map((i) => {
             const item: Row = { ...i };
-            if (isPlain(include.items) && include.items.include?.product) {
+            if (isPlain(include.items) && (include.items.include?.product || include.items.select?.product)) {
               const p = this.db.product.rows.find((x) => x.id === i.productId);
               if (p) item.product = { ...p };
             }
@@ -143,6 +198,48 @@ class Table {
     if (!row) throw new Error(`fake-db: ${this.name} not found`);
     return row;
   }
+  /** Supports `_sum` over numeric fields (what the services use). */
+  async aggregate(args: Row = {}) {
+    const rows = this.rows.filter((r) => this.matches(r, args.where));
+    const _sum: Row = {};
+    for (const key of Object.keys(args._sum ?? {})) {
+      _sum[key] = rows.length ? rows.reduce((s, r) => s + Number(r[key] ?? 0), 0) : null;
+    }
+    return { _sum, _count: { _all: rows.length } };
+  }
+  async groupBy(args: Row) {
+    const rows = this.rows.filter((r) => this.matches(r, args.where));
+    const groups = new Map<string, Row[]>();
+    for (const r of rows) {
+      const k = JSON.stringify((args.by as string[]).map((b) => r[b]));
+      groups.set(k, [...(groups.get(k) ?? []), r]);
+    }
+    return [...groups.values()].map((g) => ({
+      ...Object.fromEntries((args.by as string[]).map((b) => [b, g[0][b]])),
+      _count: { _all: g.length },
+      _sum: Object.fromEntries(Object.keys(args._sum ?? {}).map((k) => [k, g.reduce((t, r) => t + Number(r[k] ?? 0), 0)])),
+    }));
+  }
+  /** skipDuplicates: a row whose (userId, periodMonth) already exists is skipped, like ON CONFLICT DO NOTHING. */
+  async createMany(args: Row) {
+    let count = 0;
+    for (const data of args.data as Row[]) {
+      if (args.skipDuplicates && this.rows.some((r) => r.userId === data.userId && r.periodMonth === data.periodMonth)) continue;
+      await this.create({ data });
+      count++;
+    }
+    return { count };
+  }
+  async delete(args: Row) {
+    const i = this.rows.findIndex((r) => this.matches(r, args.where));
+    if (i < 0) throw new Error(`fake-db: ${this.name} not found for delete`);
+    return this.rows.splice(i, 1)[0];
+  }
+  async deleteMany(args: Row = {}) {
+    const before = this.rows.length;
+    this.rows = this.rows.filter((r) => !this.matches(r, args.where));
+    return { count: before - this.rows.length };
+  }
   async count(args: Row = {}) {
     return this.rows.filter((r) => this.matches(r, args.where)).length;
   }
@@ -158,7 +255,7 @@ class Table {
     for (const item of nestedItems ?? []) {
       await (this.db as any)[nested!.table].create({ data: { ...item, [nested!.fk]: row.id } });
     }
-    return { ...row };
+    return args.include || args.select ? this.decorate(row, args) : { ...row };
   }
   private apply(row: Row, data: Row) {
     for (const [key, value] of Object.entries(data)) {
@@ -189,7 +286,7 @@ class Table {
     const row = this.rows.find((r) => this.matches(r, args.where));
     if (!row) throw new Error(`fake-db: ${this.name} not found for update`);
     this.apply(row, args.data);
-    return { ...row };
+    return args.include || args.select ? this.decorate(row, args) : { ...row };
   }
 }
 
@@ -198,13 +295,13 @@ export class FakeDb {
     notes: null, status: 'PENDING_PAYMENT', ebarimtStatus: 'NOT_ISSUED', ebarimtAttempts: 0,
     receiptId: null, vehicleNumber: null, driverPhone: null, driverName: null,
     deliveryMethod: 'SELF_PICKUP', completedAt: null, completedById: null, preparedAt: null, preparedById: null,
-    feesOverridden: false,
+    feesOverridden: false, pickingStartedAt: null, pickingStartedById: null,
   }));
   payment = new Table(this, 'payment', () => ({
     status: 'UNPAID', provider: 'QPAY', method: 'QPAY', qpayInvoiceId: null, qpayPayload: null,
     paidAt: null, pollAttempts: 0, nextPollAt: null, lastPollError: null,
   }));
-  orderItem = new Table(this, 'orderItem', () => ({ sourceType: 'INTERNAL', supplierName: null }));
+  orderItem = new Table(this, 'orderItem', () => ({ sourceType: 'INTERNAL', supplierName: null, pickedAt: null, pickedById: null, listPriceMnt: null }));
   product = new Table(this, 'product', () => ({ stockQty: new Prisma.Decimal(0), active: true }));
   returnItem = new Table(this, 'returnItem', () => ({}));
   supplierPayable = new Table(this, 'supplierPayable', () => ({ status: 'OPEN' }));
@@ -212,7 +309,10 @@ export class FakeDb {
   warehouse = new Table(this, 'warehouse', () => ({ isActive: true, isDefault: false }));
   stockBalance = new Table(this, 'stockBalance', () => ({ quantity: new Prisma.Decimal(0) }));
   stockMovement = new Table(this, 'stockMovement', () => ({ refType: null, refId: null, reason: null, actorId: null }));
-  customer = new Table(this, 'customer', () => ({ isActive: true, regNumber: null, email: null, address: null, notes: null }));
+  customer = new Table(this, 'customer', () => ({
+    isActive: true, regNumber: null, email: null, address: null, notes: null, priceListId: null,
+    buysFromUs: true, creditAllowed: false, sellsToUs: false, barterContract: null,
+  }));
   stockTransfer = new Table(this, 'stockTransfer', () => ({
     status: 'IN_TRANSIT', notes: null, sentAt: new Date(), receivedById: null, receivedAt: null,
     cancelledById: null, cancelledAt: null, cancelReason: null,
@@ -221,6 +321,24 @@ export class FakeDb {
   featureFlag = new Table(this, 'featureFlag', () => ({ updatedById: null }));
   user = new Table(this, 'user', () => ({ isActive: true, warehouseId: null }));
   salesReturn = new Table(this, 'salesReturn', () => ({ refundStatus: 'PENDING_PAYOUT' }));
+  stockReceipt = new Table(this, 'stockReceipt', () => ({ supplierInvoiceNo: null, supplierCustomerId: null, notes: null, receivedAt: new Date() }));
+  stockReceiptItem = new Table(this, 'stockReceiptItem', () => ({ unitCostMnt: null }));
+  appSetting = new Table(this, 'appSetting', () => ({ updatedById: null }));
+  attendance = new Table(this, 'attendance', () => ({ checkOut: null, status: 'ON_TIME', notes: null, source: 'MANAGER', recordedById: null, confirmedById: null, confirmedAt: null, warehouseId: null }));
+  payroll = new Table(this, 'payroll', () => ({ status: 'DRAFT', paidAt: null, paidById: null }));
+  payrollAdjustment = new Table(this, 'payrollAdjustment', () => ({}));
+  salaryRate = new Table(this, 'salaryRate', () => ({ reason: null, createdAt: new Date() }));
+  attendanceDay = new Table(this, 'attendanceDay', () => ({ note: null, requestId: null }));
+  leaveRequest = new Table(this, 'leaveRequest', () => ({ status: 'PENDING', warehouseId: null, decidedById: null, decidedAt: null, decisionNote: null }));
+  customerPrice = new Table(this, 'customerPrice', () => ({ updatedById: null, createdAt: new Date(), updatedAt: new Date() }));
+  priceShare = new Table(this, 'priceShare', () => ({ label: null, priceListId: null, productIds: [], categories: [], includeUnlisted: false, expiresAt: null, revokedAt: null, createdById: null }));
+  cashSession = new Table(this, 'cashSession', () => ({ status: 'OPEN', openedAt: new Date(), closedAt: null, closedById: null, expectedCashMnt: null, countedCashMnt: null, differenceMnt: null, closingNote: null, warehouseId: null }));
+  cashMovement = new Table(this, 'cashMovement', () => ({}));
+  priceList = new Table(this, 'priceList', () => ({ isActive: true, notes: null }));
+  priceListItem = new Table(this, 'priceListItem', () => ({}));
+  accountEntry = new Table(this, 'accountEntry', () => ({ refType: null, refId: null, occurredAt: new Date() }));
+  editAudit = new Table(this, 'editAudit', () => ({}));
+  invoice = new Table(this, 'invoice', () => ({ recipientEmail: null, recipientPhone: null, dueDate: null, note: null, lastSentVia: null, sentAt: null, sendCount: 0, viewedAt: null, cancelledAt: null, customerId: null }));
 
   constructor() {
     // Mirrors the migration: there is always exactly one default warehouse.
@@ -240,6 +358,11 @@ export class FakeDb {
       if (cond.none && mine.some((p) => this.payment.matches(p, cond.none))) return false;
       return true;
     }
+    if (table === 'order' && key === 'items') {
+      const mine = this.orderItem.rows.filter((i) => i.orderId === row.id);
+      if (cond.some && !mine.some((i) => this.orderItem.matches(i, cond.some))) return false;
+      return true;
+    }
     if (table === 'stockTransferItem' && key === 'transfer') {
       const transfer = this.stockTransfer.rows.find((t) => t.id === row.transferId);
       return !!transfer && this.stockTransfer.matches(transfer, cond);
@@ -247,6 +370,12 @@ export class FakeDb {
     if (table === 'returnItem' && key === 'orderItem') {
       const item = this.orderItem.rows.find((i) => i.id === row.orderItemId);
       return !!item && this.orderItem.matches(item, cond);
+    }
+    // Generic to-one relation filter: `{ receipt: { ... } }` on a row with `receiptId`.
+    const parentTable = (this as any)[RELATION_TABLE[key] ?? key];
+    if (parentTable instanceof Table && `${key}Id` in row) {
+      const parent = parentTable.rows.find((p: Row) => p.id === row[`${key}Id`]);
+      return !!parent && parentTable.matches(parent, cond);
     }
     return undefined;
   }
@@ -256,7 +385,8 @@ export class FakeDb {
       this.order, this.payment, this.orderItem, this.product, this.returnItem, this.supplierPayable, this.feeOverrideAudit,
       this.warehouse, this.stockBalance, this.stockMovement,
       this.customer, this.stockTransfer, this.stockTransferItem, this.featureFlag, this.user,
-      this.salesReturn,
+      this.salesReturn, this.stockReceipt, this.stockReceiptItem, this.appSetting, this.attendance, this.payroll, this.payrollAdjustment, this.salaryRate, this.attendanceDay, this.leaveRequest, this.priceShare, this.customerPrice, this.cashSession, this.cashMovement, this.priceList, this.priceListItem,
+      this.accountEntry, this.editAudit, this.invoice,
     ];
   }
 

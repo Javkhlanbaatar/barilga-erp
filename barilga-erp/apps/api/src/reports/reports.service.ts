@@ -2,13 +2,16 @@ import { BadRequestException, ForbiddenException, Injectable, Logger } from '@ne
 import { EbarimtStatus, OrderStatus, PayMethod, PaymentStatus, Prisma, Role } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
+import { isManagerRole, orderWarehouseWhere, seesAllWarehouses, warehouseWhere } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { DailyQueryDto } from './dto/daily-query.dto';
-
-const UB_TZ = 'Asia/Ulaanbaatar';
+import { parseDayBound, UB_TZ, ymdInUlaanbaatar } from './report-dates';
 
 export type PaymentMethodTotals = {
   method: PayMethod;
+  /** Money received by this method in the period, before refunds. */
+  grossMnt: number;
+  /** Received minus refunds paid out by this method in the period (can be negative). */
   paidMnt: number;
   pendingMnt: number;
   paidCount: number;
@@ -22,6 +25,7 @@ export type DailyReport = {
     cashMnt: number;
     qpayMnt: number;
     cardMnt: number;
+    transferMnt: number;
     pendingMnt: number;
     deliveryFeesMnt: number;
     unloadingFeesMnt: number;
@@ -34,6 +38,7 @@ export type DailyReport = {
     cashMnt: number;
     qpayMnt: number;
     cardMnt: number;
+    transferMnt: number;
     count: number;
   };
   payments: PaymentMethodTotals[];
@@ -65,25 +70,15 @@ export type DailyReport = {
   };
 };
 
-function ymdInUlaanbaatar(date = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: UB_TZ }).format(date);
-}
-
-function parseDayBound(ymd: string, endOfDay: boolean): Date {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
-    throw new BadRequestException('Dates must be YYYY-MM-DD');
-  }
-  const iso = endOfDay ? `${ymd}T23:59:59.999+08:00` : `${ymd}T00:00:00.000+08:00`;
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) throw new BadRequestException('Invalid date');
-  return parsed;
-}
-
 @Injectable()
 export class ReportsService {
   private readonly log = new Logger(ReportsService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private async defaultWarehouseId() {
+    return (await this.prisma.warehouse.findFirst({ where: { isDefault: true }, select: { id: true } }))?.id ?? null;
+  }
 
   async daily(query: DailyQueryDto, user: AuthUser): Promise<DailyReport> {
     const startDate = query.startDate ?? ymdInUlaanbaatar();
@@ -100,27 +95,44 @@ export class ReportsService {
         throw new ForbiddenException('Cashiers can only view their own daily summary');
       }
       cashierId = user.id;
-    } else if (user.role === Role.ADMIN || user.role === Role.MANAGER) {
+    } else if (isManagerRole(user.role)) {
       cashierId = query.cashierId;
     } else {
       throw new ForbiddenException('Role is not allowed to view sales reports');
     }
 
+    // A branch manager's figures cover their own warehouses only.
+    const scope: Prisma.OrderWhereInput =
+      user.role === Role.BORLUULAGCH || seesAllWarehouses(user) ? {} : orderWarehouseWhere(user, await this.defaultWarehouseId());
     const orderWhere: Prisma.OrderWhereInput = {
+      AND: [scope],
       createdAt: { gte: startAt, lte: endAt },
       ...(cashierId ? { createdById: cashierId } : {}),
     };
+    // Sales figures (order count, fees, products, E-Barimt) count only orders that were actually paid.
     const billedWhere: Prisma.OrderWhereInput = {
       ...orderWhere,
-      status: { not: OrderStatus.CANCELLED },
+      status: { in: [OrderStatus.READY_FOR_LOADING, OrderStatus.COMPLETED] },
+    };
+    // Money is booked on the day it was received, not the day the order was created (a QPay invoice paid
+    // after midnight belongs to the next day). Rows from before paidAt was recorded fall back to createdAt.
+    const inRange = { gte: startAt, lte: endAt };
+    const paidWhere: Prisma.PaymentWhereInput = {
+      status: PaymentStatus.PAID,
+      OR: [{ paidAt: inRange }, { paidAt: null, createdAt: inRange }],
+      order: scope,
+      // A cashier's money is what they recorded; rows from before that was stored (and QPay paid by the
+      // customer) fall back to whoever made the order.
+      ...(cashierId ? { AND: [{ OR: [{ recordedById: cashierId }, { recordedById: null, order: { createdById: cashierId } }] }] } : {}),
     };
 
     const refundWhere: Prisma.SalesReturnWhereInput = {
       createdAt: { gte: startAt, lte: endAt },
+      order: scope,
       ...(cashierId ? { createdById: cashierId } : {}),
     };
 
-    const [cashier, statusGroups, logisticsAgg, paidSplits, pendingSplits, productGroups, ebarimtGroups, ebarimtReceipts, refundGroups] =
+    const [cashier, statusGroups, logisticsAgg, paidSplits, pendingSplits, soldLines, ebarimtGroups, ebarimtReceipts, refundGroups] =
       await Promise.all([
         cashierId
           ? this.prisma.user.findUnique({
@@ -145,19 +157,18 @@ export class ReportsService {
         }),
         this.prisma.payment.groupBy({
           by: ['method'],
-          where: { status: PaymentStatus.PAID, order: billedWhere },
+          where: paidWhere,
           _sum: { amountMnt: true },
           _count: { _all: true },
         }),
         this.prisma.payment.groupBy({
           by: ['method'],
-          where: { status: PaymentStatus.UNPAID, order: billedWhere },
+          where: { status: PaymentStatus.UNPAID, order: { ...orderWhere, status: OrderStatus.PENDING_PAYMENT } },
           _sum: { amountMnt: true },
         }),
-        this.prisma.orderItem.groupBy({
-          by: ['productId'],
+        this.prisma.orderItem.findMany({
           where: { order: billedWhere },
-          _sum: { quantity: true, lineTotal: true },
+          select: { productId: true, quantity: true, lineTotal: true, returnItems: { select: { quantity: true, lineRefund: true } } },
         }),
         this.prisma.order.groupBy({
           by: ['ebarimtStatus'],
@@ -199,20 +210,32 @@ export class ReportsService {
       cashMnt: refundByMethod.get(PayMethod.CASH)?._sum.refundAmount ?? 0,
       qpayMnt: refundByMethod.get(PayMethod.QPAY)?._sum.refundAmount ?? 0,
       cardMnt: refundByMethod.get(PayMethod.CARD)?._sum.refundAmount ?? 0,
+      transferMnt: refundByMethod.get(PayMethod.TRANSFER)?._sum.refundAmount ?? 0,
       count: refundGroups.reduce((s, r) => s + r._count._all, 0),
       totalMnt: 0,
     };
-    refunds.totalMnt = refunds.cashMnt + refunds.qpayMnt + refunds.cardMnt;
+    // Debt lowered by a return (CREDIT) hands out no money, so it is not in the refund total.
+    refunds.totalMnt = refunds.cashMnt + refunds.qpayMnt + refunds.cardMnt + refunds.transferMnt;
 
     const paidMap = new Map(paidSplits.map((row) => [row.method, row]));
     const pendingMap = new Map(pendingSplits.map((row) => [row.method, row]));
-    const payments: PaymentMethodTotals[] = [PayMethod.CASH, PayMethod.QPAY, PayMethod.CARD].map(
+    // Money methods only: CREDIT (owed) and OFFSET (netted) are not money received.
+    const refundedBy: Partial<Record<PayMethod, number>> = {
+      CASH: refunds.cashMnt,
+      QPAY: refunds.qpayMnt,
+      CARD: refunds.cardMnt,
+      TRANSFER: refunds.transferMnt,
+    };
+    const payments: PaymentMethodTotals[] = [PayMethod.CASH, PayMethod.QPAY, PayMethod.CARD, PayMethod.TRANSFER].map(
       (method) => {
-        const refunded =
-          method === PayMethod.CASH ? refunds.cashMnt : method === PayMethod.QPAY ? refunds.qpayMnt : refunds.cardMnt;
+        const refunded = refundedBy[method] ?? 0;
+        const grossMnt = paidMap.get(method)?._sum.amountMnt ?? 0;
+        // Net of refunds paid out the same way. Not clamped at zero: a day with more refunds than takings
+        // must show the shortfall, not hide it.
         return {
           method,
-          paidMnt: Math.max(0, (paidMap.get(method)?._sum.amountMnt ?? 0) - refunded),
+          grossMnt,
+          paidMnt: grossMnt - refunded,
           pendingMnt: pendingMap.get(method)?._sum.amountMnt ?? 0,
           paidCount: paidMap.get(method)?._count._all ?? 0,
         };
@@ -222,9 +245,23 @@ export class ReportsService {
     const cashMnt = payments.find((p) => p.method === PayMethod.CASH)?.paidMnt ?? 0;
     const qpayMnt = payments.find((p) => p.method === PayMethod.QPAY)?.paidMnt ?? 0;
     const cardMnt = payments.find((p) => p.method === PayMethod.CARD)?.paidMnt ?? 0;
-    const revenueMnt = cashMnt + qpayMnt + cardMnt;
+    const transferMnt = payments.find((p) => p.method === PayMethod.TRANSFER)?.paidMnt ?? 0;
+    const revenueMnt = cashMnt + qpayMnt + cardMnt + transferMnt;
     const pendingMnt = payments.reduce((sum, p) => sum + p.pendingMnt, 0);
 
+    // Products sold, net of anything already returned.
+    const sold = new Map<string, { quantity: number; amountMnt: number }>();
+    for (const line of soldLines) {
+      const returnedQty = line.returnItems.reduce((s, r) => s + Number(r.quantity), 0);
+      const returnedMnt = line.returnItems.reduce((s, r) => s + r.lineRefund, 0);
+      const row = sold.get(line.productId) ?? { quantity: 0, amountMnt: 0 };
+      row.quantity += Number(line.quantity) - returnedQty;
+      row.amountMnt += line.lineTotal - returnedMnt;
+      sold.set(line.productId, row);
+    }
+    const productGroups = [...sold.entries()]
+      .filter(([, v]) => v.quantity > 0 || v.amountMnt > 0)
+      .map(([productId, v]) => ({ productId, ...v }));
     const productIds = productGroups.map((g) => g.productId);
     const products = productIds.length
       ? await this.prisma.product.findMany({
@@ -239,10 +276,10 @@ export class ReportsService {
         return {
           productId: g.productId,
           sku: product?.sku ?? '',
-          nameMn: product?.nameMn ?? 'Unknown product',
+          nameMn: product?.nameMn ?? 'Тодорхойгүй бараа',
           nameEn: product?.nameEn ?? '',
-          quantity: Number(g._sum.quantity ?? 0),
-          amountMnt: g._sum.lineTotal ?? 0,
+          quantity: Math.round(g.quantity * 1000) / 1000,
+          amountMnt: g.amountMnt,
         };
       })
       .sort((a, b) => b.amountMnt - a.amountMnt)
@@ -271,6 +308,7 @@ export class ReportsService {
         cashMnt,
         qpayMnt,
         cardMnt,
+        transferMnt,
         pendingMnt,
         deliveryFeesMnt,
         unloadingFeesMnt,
@@ -302,11 +340,12 @@ export class ReportsService {
   }
 
   async listCashiers(user: AuthUser) {
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
+    if (!isManagerRole(user.role)) {
       throw new ForbiddenException('Only ADMIN and MANAGER can list cashiers');
     }
+    const scope = seesAllWarehouses(user) ? {} : (warehouseWhere(user, await this.defaultWarehouseId()) as Prisma.UserWhereInput);
     const rows = await this.prisma.user.findMany({
-      where: { role: Role.BORLUULAGCH, isActive: true, username: { not: WEBSHOP_USERNAME } },
+      where: { AND: [{ role: Role.BORLUULAGCH, isActive: true, username: { not: WEBSHOP_USERNAME } }, scope] },
       select: { id: true, fullName: true, username: true, email: true },
       orderBy: { fullName: 'asc' },
     });

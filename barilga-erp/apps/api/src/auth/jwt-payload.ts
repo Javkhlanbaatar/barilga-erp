@@ -5,4 +5,6 @@ export type JwtPayload = {
   email: string | null;
   username?: string;
   role: Role;
+  /** Issued at (seconds), added by the JWT library. */
+  iat?: number;
 };

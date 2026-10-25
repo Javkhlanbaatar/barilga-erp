@@ -1,5 +1,6 @@
+import { WarehouseKind } from '@prisma/client';
 import { Transform } from 'class-transformer';
-import { IsBoolean, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
@@ -26,9 +27,18 @@ export class CreateWarehouseDto {
   @IsString()
   @MaxLength(32)
   phone?: string;
+
+  /** SHOP = дэлгүүр (sells at the till), WAREHOUSE = агуулах (stores and sends). */
+  @IsOptional()
+  @IsEnum(WarehouseKind)
+  kind?: WarehouseKind;
 }
 
 export class UpdateWarehouseDto {
+  @IsOptional()
+  @IsEnum(WarehouseKind)
+  kind?: WarehouseKind;
+
   @IsOptional()
   @Transform(trim)
   @IsString()

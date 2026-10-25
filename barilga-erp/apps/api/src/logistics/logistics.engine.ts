@@ -37,7 +37,7 @@ export class VehicleLimitExceededError extends Error {
     readonly manipulator: VehicleLimit,
   ) {
     super(
-      `Сагсны үзүүлэлт Manipulator-ийн хязгаараас хэтэрсэн / Cart exceeds Manipulator limits ` +
+      `Сагсны жин, урт эсвэл эзлэхүүн манипуляторын даацаас хэтэрсэн — захиалгыг хувааж хийнэ үү / Cart exceeds Manipulator limits ` +
         `(max ${manipulator.maxWeightKg / 1000}t, ${manipulator.maxLengthM}m, ${manipulator.maxVolumeM3}m³). ` +
         `Одоогийн: ${specs.weightKg}кг, ${specs.maxLengthM}м, ${specs.volumeM3}м³. Захиалгыг хуваана уу.`,
     );
@@ -63,6 +63,16 @@ export function matchVehicle(specs: CartSpecs, vehicles: VehicleLimit[]): Vehicl
   return fit;
 }
 
+/** Like {@link matchVehicle} but null instead of an error when nothing fits. */
+export function tryMatchVehicle(specs: CartSpecs, vehicles: VehicleLimit[]): VehicleLimit | null {
+  try {
+    return matchVehicle(specs, vehicles);
+  } catch (err) {
+    if (err instanceof VehicleLimitExceededError) return null;
+    throw err;
+  }
+}
+
 export function expressSurgeRate(weightKg: number): number {
   if (weightKg <= 1_500) return 0.3;
   if (weightKg <= 5_000) return 0.4;
@@ -79,7 +89,8 @@ export type FeeBreakdown = {
   unloadingFeeMnt: number;
   timeAdjustmentMnt: number;
   totalMnt: number;
-  assignedVehicle: VehicleCode;
+  /** Smallest truck that fits; null when the customer collects and nothing fits (no truck of ours is involved). */
+  assignedVehicle: VehicleCode | null;
   expressSurgeRate: number | null;
   nightDiscountApplied: boolean;
 };
@@ -99,8 +110,9 @@ export function quoteFees(input: {
   unloadingRequested: boolean;
   vehicles: VehicleLimit[];
 }): FeeBreakdown {
-  const vehicle = matchVehicle(input.specs, input.vehicles);
   const zeroFees = isZeroFeeMethod(input.method);
+  // Truck capacity only limits orders we deliver. A customer collecting a big order is not refused.
+  const vehicle = zeroFees ? tryMatchVehicle(input.specs, input.vehicles) : matchVehicle(input.specs, input.vehicles);
 
   const deliveryFeeMnt = zeroFees ? 0 : input.zone.baseDeliveryFeeMnt;
   const unloadingFeeMnt = zeroFees ? 0 : calculateUnloadingFee(input.specs.weightKg, input.unloadingRequested);
@@ -128,7 +140,7 @@ export function quoteFees(input: {
     unloadingFeeMnt,
     timeAdjustmentMnt,
     totalMnt,
-    assignedVehicle: vehicle.code,
+    assignedVehicle: vehicle?.code ?? null,
     expressSurgeRate: surge,
     nightDiscountApplied,
   };

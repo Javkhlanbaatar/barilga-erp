@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, SourceType, StockMovementType } from '@prisma/client';
-import { productSearchWhere } from '../catalog/product-search';
+import { productSearchFilter } from '../catalog/product-search';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type StockStatus = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'NEGATIVE_STOCK';
@@ -51,6 +51,28 @@ export class InventoryService {
   constructor(private readonly prisma: PrismaService) {}
 
   // ───────── warehouses ─────────
+
+  /** Per active warehouse: on hand and in transit to it, for one product. */
+  async availability(productId: string) {
+    const [product, warehouses, balances, transit] = await Promise.all([
+      this.prisma.product.findUnique({ where: { id: productId }, select: { id: true, sku: true, nameMn: true, unit: true, priceMnt: true } }),
+      this.prisma.warehouse.findMany({ where: { isActive: true }, orderBy: [{ isDefault: 'desc' }, { name: 'asc' }], select: { id: true, code: true, name: true } }),
+      this.prisma.stockBalance.findMany({ where: { productId } }),
+      this.prisma.stockTransferItem.findMany({
+        where: { productId, transfer: { status: 'IN_TRANSIT' } },
+        select: { quantity: true, transfer: { select: { toWarehouseId: true } } },
+      }),
+    ]);
+    if (!product) return null;
+    return {
+      product,
+      warehouses: warehouses.map((w) => ({
+        ...w,
+        quantity: Number(balances.find((b) => b.warehouseId === w.id)?.quantity ?? 0),
+        inTransit: transit.filter((t) => t.transfer.toWarehouseId === w.id).reduce((s, t) => s + Number(t.quantity), 0),
+      })),
+    };
+  }
 
   async defaultWarehouseId(db: Db | PrismaService = this.prisma): Promise<string> {
     const w = await db.warehouse.findFirst({ where: { isDefault: true } });
@@ -261,22 +283,22 @@ export class InventoryService {
       productId,
       delta: quantity,
       type: StockMovementType.OPENING,
-      reason: ctx.reason ?? 'Opening balance',
+      reason: ctx.reason ?? 'Эхний үлдэгдэл',
     });
   }
 
   // ───────── reads ─────────
 
-  async listStock(q?: string, scope: { warehouseId?: string | null } = {}) {
+  async listStock(q?: string, scope: { warehouseId?: string | null; allowed?: string[] | null } = {}) {
     const warehouses = await this.prisma.warehouse.findMany({
-      where: { isActive: true },
+      where: { isActive: true, ...(scope.allowed ? { id: { in: scope.allowed } } : {}) },
       orderBy: [{ isDefault: 'desc' }, { code: 'asc' }],
     });
     if (scope.warehouseId && !warehouses.some((w) => w.id === scope.warehouseId)) {
       throw new NotFoundException('Warehouse not found');
     }
     const products = await this.prisma.product.findMany({
-      where: productSearchWhere(q),
+      where: await productSearchFilter(this.prisma, q),
       orderBy: { sku: 'asc' },
       include: { stockBalances: true },
     });
@@ -287,7 +309,9 @@ export class InventoryService {
       });
       const selected = scope.warehouseId
         ? (perWarehouse.find((w) => w.warehouseId === scope.warehouseId)?.quantity ?? 0)
-        : p.stockBalances.reduce((s, b) => s + Number(b.quantity), 0);
+        : scope.allowed
+          ? perWarehouse.reduce((s, w) => s + w.quantity, 0)
+          : p.stockBalances.reduce((s, b) => s + Number(b.quantity), 0);
       return { ...this.toStockItem({ ...p, stockQty: selected }), warehouses: perWarehouse };
     });
     return {
@@ -305,12 +329,12 @@ export class InventoryService {
   }
 
   /** Ledger for one product (optionally one warehouse), newest first. */
-  async listMovements(filter: { productId?: string; warehouseId?: string; limit?: number }) {
+  async listMovements(filter: { productId?: string; warehouseId?: string; allowed?: string[] | null; limit?: number }) {
     const take = Math.min(Math.max(filter.limit ?? 100, 1), 500);
     return this.prisma.stockMovement.findMany({
       where: {
         ...(filter.productId ? { productId: filter.productId } : {}),
-        ...(filter.warehouseId ? { warehouseId: filter.warehouseId } : {}),
+        ...(filter.warehouseId ? { warehouseId: filter.warehouseId } : filter.allowed ? { warehouseId: { in: filter.allowed } } : {}),
       },
       orderBy: { createdAt: 'desc' },
       take,

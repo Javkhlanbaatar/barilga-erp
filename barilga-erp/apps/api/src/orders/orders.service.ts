@@ -6,14 +6,20 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
-import { BillType, OrderStatus, PaymentStatus, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
+import { AccountEntryKind, BillType, OrderStatus, PaymentStatus, PayMethod, Prisma, Role, SourceType, TransferStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
+import { can } from '../auth/permissions';
+import { audit } from '../common/audit';
+import { searchKey } from '../common/translit';
+import { assertCashDrawerOpen } from '../cash/cash-drawer';
+import { partnerPayable } from '../customers/partner-payable';
 import { isFallbackPicker, isHiredTransport, isPosActor, isTransportActor, isWarehouseActor } from '../auth/rbac';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
 import { FeaturesService } from '../features/features.service';
 import { InventoryService } from '../inventory/inventory.service';
-import { assertWarehouseAccess, lockedWarehouseId } from '../inventory/warehouse-scope';
+import { assertWarehouseAccess, canAccessWarehouse, homeWarehouseId, isManagerRole, orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
 import { LogisticsService } from '../logistics/logistics.service';
 import { isZeroFeeMethod } from '../logistics/logistics.engine';
 import { PaymentService } from '../payment/payment.service';
@@ -33,24 +39,30 @@ import {
 const DRIVER_PHONE_RE = /^[0-9+\-]{8,15}$/;
 /** Order money columns are 32-bit integers; stay well inside them. */
 const MAX_ORDER_SUBTOTAL_MNT = 2_000_000_000;
+/** The name kept on a sale where no buyer was given. */
+const WALK_IN_NAME = 'Энгийн харилцагч';
 
 const ORDER_INCLUDE = {
-  items: { include: { product: true } },
+  // The purchase cost stays with managers' product screens: orders go to cashiers and warehouse staff too.
+  items: { include: { product: { omit: { lastCostMnt: true as const } }, pickedBy: { select: { id: true, fullName: true } } } },
   zone: true,
   warehouse: { select: { id: true, code: true, name: true } },
   payments: { orderBy: { createdAt: 'asc' as const } },
   createdBy: { select: { id: true, fullName: true, role: true } },
   completedBy: { select: { id: true, fullName: true, role: true } },
   preparedBy: { select: { id: true, fullName: true, role: true } },
+  pickingStartedBy: { select: { id: true, fullName: true } },
   feeOverrides: { orderBy: { createdAt: 'desc' as const }, include: { actor: { select: { fullName: true, role: true } } } },
   returns: {
     orderBy: { createdAt: 'desc' as const },
     include: {
-      items: { include: { orderItem: { include: { product: true } } } },
+      items: { include: { orderItem: { include: { product: { omit: { lastCostMnt: true as const } } } } } },
       createdBy: { select: { id: true, fullName: true, role: true } },
     },
   },
   supplierPayables: true,
+  // The invoice number is the payment reference the buyer writes on the transfer.
+  invoice: { select: { invoiceNumber: true, cancelledAt: true } },
   stockReconciliations: {
     orderBy: { createdAt: 'desc' as const },
     include: { actor: { select: { id: true, fullName: true, role: true } } },
@@ -71,7 +83,14 @@ export class OrdersService {
   ) {}
 
   async buildSpecs(
-    items: { productId: string; quantity: number; sourceType?: SourceType; supplierName?: string }[],
+    items: { productId: string; quantity: number; sourceType?: SourceType; supplierName?: string; unitPriceMnt?: number }[],
+    /**
+     * The customer's prices by product: their own (set at the till) first, then their price list; anything else
+     * sells at retail.
+     */
+    prices?: { own?: Map<string, number>; list?: Map<string, number> },
+    /** A price typed at the till is accepted only from someone with the PRICE_OVERRIDE right. */
+    opts: { mayOverride?: boolean } = {},
   ) {
     const ids = items.map((i) => i.productId);
     const products = await this.prisma.product.findMany({ where: { id: { in: ids }, active: true } });
@@ -79,6 +98,8 @@ export class OrdersService {
       throw new BadRequestException('One or more products are invalid or inactive');
     }
     const byId = new Map(products.map((p) => [p.id, p]));
+    // Per line: the price it would have had, and where it came from (for the till).
+    const pricing: { basePrice: number; source: 'CUSTOMER' | 'LIST' | 'RETAIL' | 'MANUAL' }[] = [];
     let subtotalMnt = 0;
     let weightKg = 0;
     let maxLengthM = 0;
@@ -86,7 +107,24 @@ export class OrdersService {
     const lines = items.map((line) => {
       const product = byId.get(line.productId)!;
       const qty = line.quantity;
-      const unitPrice = product.priceMnt;
+      // A customer's own price that a later receipt's cost has overtaken no longer applies (never below cost):
+      // their list or retail does, until someone sets a new one.
+      const ownSaved = prices?.own?.get(product.id);
+      const own = ownSaved !== undefined && product.lastCostMnt && ownSaved < product.lastCostMnt ? undefined : ownSaved;
+      const listed = prices?.list?.get(product.id);
+      const basePrice = own ?? listed ?? product.priceMnt;
+      const asked = line.unitPriceMnt;
+      const manual = asked !== undefined && asked !== null && asked !== basePrice;
+      if (manual) {
+        if (!opts.mayOverride) throw new ForbiddenException('Үнэ өөрчлөх эрх байхгүй / You may not change prices');
+        if (!Number.isInteger(asked) || asked < 1) throw new BadRequestException('Үнэ 1₮-өөс бага байж болохгүй / unitPriceMnt must be at least 1');
+        // Never below what the goods cost us (the last receipt's cost); goods with no cost recorded have no floor.
+        if (product.lastCostMnt && asked < product.lastCostMnt) {
+          throw new BadRequestException(`«${product.nameMn}»: өртгөөс доош үнээр зарахгүй / Price below cost`);
+        }
+      }
+      const unitPrice = manual ? asked : basePrice;
+      pricing.push({ basePrice, source: manual ? 'MANUAL' : own !== undefined ? 'CUSTOMER' : listed !== undefined ? 'LIST' : 'RETAIL' });
       const lineTotal = Math.round(unitPrice * qty);
       const w = Number(product.weightKg) * qty;
       const v = Number(product.volumeM3) * qty;
@@ -107,6 +145,7 @@ export class OrdersService {
         productId: product.id,
         quantity: new Prisma.Decimal(qty),
         unitPrice,
+        listPriceMnt: manual ? basePrice : null,
         weightKg: new Prisma.Decimal(w),
         lengthM: new Prisma.Decimal(len),
         volumeM3: new Prisma.Decimal(v),
@@ -114,31 +153,32 @@ export class OrdersService {
         sourceType,
         supplierName:
           sourceType === SourceType.EXTERNAL_SUPPLIER
-            ? line.supplierName?.trim() || 'Other store'
+            ? line.supplierName?.trim() || 'Өөр дэлгүүр'
             : null,
       };
     });
     return {
       lines,
+      pricing,
       specs: {
         subtotalMnt,
         weightKg: Number(weightKg.toFixed(3)),
         maxLengthM: Number(maxLengthM.toFixed(2)),
-        volumeM3: Number(volumeM3.toFixed(3)),
+        volumeM3: Number(volumeM3.toFixed(6)),
       },
     };
   }
 
   /**
    * Which warehouse an order takes its stock from: the one asked for, else the user's own, else the default.
-   * Staff locked to a warehouse can only sell from it.
+   * Staff and branch managers can only sell from their own warehouses.
    */
   private async resolveOrderWarehouse(requested: string | undefined, user: AuthUser) {
-    const locked = lockedWarehouseId(user);
-    if (locked && requested && requested !== locked) {
+    const id = await this.inventory.resolveWarehouseId(this.prisma, requested ?? homeWarehouseId(user));
+    if (!canAccessWarehouse(user, id)) {
       throw new ForbiddenException('You can only create orders for your own warehouse');
     }
-    return this.inventory.resolveWarehouseId(this.prisma, requested ?? user.warehouseId ?? null);
+    return id;
   }
 
   async resolveZoneId(zoneId: string | undefined, method: QuoteOrderDto['deliveryMethod']) {
@@ -154,16 +194,30 @@ export class OrdersService {
     return fallback.id;
   }
 
-  async quote(dto: QuoteOrderDto) {
-    const { specs } = await this.buildSpecs(dto.items);
+  async quote(dto: QuoteOrderDto, user?: AuthUser) {
+    const customer = await this.resolveCustomer(dto.customerId);
+    const { lines, pricing, specs } = await this.buildSpecs(dto.items, customer?.prices, { mayOverride: Boolean(user && can(user, 'PRICE_OVERRIDE')) });
     const zoneId = await this.resolveZoneId(dto.zoneId, dto.deliveryMethod);
-    return this.logistics.quote({
+    const quote = await this.logistics.quote({
       zoneId,
       method: dto.deliveryMethod,
       time: dto.timeCondition ?? 'STANDARD',
       unloadingRequested: isZeroFeeMethod(dto.deliveryMethod) ? false : dto.unloadingRequested,
       specs,
     });
+    // The price each line will be sold at (typed, the customer's own, their list or retail), so the till shows the
+    // real amounts, plus the price it would have without a typed one.
+    return {
+      ...quote,
+      priceList: customer?.priceListName ?? null,
+      lines: lines.map((l, i) => ({
+        productId: l.productId,
+        unitPrice: l.unitPrice,
+        lineTotal: l.lineTotal,
+        basePrice: pricing[i].basePrice,
+        priceSource: pricing[i].source,
+      })),
+    };
   }
 
   /**
@@ -171,37 +225,104 @@ export class OrdersService {
    * Orders from before warehouses existed (warehouseId null) belong to the default warehouse.
    */
   private async assertOrderAccess(user: AuthUser, warehouseId: string | null) {
-    if (!lockedWarehouseId(user)) return;
+    if (seesAllWarehouses(user)) return;
     const fallback = warehouseId ? undefined : await this.inventory.defaultWarehouseId();
     assertWarehouseAccess(user, warehouseId, fallback);
   }
 
-  /** List filter for a locked user's own warehouse (including pre-warehouse orders when it is the default). */
+  /** List filter for the user's own warehouses (including pre-warehouse orders when the default is one). */
   private async orderScope(user: AuthUser): Promise<Prisma.OrderWhereInput> {
-    const locked = lockedWarehouseId(user);
-    if (!locked) return {};
-    const isDefault = locked === (await this.inventory.defaultWarehouseId());
-    return isDefault ? { OR: [{ warehouseId: locked }, { warehouseId: null }] } : { warehouseId: locked };
+    if (seesAllWarehouses(user)) return {};
+    return orderWarehouseWhere(user, await this.inventory.defaultWarehouseId());
   }
 
   /** A linked customer must exist and be active, and the customer module must be switched on. */
   private async resolveCustomerId(customerId?: string): Promise<string | null> {
+    return (await this.resolveCustomer(customerId))?.id ?? null;
+  }
+
+  /**
+   * The linked customer and, when the price-list module is on and their list is active, the prices they buy at.
+   */
+  private async resolveCustomer(customerId?: string) {
     if (!customerId) return null;
     if (!this.features) throw new BadRequestException('Customer linking is not available');
     await this.features.assertEnabled('CUSTOMERS');
-    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { priceList: { include: { items: true } }, ownPrices: true },
+    });
     if (!customer) throw new BadRequestException('Customer not found');
     if (!customer.isActive) throw new BadRequestException('Customer is deactivated');
-    return customer.id;
+    const list = customer.priceList?.isActive && (await this.features.isEnabled('PRICE_LISTS')) ? customer.priceList : null;
+    return {
+      id: customer.id,
+      creditAllowed: customer.creditAllowed,
+      contractPartner: customer.sellsToUs || !!customer.barterContract,
+      name: customer.name,
+      priceListId: list?.id ?? null,
+      priceListName: list?.name ?? null,
+      prices: {
+        own: new Map(customer.ownPrices.map((p) => [p.productId, p.priceMnt])),
+        list: list ? new Map(list.items.map((i) => [i.productId, i.priceMnt])) : undefined,
+      },
+    };
   }
 
   async create(dto: CreateOrderDto, user: AuthUser) {
     if (!isPosActor(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can create orders');
     }
+    const customer = await this.resolveCustomer(dto.customerId);
+    const splitMethods = dto.payments?.length ? dto.payments.map((p) => p.method) : [dto.paymentMethod ?? CheckoutPaymentMethod.QPAY];
+    if (splitMethods.includes(CheckoutPaymentMethod.CREDIT)) {
+      // Releasing goods on account needs someone to owe the money: a registered customer.
+      if (this.features) await this.features.assertEnabled('CREDIT_SALES');
+      if (!customer) throw new BadRequestException('Дараа төлөхөөр олгоход бүртгэлтэй харилцагч сонгоно уу / On-account sale needs a registered customer');
+      if (!customer.creditAllowed) {
+        throw new ForbiddenException('Энэ харилцагчид дараа төлөх эрх менежерээс олгогдоогүй / Customer may not take goods on account');
+      }
+    }
+    if (splitMethods.includes(CheckoutPaymentMethod.INVOICE) && this.features) await this.features.assertEnabled('INVOICES');
+    // The invoice asks for everything still unpaid, and one «Мөнгө орсон» confirms every waiting transfer at
+    // once. So the rest of an invoice split is paid there and then: cash or card only (not QPay, a transfer
+    // or on account).
+    if (
+      splitMethods.includes(CheckoutPaymentMethod.INVOICE) &&
+      splitMethods.some((m) => m !== CheckoutPaymentMethod.INVOICE && m !== CheckoutPaymentMethod.CASH && m !== CheckoutPaymentMethod.CARD)
+    ) {
+      throw new BadRequestException('Нэхэмжлэхтэй хуваахад үлдсэнийг бэлэн эсвэл картаар авна / An invoice part goes with cash or card only');
+    }
+    const contractSplits = (dto.payments ?? []).filter((p) => p.method === CheckoutPaymentMethod.CONTRACT);
+    if (splitMethods.includes(CheckoutPaymentMethod.CONTRACT)) {
+      if (this.features) await this.features.assertEnabled('PARTNER_ACCOUNTS');
+      if (!customer) throw new BadRequestException('Гэрээгээр олгоход харилцагч сонгоно уу / Contract sale needs a partner');
+      if (!customer.contractPartner) {
+        throw new ForbiddenException('Энэ харилцагч нийлүүлэгч эсвэл бартерын гэрээтэй биш / Customer has no supply or barter contract');
+      }
+      // The other parts must be paid on the spot, so the goods are released (and netted) right away.
+      if (
+        splitMethods.some(
+          (m) => m === CheckoutPaymentMethod.QPAY || m === CheckoutPaymentMethod.INVOICE || m === CheckoutPaymentMethod.TRANSFER,
+        )
+      ) {
+        throw new BadRequestException('Гэрээгээр олгохдоо үлдсэн хэсгийг бэлэн эсвэл картаар авна / Contract part goes with cash or card only');
+      }
+      if (contractSplits.length > 1 || splitMethods.includes(CheckoutPaymentMethod.CREDIT)) {
+        throw new BadRequestException('Гэрээгээр болон дараа төлөхөөр нэг захиалгад зэрэг олгохгүй / Only one contract part, not combined with on-account');
+      }
+      if (!dto.payments?.length) {
+        throw new BadRequestException('Гэрээгээр олгоход дүнг хувааж оруулна / Send the contract part as a payment split');
+      }
+      // Checked before anything is written: the contract part may not exceed what we currently owe the partner.
+      const payable = await this.partnerPayable(customer.id);
+      if (contractSplits[0].amount > payable) {
+        throw new BadRequestException(`Гэрээгээр олгох дүн бидний өглөгөөс (${payable}₮) их байна / Contract part exceeds what we owe (${payable}₮)`);
+      }
+    }
     const zoneId = await this.resolveZoneId(dto.zoneId, dto.deliveryMethod);
     const unloadingRequested = isZeroFeeMethod(dto.deliveryMethod) ? false : dto.unloadingRequested;
-    const { lines, specs } = await this.buildSpecs(dto.items);
+    const { lines, specs } = await this.buildSpecs(dto.items, customer?.prices, { mayOverride: can(user, 'PRICE_OVERRIDE') });
     const { breakdown } = await this.logistics.quote({
       zoneId,
       method: dto.deliveryMethod,
@@ -210,15 +331,24 @@ export class OrdersService {
       specs,
     });
 
+    // Split payments must add up to the total before anything is written, so a typo at the till does not
+    // leave a cancelled order behind in the list.
+    if (dto.payments?.length) {
+      const sum = dto.payments.reduce((s, p) => s + Math.round(Number(p.amount)), 0);
+      if (sum !== breakdown.totalMnt) {
+        throw new BadRequestException(`Төлбөрийн хуваалт ${sum}₮ нь нийт дүн ${breakdown.totalMnt}₮-тэй тэнцэхгүй / Payment splits do not equal the total`);
+      }
+    }
+    if (splitMethods.includes(CheckoutPaymentMethod.CASH)) await assertCashDrawerOpen(this.prisma, user.id);
     const billType = dto.billType ?? BillType.CITIZEN;
     const customerRegNumber = dto.customerRegNumber?.trim() || null;
     if (billType === BillType.COMPANY) {
       if (!customerRegNumber || !/^[0-9A-Za-z]{7,12}$/.test(customerRegNumber)) {
-        throw new BadRequestException('Company E-Barimt requires a valid registration number (РД, 7–12 characters)');
+        throw new BadRequestException('Байгууллагын И-баримтад зөв РД оруулна уу (7–12 тэмдэгт) / Company E-Barimt requires a valid registration number (РД, 7–12 characters)');
       }
     }
 
-    const customerId = await this.resolveCustomerId(dto.customerId);
+    const customerId = customer?.id ?? null;
     const hiredOnCreate = this.optionalHiredOnCreate(dto);
     const warehouseId = await this.resolveOrderWarehouse(dto.warehouseId, user);
     const trackingToken = randomBytes(24).toString('base64url');
@@ -227,9 +357,10 @@ export class OrdersService {
       data: {
         orderNumber,
         status: OrderStatus.PENDING_PAYMENT,
-        customerName: dto.customerName,
+        customerName: dto.customerName?.trim() || WALK_IN_NAME,
         customerPhone: dto.customerPhone,
         customerId,
+        priceListId: customer?.priceListId ?? null,
         deliveryAddress: dto.deliveryAddress,
         notes: dto.notes,
         billType,
@@ -267,8 +398,11 @@ export class OrdersService {
       dto.payments && dto.payments.length > 0
         ? dto.payments.map((p) => ({ method: p.method, amount: p.amount }))
         : [{ method: dto.paymentMethod ?? CheckoutPaymentMethod.QPAY, amount: order.totalMnt }];
+    const contract = splits.find((s) => s.method === CheckoutPaymentMethod.CONTRACT);
+    // Recorded as an on-account part, then closed at once against our payable below.
+    if (contract) contract.method = CheckoutPaymentMethod.CREDIT;
     try {
-      const recorded = await this.payments.settleSplits(order.id, splits);
+      const recorded = await this.payments.settleSplits(order.id, splits, user.id);
       this.log.log(
         `Order ${order.orderNumber} created; ${recorded.length} payment split(s)`,
       );
@@ -292,8 +426,90 @@ export class OrdersService {
       });
       throw err;
     }
+    if (contract && customer) await this.closeAgainstPayable(order.id, order.orderNumber, customer.id, Math.round(Number(contract.amount)), user.id);
+    // The sale and its money are already recorded: a failure here is logged, never shown as a failed sale.
+    await this.recordTypedPrices(order.orderNumber, lines, customer, user).catch((err) =>
+      this.log.error(`Order ${order.orderNumber}: typed prices not recorded: ${err instanceof Error ? err.message : err}`),
+    );
     const created = await this.prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: ORDER_INCLUDE });
     return this.presentOrder(created, user.role);
+  }
+
+  /**
+   * Prices typed at the till: written to the edit history, and — when a registered customer is on the order —
+   * kept as that customer's own price, so their next purchase gets it by itself.
+   */
+  private async recordTypedPrices(
+    orderNumber: string,
+    lines: { productId: string; unitPrice: number; listPriceMnt: number | null }[],
+    customer: { id: string; name: string } | null,
+    user: AuthUser,
+  ) {
+    const typed = lines.filter((l) => l.listPriceMnt !== null);
+    if (!typed.length) return;
+    const names = new Map(
+      (await this.prisma.product.findMany({ where: { id: { in: typed.map((l) => l.productId) } }, select: { id: true, nameMn: true } })).map((p) => [p.id, p.nameMn]),
+    );
+    if (customer) await this.saveOwnPrices(customer.id, typed, user);
+    await audit(this.prisma, {
+      entityType: 'SALE_PRICE',
+      entityId: orderNumber,
+      summary:
+        `${orderNumber}: касс дээр үнэ өөрчилсөн — ` +
+        typed.map((l) => `${names.get(l.productId) ?? l.productId} ${l.listPriceMnt}₮ → ${l.unitPrice}₮`).join(', ') +
+        (customer ? ` («${customer.name}»-ийн хувийн үнэ болгов)` : ''),
+      after: { lines: typed.map((l) => ({ productId: l.productId, from: l.listPriceMnt, to: l.unitPrice })), customerId: customer?.id ?? null },
+      actorId: user.id,
+    });
+    this.log.log(`Order ${orderNumber}: ${typed.length} typed price(s) by ${user.id}${customer ? `, saved for customer ${customer.id}` : ''}`);
+  }
+
+  /** Keeps typed prices as the customer's own prices (the latest one wins). */
+  private async saveOwnPrices(customerId: string, typed: { productId: string; unitPrice: number }[], user: AuthUser) {
+    for (const l of typed) {
+      await this.prisma.customerPrice.upsert({
+        where: { customerId_productId: { customerId, productId: l.productId } },
+        create: { customerId, productId: l.productId, priceMnt: l.unitPrice, updatedById: user.id },
+        update: { priceMnt: l.unitPrice, updatedById: user.id },
+      });
+    }
+  }
+
+  /** What we owe the partner: purchases minus our payments and offsets (positive = we owe them). */
+  private partnerPayable(customerId: string) {
+    return partnerPayable(this.prisma, customerId);
+  }
+
+  /**
+   * Contract sale: the on-account part is paid at once out of what we owe the partner (one OFFSET payment and one
+   * OFFSET account line, the same records as a manual хасалт). If our payable shrank meanwhile, the part is left
+   * as an ordinary debt on the partner's account for a manager to settle — it is never silently dropped.
+   */
+  private async closeAgainstPayable(orderId: string, orderNumber: string, customerId: string, amountMnt: number, actorId: string) {
+    try {
+      // The payable is re-read inside the same Serializable transaction as the settlement and the OFFSET line,
+      // so two contract sales at once cannot both spend the same payable.
+      await this.payments.settleCredit(orderId, 'OFFSET', amountMnt, actorId, {
+        before: async (tx) => {
+          if (amountMnt > (await partnerPayable(tx, customerId))) throw new BadRequestException('payable_shrank');
+        },
+        after: async (tx) => {
+          await tx.accountEntry.create({
+            data: {
+              customerId,
+              kind: AccountEntryKind.OFFSET,
+              amountMnt: -amountMnt,
+              description: `Гэрээгээр олгосон — ${orderNumber}`,
+              refType: 'ORDER',
+              refId: orderId,
+              createdById: actorId,
+            },
+          });
+        },
+      });
+    } catch (err) {
+      this.log.warn(`Contract sale ${orderNumber}: not netted (${err instanceof Error ? err.message : err}); left on the partner account as debt`);
+    }
   }
 
   /**
@@ -328,9 +544,11 @@ export class OrdersService {
       throw new BadRequestException('Fees are unchanged');
     }
 
+    if (this.features) await this.features.assertEnabled('DELIVERY');
     const newTotal = order.subtotalMnt + dto.deliveryFeeMnt + dto.unloadingFeeMnt + dto.timeAdjustmentMnt;
-    if (newTotal <= 0) {
-      throw new BadRequestException('Order total must stay above 0₮');
+    // Fees can be waived, but never turned into a discount on the goods themselves.
+    if (newTotal < order.subtotalMnt || dto.deliveryFeeMnt < 0 || dto.unloadingFeeMnt < 0) {
+      throw new BadRequestException('Хураамжийг барааны үнээс доош хасаж болохгүй / Fees cannot discount the goods');
     }
 
     await this.payments.replaceSoleQpayInvoice(orderId, newTotal, async (tx) => {
@@ -433,11 +651,13 @@ export class OrdersService {
   }
 
   private presentPublic(order: Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>) {
+    // The link may be in other hands (a driver, an earlier buyer): the phone is shown only partly.
+    const digits = (order.customerPhone ?? '').replace(/\D/g, '');
     return {
       orderNumber: order.orderNumber,
       status: order.status,
       customerName: order.customerName,
-      customerPhone: order.customerPhone,
+      customerPhone: digits.length >= 6 ? `${digits.slice(0, 2)}••••${digits.slice(-2)}` : digits ? '••••' : '',
       deliveryAddress: order.deliveryAddress,
       deliveryMethod: order.deliveryMethod,
       zone: { nameMn: order.zone.nameMn, code: order.zone.code },
@@ -552,7 +772,7 @@ export class OrdersService {
               warehouseId: withItems.warehouseId,
               refType: 'ORDER',
               refId: orderId,
-              reason: `Order ${withItems.orderNumber} completed`,
+              reason: `Захиалга ${withItems.orderNumber} олгосон`,
               actorId: user.id,
             });
             // A manager may already have assigned a supplier before completion (assignSupplier creates
@@ -584,19 +804,285 @@ export class OrdersService {
     throw lastError;
   }
 
-  async list(user: AuthUser, status?: OrderStatus) {
+  /** The customer pays (part of) what they owe on an order released on account. */
+  /** The waiting part (unpaid QPay or awaited transfer) was paid another way at the till. */
+  async payRemaining(orderId: string, method: 'CASH' | 'CARD' | 'TRANSFER', user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can take payments');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
+    await this.payments.payRemaining(orderId, method, user.id);
+    return this.findOne(orderId, user);
+  }
+
+  /**
+   * "Төлбөр шалгах": asks QPay now about every waiting or expired invoice of the order (a customer may pay
+   * after the automatic checks stopped). Paid ones are settled exactly as the webhook would.
+   */
+  async checkQpay(orderId: string, user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can take payments');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId }, include: { payments: true } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    const open = order.payments.filter(
+      (p) => p.method === PayMethod.QPAY && (p.status === PaymentStatus.UNPAID || p.status === PaymentStatus.EXPIRED),
+    );
+    const outcomes: string[] = [];
+    for (const p of open) {
+      try {
+        outcomes.push(await this.payments.verifyAndSettle(p, `manual-check:${user.id}`));
+      } catch {
+        throw new ServiceUnavailableException('QPay-тэй холбогдож чадсангүй, түр хүлээгээд дахин шалгана уу / Cannot reach QPay');
+      }
+    }
+    return { outcomes, order: await this.findOne(orderId, user) };
+  }
+
+  /**
+   * Sets (or replaces) who the order is for after the sale (an invoice printed with empty buyer lines, then the
+   * customer was registered). Name, phone and РД on the order and its invoice follow the customer. Not once part of
+   * it is on account or offset against a partner: that money is already booked to whoever was chosen at the till.
+   *
+   * While no E-Barimt is out yet, the bill type follows the buyer too: a company with an РД gets a company receipt,
+   * anyone else a citizen one. Once the receipt is issued (or being issued) its bill type and company РД are fixed:
+   * only a buyer with the same ones can be attached, and then only name and phone change.
+   */
+  async attachCustomer(orderId: string, customerId: string, user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can change the buyer');
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: { payments: true, invoice: true, items: { include: { product: { select: { nameMn: true, priceMnt: true } } } } },
+    });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (order.status === OrderStatus.CANCELLED) throw new BadRequestException('Order is cancelled');
+    if (order.payments.some((p) => p.method === PayMethod.CREDIT || p.method === PayMethod.OFFSET)) {
+      throw new BadRequestException('Зээл эсвэл гэрээгээр олгосон захиалгын харилцагчийг солихгүй / The buyer of an on-account or contract sale cannot change');
+    }
+    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer || !customer.isActive) throw new NotFoundException('Customer not found');
+    // A company bill only with a РД the receipt service takes (the same rule as at the till); otherwise a citizen one.
+    const typedReg = customer.regNumber?.trim() || null;
+    const regNumber = typedReg && /^[0-9A-Za-z]{7,12}$/.test(typedReg) ? typedReg : null;
+    const billType = customer.type === 'COMPANY' && regNumber ? BillType.COMPANY : BillType.CITIZEN;
+    // Prices worked out for another registered buyer (their list or own price) do not move to a different one
+    // without the right to change prices: re-attaching must not carry one customer's deal to another.
+    if (
+      order.customerId &&
+      order.customerId !== customer.id &&
+      !can(user, 'PRICE_OVERRIDE') &&
+      order.items.some((i) => i.listPriceMnt === null && i.product && i.unitPrice !== i.product.priceMnt)
+    ) {
+      throw new ForbiddenException(
+        'Энэ захиалгын үнэ өмнөх харилцагчийн үнээр бодогдсон — өөр харилцагч руу шилжүүлэхэд «Үнэ өөрчлөх» эрх хэрэгтэй / Prices were set for the previous customer',
+      );
+    }
+    // A failed receipt is not out yet and is sent again with what is on the order now.
+    const receiptOpen = order.ebarimtStatus === 'NOT_ISSUED' || order.ebarimtStatus === 'FAILED';
+    if (!receiptOpen && (billType !== order.billType || (billType === BillType.COMPANY && regNumber !== order.customerRegNumber))) {
+      throw new BadRequestException('Баримт гарсан тул РД солихгүй / Receipt already issued');
+    }
+    // Replacing a buyer — a registered one, or a name/phone/РД typed at the till that is not this customer's —
+    // gives the invoice a new link: whoever got the old one must not see the new buyer. Only a blank «……» sale,
+    // or the same phone or РД, keeps it. The earlier buyer's e-mail does not stay as where the invoice goes.
+    // (The order's tracking link stays: a hired driver and a web-shop buyer use it.)
+    const phone = (p?: string | null) => {
+      const d = (p ?? '').replace(/\D/g, '');
+      return d.length > 8 && d.startsWith('976') ? d.slice(3) : d;
+    };
+    const reg = (r?: string | null) => (r ?? '').replace(/\s+/g, '').toUpperCase();
+    const typedBuyer =
+      Boolean(phone(order.customerPhone)) || Boolean(reg(order.customerRegNumber)) || ![WALK_IN_NAME, ''].includes(order.customerName.trim());
+    const [phoneA, phoneB, regA, regB] = [phone(order.customerPhone), phone(customer.phone), reg(order.customerRegNumber), reg(customer.regNumber)];
+    // The same buyer: a matching phone or РД, and nothing typed that says otherwise (the same agent's phone with
+    // another company's РД is another buyer).
+    const conflict = Boolean((phoneA && phoneB && phoneA !== phoneB) || (regA && regB && regA !== regB));
+    const sameTyped = Boolean((phoneA && phoneA === phoneB) || (regA && regA === regB)) && !conflict;
+    const replacing = order.customerId ? order.customerId !== customer.id : typedBuyer && !sameTyped;
+    // An invoice already sent to someone (its own e-mail or phone) that is not this customer gets a new link too.
+    const inv = order.invoice;
+    const sentElsewhere = Boolean(
+      inv?.sentAt &&
+        ((inv.recipientEmail && inv.recipientEmail.trim().toLowerCase() !== (customer.email ?? '').trim().toLowerCase()) ||
+          (inv.recipientPhone && phone(inv.recipientPhone) !== phoneB)),
+    );
+    const newLink = replacing || sentElsewhere;
+    await this.prisma.$transaction(async (tx) => {
+      // Conditional on the receipt state read above, so a receipt sent meanwhile never gets a different РД.
+      const claimed = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          status: { not: OrderStatus.CANCELLED },
+          ebarimtStatus: receiptOpen ? { in: ['NOT_ISSUED', 'FAILED'] } : order.ebarimtStatus,
+          // ...and on the buyer read above: two attaches at once must not both decide «not replacing».
+          customerId: order.customerId,
+        },
+        data: {
+          customerId: customer.id,
+          customerName: customer.name,
+          customerPhone: customer.phone,
+          ...(receiptOpen ? { billType, customerRegNumber: regNumber } : {}),
+        },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException('Захиалга дөнгөж өөрчлөгдсөн тул дахин оролдоно уу / The order just changed; reload and try again');
+      }
+      await tx.invoice.updateMany({
+        where: { orderId },
+        data: {
+          customerId: customer.id,
+          recipientEmail: customer.email ?? (replacing ? null : undefined),
+          recipientPhone: customer.phone,
+          // A link already sent to the previous buyer must not show the new buyer's details: new link,
+          // and it counts as not sent yet.
+          ...(newLink ? { token: randomBytes(24).toString('base64url'), sentAt: null, viewedAt: null, lastSentVia: null, sendCount: 0 } : {}),
+        },
+      });
+    });
+    this.log.log(
+      `Order ${order.orderNumber}: buyer ${replacing ? 'replaced by' : 'set to'} ${customer.name} (${customer.id})` +
+        `${receiptOpen ? `, bill ${billType}` : ''} by ${user.id}`,
+    );
+    // Prices typed at the till for this sale become the buyer's own prices, as when the buyer is picked at the till.
+    const typed = order.customerId === customer.id ? [] : order.items.filter((i) => i.listPriceMnt !== null);
+    if (typed.length) {
+      await this.saveOwnPrices(customer.id, typed, user)
+        .then(() =>
+          audit(this.prisma, {
+            entityType: 'CUSTOMER_PRICE',
+            entityId: customer.id,
+            summary: `${customer.name}: ${order.orderNumber}-д авагчаар нэмэхэд хувийн үнэ болгов — ${typed.map((i) => `${i.product?.nameMn ?? i.productId} ${i.unitPrice}₮`).join(', ')}`,
+            after: { orderNumber: order.orderNumber, lines: typed.map((i) => ({ productId: i.productId, priceMnt: i.unitPrice })) },
+            actorId: user.id,
+          }),
+        )
+        .catch((err) => this.log.error(`Order ${order.orderNumber}: own prices not saved: ${err instanceof Error ? err.message : err}`));
+    }
+    return this.findOne(orderId, user);
+  }
+
+  async confirmTransfer(orderId: string, user: AuthUser) {
+    if (!isPosActor(user.role)) throw new ForbiddenException('Only cashiers, managers, or admin can confirm payments');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    await this.payments.confirmTransfer(orderId, user.id);
+    return this.findOne(orderId, user);
+  }
+
+  async settleCredit(orderId: string, method: 'CASH' | 'CARD' | 'TRANSFER', amountMnt: number, user: AuthUser) {
+    if (!isPosActor(user.role)) {
+      throw new ForbiddenException('Only cashiers, managers, or admin can take payments');
+    }
+    if (this.features) await this.features.assertEnabled('CREDIT_SALES');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (method === 'CASH') await assertCashDrawerOpen(this.prisma, user.id);
+    await this.payments.settleCredit(orderId, method, amountMnt, user.id);
+    return this.findOne(orderId, user);
+  }
+
+  /** Sets the start of preparation once (the first caller wins; later calls change nothing). */
+  private markPickingStarted(orderId: string, userId: string) {
+    return this.prisma.order.updateMany({
+      where: { id: orderId, status: OrderStatus.READY_FOR_LOADING, pickingStartedAt: null },
+      data: { pickingStartedAt: new Date(), pickingStartedById: userId },
+    });
+  }
+
+  /**
+   * "Би бэлдье": a worker takes the order; it moves from the queue to "being prepared" and the preparation
+   * time starts. Pressing it again (or by a second picker joining) keeps the original start.
+   */
+  async startPicking(orderId: string, user: AuthUser) {
+    if (!isWarehouseActor(user.role)) {
+      throw new ForbiddenException('Warehouse staff, cashiers, managers, or admin can prepare orders');
+    }
+    if (this.features) await this.features.assertEnabled('PICKING');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (order.status !== OrderStatus.READY_FOR_LOADING) {
+      throw new BadRequestException('Only a paid order waiting for loading can be prepared');
+    }
+    const started = await this.markPickingStarted(orderId, user.id);
+    if (started.count === 1) this.log.log(`Picking started on ${order.orderNumber} by ${user.id}`);
+    return this.findOne(orderId, user);
+  }
+
+  /**
+   * Picking checklist: a worker ticks one line as prepared (or unticks a mistake). Several people can pick
+   * one order at once; each line records who picked it. Only for paid orders waiting to be loaded.
+   * Completing an order does not require every line to be ticked (the UI warns instead).
+   */
+  async pickItem(orderId: string, itemId: string, picked: boolean, user: AuthUser) {
+    if (!isWarehouseActor(user.role)) {
+      throw new ForbiddenException('Warehouse staff, cashiers, managers, or admin can pick orders');
+    }
+    if (this.features) await this.features.assertEnabled('PICKING');
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) throw new NotFoundException('Order not found');
+    await this.assertOrderAccess(user, order.warehouseId);
+    if (order.status !== OrderStatus.READY_FOR_LOADING) {
+      throw new BadRequestException('Only a paid order waiting for loading can be picked');
+    }
+    // Ticking the first line also starts preparation, so the clock runs even if nobody pressed "start".
+    if (picked) await this.markPickingStarted(orderId, user.id);
+    // Conditional update: two people ticking the same line at once leave one consistent picker.
+    const changed = await this.prisma.orderItem.updateMany({
+      where: { id: itemId, orderId, pickedAt: picked ? null : { not: null } },
+      data: picked ? { pickedAt: new Date(), pickedById: user.id } : { pickedAt: null, pickedById: null },
+    });
+    const item = await this.prisma.orderItem.findFirst({
+      where: { id: itemId, orderId },
+      include: { pickedBy: { select: { id: true, fullName: true } } },
+    });
+    if (!item) throw new NotFoundException('Order item not found');
+    if (changed.count === 1) {
+      this.log.log(`Pick ${order.orderNumber} item ${itemId} ${picked ? 'ticked' : 'unticked'} by ${user.id}`);
+    }
+    return { id: item.id, pickedAt: item.pickedAt, pickedBy: item.pickedBy };
+  }
+
+  /**
+   * Newest first, one page at a time. `q` matches the order number, phone or customer name (the database
+   * collation folds Latin case only, so Cyrillic names match as typed or with a capital first letter).
+   */
+  async list(user: AuthUser, status?: OrderStatus, filter: { q?: string; from?: string; to?: string; skip?: number; take?: number } = {}) {
     if (user.role === Role.ACHIGCH_BELTGEGCH) {
       throw new ForbiddenException('Warehouse staff must use /orders/tickets');
     }
-    const where: Prisma.OrderWhereInput = {};
-    if (status) where.status = status;
-    const scope = await this.orderScope(user);
-    Object.assign(where, scope);
+    const and: Prisma.OrderWhereInput[] = [await this.orderScope(user)];
+    if (status && status in OrderStatus) and.push({ status });
+    const q = filter.q?.trim();
+    if (q) {
+      const cap = q.charAt(0).toUpperCase() + q.slice(1);
+      and.push({
+        OR: [
+          { orderNumber: { contains: q, mode: 'insensitive' } },
+          { customerPhone: { contains: q } },
+          { customerName: { contains: q, mode: 'insensitive' } },
+          { customerName: { contains: cap } },
+          // Registered customers also match in the other alphabet ("ondor" finds "Өндөр Барилга").
+          ...(searchKey(q) ? [{ customer: { searchText: { contains: searchKey(q) } } }] : []),
+        ],
+      });
+    }
+    const day = (d: string | undefined, end: boolean) =>
+      d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(`${d}T${end ? '23:59:59.999' : '00:00:00.000'}+08:00`) : undefined;
+    const gte = day(filter.from, false);
+    const lte = day(filter.to, true);
+    if (gte || lte) and.push({ createdAt: { ...(gte ? { gte } : {}), ...(lte ? { lte } : {}) } });
+    const take = Math.min(Math.max(Number(filter.take) || 50, 1), 200);
+    const skip = Math.max(Number(filter.skip) || 0, 0);
     const rows = await this.prisma.order.findMany({
-      where,
+      where: { AND: and },
       include: ORDER_INCLUDE,
       orderBy: { createdAt: 'desc' },
-      take: 200,
+      skip,
+      take,
     });
     return this.presentOrders(rows, user.role);
   }
@@ -637,6 +1123,7 @@ export class OrdersService {
     if (!isTransportActor(user.role)) {
       throw new ForbiddenException('Only warehouse staff, managers, or admin can record hired transport notes');
     }
+    if (this.features) await this.features.assertEnabled('DELIVERY');
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('Order not found');
     await this.assertOrderAccess(user, order.warehouseId);
@@ -665,7 +1152,7 @@ export class OrdersService {
   }
 
   async assignSupplier(orderId: string, itemId: string, dto: AssignSupplierDto, user: AuthUser) {
-    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
+    if (!isManagerRole(user.role)) {
       throw new ForbiddenException('Only managers or admin can assign an external supplier');
     }
     const supplierName = dto.supplierName.trim();
@@ -710,7 +1197,7 @@ export class OrdersService {
                 warehouseId: item.order.warehouseId,
                 refType: 'ORDER',
                 refId: orderId,
-                reason: `Supplier "${supplierName}" delivered ${item.order.orderNumber}`,
+                reason: `«${supplierName}» нийлүүлсэн — ${item.order.orderNumber}`,
                 actorId: user.id,
               });
               stockBefore = moved.before;
@@ -796,7 +1283,7 @@ export class OrdersService {
   }
 
   async issueEbarimt(orderId: string, user: AuthUser) {
-    if (user.role !== Role.BORLUULAGCH && user.role !== Role.ADMIN && user.role !== Role.MANAGER) {
+    if (user.role !== Role.BORLUULAGCH && !isManagerRole(user.role)) {
       throw new ForbiddenException('Only cashiers, managers, or admin can issue E-Barimt');
     }
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });

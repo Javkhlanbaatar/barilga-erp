@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @barilga/web",
+    "dev:all": "node scripts/dev-all.mjs",
     "start:dev": "npm run start:dev -w @barilga/api",
     "dev:api": "npm run start:dev -w @barilga/api",
     "dev:web": "npm run dev -w @barilga/web",

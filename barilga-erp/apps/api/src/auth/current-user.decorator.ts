@@ -10,6 +10,10 @@ export type AuthUser = {
   fullName?: string;
   /** Warehouse/shop the user is assigned to (null = not assigned). */
   warehouseId?: string | null;
+  /** Warehouses the user may see and act for (null = all). Set at login; see JwtStrategy. */
+  warehouseIds?: string[] | null;
+  /** Rights the admin added to or took from this person (auth/permissions.ts). */
+  permissions?: { grant?: string[]; revoke?: string[] } | null;
 };
 
 export const CurrentUser = createParamDecorator((_data: unknown, ctx: ExecutionContext): AuthUser => {
