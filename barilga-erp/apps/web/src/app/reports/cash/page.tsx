@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAsk } from '@/components/ask-dialog';
 import { CashSession } from '@/components/cash-drawer';
 import { ReportsNav } from '@/components/reports-nav';
 import { Shell } from '@/components/shell';
@@ -21,6 +22,7 @@ export default function CashReportPage() {
   const [to, setTo] = useState(() => ymd(new Date()));
   const [rows, setRows] = useState<CashSession[]>([]);
   const [error, setError] = useState('');
+  const [ask, askDialog] = useAsk();
 
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');
@@ -46,10 +48,16 @@ export default function CashReportPage() {
   }, [ok, load]);
 
   async function closeFor(s: CashSession) {
-    const raw = window.prompt(`${s.user.fullName}-ийн кассанд тоолсон бэлэн мөнгө (₮). Байх ёстой: ${tugrik(s.summary.expectedCashMnt)}`);
-    if (raw === null) return;
-    const n = Math.round(Number(raw));
-    if (!(n >= 0)) return setError('Дүн буруу');
+    const whole = (v: string) => v.replace(/[\s,₮]/g, '');
+    const answer = await ask({
+      title: 'Касс хаах',
+      intro: `${s.user.fullName}-ийн касс. Байх ёстой: ${tugrik(s.summary.expectedCashMnt)}`,
+      fields: [{ key: 'counted', label: 'Тоолсон бэлэн мөнгө ₮', numeric: true }],
+      confirmText: 'Хаах',
+      validate: (v) => (/^\d+$/.test(whole(v.counted)) ? '' : 'Дүнг бүхэл төгрөгөөр бичнэ үү (жишээ: 250000)'),
+    });
+    if (!answer) return;
+    const n = Number(whole(answer.counted));
     try {
       await api(`/cash/sessions/${s.id}/close`, { method: 'POST', body: JSON.stringify({ countedCashMnt: n, note: 'Менежер хаасан' }) });
       await load();
@@ -154,6 +162,7 @@ export default function CashReportPage() {
         </table>
         {rows.length === 0 && <p className="p-3 text-sm text-slate-500">Энэ хугацаанд касс нээгдээгүй.</p>}
       </div>
+      {askDialog}
     </Shell>
   );
 }

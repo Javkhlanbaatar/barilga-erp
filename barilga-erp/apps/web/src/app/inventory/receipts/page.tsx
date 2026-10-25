@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAsk } from '@/components/ask-dialog';
 import { CustomerPicker } from '@/components/customer-picker';
 import { Modal } from '@/components/modal';
 import { Shell } from '@/components/shell';
@@ -96,6 +97,35 @@ export default function ReceiptsPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<Toast | null>(null);
+  // Printing is a choice now (it used to open at once after every save); remembered on this device.
+  const [printAfter, setPrintAfter] = useState(false);
+  // The receipt just saved: its print button and cost corrections stay at hand.
+  const [justSaved, setJustSaved] = useState<StockReceipt | null>(null);
+  // A purchase price corrected on a saved receipt (a proper dialog instead of two prompts).
+  const [costEdit, setCostEdit] = useState<{
+    receipt: StockReceipt;
+    item: StockReceipt['items'][number];
+    value: string;
+    reason: string;
+    busy: boolean;
+    error: string;
+  } | null>(null);
+
+  useEffect(() => {
+    try {
+      setPrintAfter(localStorage.getItem('receipt_print_after') === '1');
+    } catch {
+      // private window: not remembered
+    }
+  }, []);
+  const choosePrintAfter = (on: boolean) => {
+    setPrintAfter(on);
+    try {
+      localStorage.setItem('receipt_print_after', on ? '1' : '0');
+    } catch {
+      // not remembered
+    }
+  };
   const [open, setOpen] = useState(false);
   const [warehouseId, setWarehouseId] = useState('');
   const [supplierName, setSupplierName] = useState('');
@@ -119,8 +149,10 @@ export default function ReceiptsPage() {
   const isOversight = hasRole(me?.role, OVERSIGHT_ROLES);
   const features = useFeatures();
   const canDo = useCan();
-  const { units: unitList, addNew: addNewUnit } = useUnits();
-  const { categories: categoryList, addNew: addNewCategory } = useCategories();
+  // New unit / category names are asked in the page (window.prompt is blocked in some browsers).
+  const [ask, askDialog] = useAsk();
+  const { units: unitList, addNew: addNewUnit } = useUnits(ask);
+  const { categories: categoryList, addNew: addNewCategory } = useCategories(ask);
   const canAddProduct = canDo('PRODUCT_WRITE');
   const canReceive = canDo('RECEIPT_CREATE');
   // Purchase costs and the supplier partner put money we owe on the books: managers by default.
@@ -346,22 +378,28 @@ export default function ReceiptsPage() {
   const units = lines.reduce((s, l) => s + (lineQty(l) || 0), 0);
 
   /** A manager corrects a purchase price later; the reason goes to the admin's edit report. */
-  async function editCost(r: StockReceipt, i: StockReceipt['items'][number]) {
-    const raw = window.prompt(`${i.product.nameMn}: шинэ нэгж үнэ (₮, хоосон бол үнэ оруулаагүй):`, i.unitCostMnt == null ? '' : String(i.unitCostMnt));
-    if (raw === null) return;
-    const cost = parseMoney(raw);
-    if (cost !== null && !Number.isFinite(cost)) return flash('error', 'Үнийг тоогоор бичнэ үү');
-    const reason = window.prompt('Засах шалтгаан (засварын түүхэд бичигдэнэ):');
-    if (!reason || reason.trim().length < 3) return;
+  function editCost(r: StockReceipt, i: StockReceipt['items'][number]) {
+    setCostEdit({ receipt: r, item: i, value: i.unitCostMnt == null ? '' : String(i.unitCostMnt), reason: '', busy: false, error: '' });
+  }
+
+  async function saveCost(e: FormEvent) {
+    e.preventDefault();
+    if (!costEdit) return;
+    const cost = costEdit.value.trim() === '' ? null : parseMoney(costEdit.value);
+    if (cost !== null && (!Number.isFinite(cost) || cost < 0)) return setCostEdit({ ...costEdit, error: 'Үнийг төгрөгөөр, тоогоор бичнэ үү (жишээ: 18500)' });
+    if (cost === costEdit.item.unitCostMnt) return setCostEdit({ ...costEdit, error: 'Үнэ өөрчлөгдөөгүй байна' });
+    if (costEdit.reason.trim().length < 3) return setCostEdit({ ...costEdit, error: 'Засах шалтгаанаа бичнэ үү (3-аас доошгүй тэмдэгт)' });
+    setCostEdit({ ...costEdit, busy: true, error: '' });
     try {
-      await api(`/inventory/receipts/${r.id}/items/${i.id}/cost`, {
+      await api(`/inventory/receipts/${costEdit.receipt.id}/items/${costEdit.item.id}/cost`, {
         method: 'PATCH',
-        body: JSON.stringify({ unitCostMnt: cost, reason: reason.trim() }),
+        body: JSON.stringify({ unitCostMnt: cost, reason: costEdit.reason.trim() }),
       });
-      flash('ok', 'Өртөг засагдлаа');
+      setCostEdit(null);
+      flash('ok', `${costEdit.item.product.nameMn}: өртөг засагдлаа`);
       await load();
     } catch (err) {
-      flash('error', err instanceof Error ? err.message : 'Засаж чадсангүй');
+      setCostEdit((c) => (c ? { ...c, busy: false, error: err instanceof Error ? err.message : 'Засаж чадсангүй' } : c));
     }
   }
 
@@ -416,7 +454,8 @@ export default function ReceiptsPage() {
       setOpen(false);
       setLines([]);
       flash('ok', `${created.receiptNumber}: ${lines.length} төрлийн бараа орлогод авлаа`);
-      window.open(`/print/receipts/${created.id}`, '_blank', 'noopener');
+      if (printAfter) window.open(`/print/receipts/${created.id}`, '_blank', 'noopener');
+      setJustSaved(created);
       await load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
@@ -571,6 +610,21 @@ export default function ReceiptsPage() {
         </div>
       </div>
 
+      {justSaved && (
+        <div className="card mb-3 flex flex-wrap items-center gap-2 border-emerald-800 text-sm">
+          <span className="mr-auto">
+            <b className="font-mono">{justSaved.receiptNumber}</b> хадгалагдлаа.{' '}
+            {canCost ? 'Өртгийг доорх жагсаалтаас «өртөг засах»-аар засна.' : 'Өртгийг эрхтэй менежер оруулна.'}
+          </span>
+          <a className="btn-ghost text-xs" href={`/print/receipts/${justSaved.id}`} target="_blank" rel="noreferrer">
+            🖨 Хэвлэх
+          </a>
+          <button type="button" className="btn-ghost h-9 w-9 p-0 text-xs" aria-label="Хаах" onClick={() => setJustSaved(null)}>
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Phones: one card per receipt. */}
       <div className="space-y-2 md:hidden">
         {shown.map((r) => (
@@ -698,11 +752,17 @@ export default function ReceiptsPage() {
           dirty={lines.length > 0}
           footer={
             <>
-              {formError ? (
-                <p className="mr-auto w-full text-sm text-red-400 sm:w-auto sm:self-center">{formError}</p>
-              ) : (
-                <span className="mr-auto hidden self-center text-xs text-slate-500 sm:inline">Хадгалсны дараа орлогын баримт хэвлэх цонх нээгдэнэ.</span>
-              )}
+              {formError && <p className="w-full text-sm text-red-400">{formError}</p>}
+              <label className="mr-auto flex items-center gap-2 self-center text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={printAfter}
+                  onChange={(e) => choosePrintAfter(e.target.checked)}
+                  // A setting of this device, not something typed into the receipt: closing stays unasked.
+                  onInput={(e) => e.stopPropagation()}
+                />
+                Хадгалсны дараа шууд хэвлэх
+              </label>
               <button type="button" className="btn-ghost" onClick={close} disabled={saving}>
                 Болих
               </button>
@@ -1011,6 +1071,62 @@ export default function ReceiptsPage() {
           </form>
         </Modal>
       )}
+
+      {costEdit && (
+        <Modal
+          title="Өртөг засах"
+          size="sm"
+          busy={costEdit.busy}
+          onClose={() => setCostEdit(null)}
+          footer={
+            <>
+              <button type="button" className="btn-ghost" disabled={costEdit.busy} onClick={() => setCostEdit(null)}>
+                Болих
+              </button>
+              <button className="btn-primary" type="submit" form="cost-form" disabled={costEdit.busy}>
+                {costEdit.busy ? 'Хадгалж байна…' : 'Хадгалах'}
+              </button>
+            </>
+          }
+        >
+          <form id="cost-form" onSubmit={saveCost} className="space-y-3">
+            <p className="text-sm">
+              <b>{costEdit.item.product.nameMn}</b> · {qty(costEdit.item.quantity)} {unitLabel(costEdit.item.product.unit)}
+              <span className="block text-xs text-slate-400">
+                {costEdit.receipt.receiptNumber} · одоогийн нэгж өртөг {costEdit.item.unitCostMnt == null ? 'оруулаагүй' : tugrik(costEdit.item.unitCostMnt)}
+              </span>
+            </p>
+            <label className="block text-xs text-slate-400">
+              Шинэ нэгж өртөг ₮ (хоосон бол «оруулаагүй»)
+              <input
+                className="mt-1 w-full text-right"
+                inputMode="numeric"
+                autoFocus
+                value={costEdit.value}
+                onChange={(e) => setCostEdit({ ...costEdit, value: e.target.value, error: '' })}
+              />
+            </label>
+            <label className="block text-xs text-slate-400">
+              Засах шалтгаан (засварын түүхэд бичигдэнэ)
+              <input
+                className="mt-1 w-full"
+                maxLength={300}
+                placeholder="Нэхэмжлэхээр шалгахад өөр байсан…"
+                value={costEdit.reason}
+                onChange={(e) => setCostEdit({ ...costEdit, reason: e.target.value, error: '' })}
+              />
+            </label>
+            <p className="text-[11px] text-slate-500">
+              Энэ бараа хамгийн сүүлийн өртөгтэй орлого бол барааны өртөг (касс дээрх үнийн доод хязгаар) мөн шинэчлэгдэнэ. Нийлүүлэгчийн тооцоонд орсон
+              орлого бол өглөг ч шинэчлэгдэнэ.
+            </p>
+            {costEdit.error && <p className="text-sm text-red-400">{costEdit.error}</p>}
+          </form>
+        </Modal>
+      )}
+
+      {/* After the receipt form, so it opens on top of it. */}
+      {askDialog}
 
       {toast && (
         <div

@@ -140,7 +140,7 @@ export class ReceiptsService {
     await this.prisma.$transaction(async (tx) => {
       const item = await tx.stockReceiptItem.findFirst({ where: { id: itemId, receiptId }, include: { receipt: true } });
       if (!item) throw new NotFoundException('Receipt line not found');
-      if (item.unitCostMnt === unitCostMnt) throw new BadRequestException('The price is unchanged');
+      if (item.unitCostMnt === unitCostMnt) throw new BadRequestException('Үнэ өөрчлөгдөөгүй байна / The price is unchanged');
       await tx.stockReceiptItem.update({ where: { id: itemId }, data: { unitCostMnt } });
 
       const newer = await tx.stockReceiptItem.count({

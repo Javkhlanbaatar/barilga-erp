@@ -1,6 +1,7 @@
 /** Product categories and units as people read them (and the shop's saved lists of both), plus the size / weight checks shared by the product forms. */
 
 import { useCallback, useEffect, useState } from 'react';
+import type { Ask } from '@/components/ask-dialog';
 import { api } from '@/lib/api';
 
 /** Older built-in categories, stored as English keys (seed data). The forms offer the shop's own list (useCategories). */
@@ -113,11 +114,12 @@ export function categoryOptions(categories: string[], current?: string | null): 
 }
 
 /**
- * The saved categories for a form. `addNew(save)` asks for a new category's name and returns it (null when the
- * person cancels): with `save` (the PRODUCT_WRITE right) it is added to the shop's list, otherwise it is only
- * offered in this form for this product. Throws with a Mongolian message when the name is refused.
+ * The saved categories for a form. `addNew(save)` asks for a new category's name (with the page's `ask` dialog)
+ * and returns it (null when the person cancels): with `save` (the PRODUCT_WRITE right) it is added to the shop's
+ * list, otherwise it is only offered in this form for this product. Throws with a Mongolian message when the
+ * server refuses it.
  */
-export function useCategories() {
+export function useCategories(ask: Ask) {
   const [categories, setCategories] = useState<string[]>(DEFAULT_CATEGORIES);
 
   useEffect(() => {
@@ -128,21 +130,28 @@ export function useCategories() {
     };
   }, []);
 
-  const addNew = useCallback(async (save: boolean): Promise<string | null> => {
-    const raw = window.prompt(`Шинэ ангиллын нэр (жишээ: Шал, Дээврийн материал). ${CATEGORY_MAX_LENGTH} тэмдэгт хүртэл:`);
-    const name = (raw ?? '').trim();
-    if (!name) return null;
-    const problem = categoryProblem(name);
-    if (problem) throw new Error(problem);
-    if (!save) {
-      setCategories((list) => (list.some((c) => c.toLowerCase() === name.toLowerCase()) ? list : [...list, name]));
-      return name;
-    }
-    const list = await addCategory(name);
-    setCategories(list);
-    // The server keeps the first spelling when the category was already there in another letter case.
-    return list.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name;
-  }, []);
+  const addNew = useCallback(
+    async (save: boolean): Promise<string | null> => {
+      const answer = await ask({
+        title: 'Шинэ ангилал',
+        intro: save ? 'Дэлгүүрийн ангиллын жагсаалтад нэмэгдэнэ.' : 'Зөвхөн энэ барааны ангилал болно (жагсаалтад нэмэх эрх алга).',
+        fields: [{ key: 'name', label: `Ангиллын нэр (${CATEGORY_MAX_LENGTH} тэмдэгт хүртэл)`, placeholder: 'жишээ: Шал, Дээврийн материал', maxLength: CATEGORY_MAX_LENGTH }],
+        confirmText: save ? 'Нэмэх' : 'Сонгох',
+        validate: (v) => (v.name ? categoryProblem(v.name) : 'Ангиллын нэрээ бичнэ үү'),
+      });
+      const name = answer?.name ?? '';
+      if (!name) return null;
+      if (!save) {
+        setCategories((list) => (list.some((c) => c.toLowerCase() === name.toLowerCase()) ? list : [...list, name]));
+        return name;
+      }
+      const list = await addCategory(name);
+      setCategories(list);
+      // The server keeps the first spelling when the category was already there in another letter case.
+      return list.find((c) => c.toLowerCase() === name.toLowerCase()) ?? name;
+    },
+    [ask],
+  );
 
   return { categories, addNew };
 }
@@ -213,10 +222,10 @@ export function unitOptions(units: string[], current?: string | null): string[] 
 }
 
 /**
- * The saved units for a form. `addNew()` asks for a new unit's name, saves it and returns it (null when the
- * person cancels); it throws with a Mongolian message when the unit is refused.
+ * The saved units for a form. `addNew()` asks for a new unit's name (with the page's `ask` dialog), saves it and
+ * returns it (null when the person cancels); it throws with a Mongolian message when the server refuses it.
  */
-export function useUnits() {
+export function useUnits(ask: Ask) {
   const [units, setUnits] = useState<string[]>(UNITS);
 
   useEffect(() => {
@@ -228,15 +237,19 @@ export function useUnits() {
   }, []);
 
   const addNew = useCallback(async (): Promise<string | null> => {
-    const raw = window.prompt(`Шинэ хэмжих нэгжийн нэр (жишээ: боодол, рулон, багц). ${UNIT_MAX_LENGTH} тэмдэгт хүртэл:`);
-    const unit = (raw ?? '').trim();
+    const answer = await ask({
+      title: 'Шинэ хэмжих нэгж',
+      fields: [{ key: 'unit', label: `Нэгжийн нэр (${UNIT_MAX_LENGTH} тэмдэгт хүртэл)`, placeholder: 'жишээ: боодол, рулон, багц', maxLength: UNIT_MAX_LENGTH }],
+      confirmText: 'Нэмэх',
+      validate: (v) => (!v.unit ? 'Нэгжийн нэрээ бичнэ үү' : v.unit.length > UNIT_MAX_LENGTH ? `Хэмжих нэгж ${UNIT_MAX_LENGTH} тэмдэгтээс ихгүй байна` : ''),
+    });
+    const unit = answer?.unit ?? '';
     if (!unit) return null;
-    if (unit.length > UNIT_MAX_LENGTH) throw new Error(`Хэмжих нэгж ${UNIT_MAX_LENGTH} тэмдэгтээс ихгүй байна`);
     const list = await addUnit(unit);
     setUnits(list);
     // The server keeps the first spelling when the unit was already there in another letter case.
     return list.find((u) => u.toLowerCase() === unit.toLowerCase()) ?? unit;
-  }, []);
+  }, [ask]);
 
   return { units, addNew };
 }

@@ -4,6 +4,14 @@ import { useEffect, useRef, type ReactNode } from 'react';
 
 const WIDTH = { sm: 'max-w-sm', md: 'max-w-md', lg: 'max-w-2xl', xl: 'max-w-4xl' } as const;
 
+/** Open dialogs, newest last: Esc closes only the top one (a question asked over a form must not close the form too). */
+const openStack: object[] = [];
+/**
+ * The page's own overflow, saved when the first dialog opens and put back when the last one closes (not per dialog:
+ * two stacked dialogs removed together would otherwise leave the page unable to scroll).
+ */
+let pageOverflow = '';
+
 /**
  * A dialog that works on phones: the backdrop scrolls, so a form taller than the screen can always be scrolled
  * to its title and its buttons (the dialogs before were centred and clipped). Tap outside or Esc closes it,
@@ -53,14 +61,19 @@ export function Modal({
   }).current;
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && dismiss();
+    const self = {};
+    // The page behind does not scroll while any dialog is open.
+    if (!openStack.length) {
+      pageOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+    openStack.push(self);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && openStack[openStack.length - 1] === self && dismiss();
     window.addEventListener('keydown', onKey);
-    // The page behind does not scroll while the dialog is open.
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     return () => {
+      openStack.splice(openStack.indexOf(self), 1);
       window.removeEventListener('keydown', onKey);
-      document.body.style.overflow = prev;
+      if (!openStack.length) document.body.style.overflow = pageOverflow;
     };
   }, [dismiss]);
 

@@ -177,6 +177,17 @@ export class UpdateProductDto {
   @IsInt()
   @Min(0)
   priceMnt?: number;
+
+  /**
+   * The purchase cost (normally from the last goods receipt), corrected by hand: needs the purchase-cost right.
+   * It is the floor for prices typed at the till. Null clears it.
+   */
+  @IsOptional()
+  @ValidateIf((_o, v) => v !== null)
+  @IsInt({ message: 'Өртгийг бүхэл төгрөгөөр бичнэ үү / lastCostMnt must be a whole number' })
+  @Min(0)
+  @Max(1_000_000_000)
+  lastCostMnt?: number | null;
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 3 }, { message: 'Жинг кг-аар, 3 хүртэлх бутархай оронтой оруулна уу / weightKg: a number with at most 3 decimals' })
   @Min(0.001, { message: 'Жинг кг-аар оруулна уу (0-ээс их) / weightKg must be greater than 0' })

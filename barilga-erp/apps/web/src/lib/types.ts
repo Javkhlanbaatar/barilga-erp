@@ -78,6 +78,8 @@ export type Vehicle = {
 export type Product = {
   id: string;
   sku: string;
+  /** Purchase cost from the last goods receipt (managers only; not sent to the till). */
+  lastCostMnt?: number | null;
   /** Scanned at the till: manufacturer code or an in-store 200… EAN-13. */
   barcode?: string | null;
   nameMn: string;

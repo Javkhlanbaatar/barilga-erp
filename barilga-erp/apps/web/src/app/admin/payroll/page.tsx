@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAsk } from '@/components/ask-dialog';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
 import { AuthUser, PayrollReport, PayrollRow, PayrollSettings, ROLE_LABEL, Role } from '@/lib/types';
@@ -58,6 +59,7 @@ export default function PayrollPage() {
   const [report, setReport] = useState<PayrollReport | null>(null);
   const [period, setPeriod] = useState(thisMonth);
   const [error, setError] = useState('');
+  const [ask, askDialog] = useAsk();
   const [loading, setLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
@@ -125,15 +127,18 @@ export default function PayrollPage() {
     if (!allowed.length) return;
     const who = allowed.length === 1 ? allowed[0].user.fullName : `${allowed.length} ажилтны`;
     const skipped = rows.length - allowed.length;
-    const reason = window.prompt(
-      `${who} ${period} сарын цалинг «олгосон»-оос буцааж нээх шалтгаан (3-аас доошгүй тэмдэгт)${skipped ? ` — өөрийн болон дээд албан тушаалын ${skipped} мөрийг админ нээнэ` : ''}:`,
-    );
-    if (reason === null) return;
-    if (reason.trim().length < 3) return setError('Шалтгаанаа бичнэ үү (3-аас доошгүй тэмдэгт)');
     void (async () => {
+      const answer = await ask({
+        title: 'Цалин буцааж нээх',
+        intro: `${who} ${period} сарын цалинг «олгосон»-оос буцааж нээнэ.${skipped ? ` Өөрийн болон дээд албан тушаалын ${skipped} мөрийг админ нээнэ.` : ''}`,
+        fields: [{ key: 'reason', label: 'Шалтгаан (засварын түүхэд бичигдэнэ)', minLength: 3 }],
+        confirmText: 'Буцааж нээх',
+      });
+      if (!answer) return;
+      const reason = answer.reason;
       setError('');
       try {
-        for (const r of allowed) await api(`/hr/payroll/${r.id}/reopen`, { method: 'PATCH', body: JSON.stringify({ reason: reason.trim() }) });
+        for (const r of allowed) await api(`/hr/payroll/${r.id}/reopen`, { method: 'PATCH', body: JSON.stringify({ reason }) });
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Алдаа');
       } finally {
@@ -288,6 +293,7 @@ export default function PayrollPage() {
           }}
         />
       )}
+      {askDialog}
     </Shell>
   );
 }

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Fragment, useEffect, useState } from 'react';
+import { useAsk } from '@/components/ask-dialog';
 import { api, tugrik } from '@/lib/api';
 import { unitLabel } from '@/lib/catalog';
 import { downloadCsv } from '@/lib/csv';
@@ -30,17 +31,35 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
   const [open, setOpen] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [msg, setMsg] = useState('');
+  const [ask, askDialog] = useAsk();
 
-  /** Goods taken by quantity get their price later; the partner account follows (managers only). */
+  /**
+   * Goods taken by quantity get their price later; the partner account follows (managers only). A first price
+   * needs no reason; changing one does (it goes to the edit history).
+   */
   async function price(receiptId: string, item: PartnerTrade['purchases'][number]['items'][number]) {
-    const raw = window.prompt(`${item.nameMn} (${qty(item.quantity)} ${unitLabel(item.unit)}): нэгж үнэ ₮`, item.unitCostMnt == null ? '' : String(item.unitCostMnt));
-    if (raw === null || !raw.trim()) return;
-    const n = Math.round(Number(raw.replace(/[\s,]/g, '')));
-    if (!(n >= 0)) return setError('Үнэ буруу байна');
-    const reason = item.unitCostMnt == null ? 'Үнэ тохирсон' : window.prompt('Засах шалтгаан (засварын түүхэд бичигдэнэ):');
-    if (!reason || reason.trim().length < 3) return;
+    const first = item.unitCostMnt == null;
+    const whole = (s: string) => s.replace(/[\s,₮]/g, '');
+    const answer = await ask({
+      title: first ? 'Үнэ оруулах' : 'Үнэ засах',
+      intro: (
+        <>
+          <b>{item.nameMn}</b> · {qty(item.quantity)} {unitLabel(item.unit)}
+          {!first && <span className="block text-xs text-slate-400">одоогийн нэгж үнэ {tugrik(item.unitCostMnt ?? 0)}</span>}
+        </>
+      ),
+      fields: [
+        { key: 'price', label: 'Нэгж үнэ ₮', initial: first ? '' : String(item.unitCostMnt), numeric: true },
+        ...(first ? [] : [{ key: 'reason', label: 'Засах шалтгаан (засварын түүхэд бичигдэнэ)', placeholder: 'Нэхэмжлэхээр шалгахад өөр байсан…', minLength: 3 }]),
+      ],
+      validate: (v) =>
+        !/^\d+$/.test(whole(v.price)) ? 'Үнийг бүхэл төгрөгөөр бичнэ үү (жишээ: 18500)' : !first && Number(whole(v.price)) === item.unitCostMnt ? 'Үнэ өөрчлөгдөөгүй байна' : '',
+    });
+    if (!answer) return;
+    const n = Number(whole(answer.price));
+    const reason = first ? 'Үнэ тохирсон' : answer.reason;
     try {
-      await api(`/inventory/receipts/${receiptId}/items/${item.itemId}/cost`, { method: 'PATCH', body: JSON.stringify({ unitCostMnt: n, reason: reason.trim() }) });
+      await api(`/inventory/receipts/${receiptId}/items/${item.itemId}/cost`, { method: 'PATCH', body: JSON.stringify({ unitCostMnt: n, reason }) });
       setMsg(`${item.nameMn}: ${tugrik(n)} — тооцоонд орлоо`);
       window.setTimeout(() => setMsg(''), 4000);
       setReload((x) => x + 1);
@@ -113,6 +132,7 @@ export function PartnerTradePanel({ customerId }: { customerId: string }) {
   const t = data?.totals;
   return (
     <div className="card space-y-3">
+      {askDialog}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <h3 className="font-semibold">Худалдаа / худалдан авалт</h3>
         <div className="flex w-full flex-wrap items-end gap-2 text-xs sm:w-auto">

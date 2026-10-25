@@ -39,6 +39,7 @@ const TYPE_LABEL: Record<string, string> = {
   ATTENDANCE: 'Ирц',
   RECEIPT_PARTNER: 'Орлогын нийлүүлэгч',
   SALE_PRICE: 'Касс дээр өөрчилсөн үнэ',
+  PRODUCT_COST: 'Барааны өртөг',
   CUSTOMER_PRICE: 'Харилцагчийн хувийн үнэ',
 };
 

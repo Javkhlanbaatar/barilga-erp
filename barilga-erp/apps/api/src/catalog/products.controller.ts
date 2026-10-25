@@ -24,7 +24,7 @@ import { CATALOG_READ_ROLES, CATALOG_WRITE_ROLES } from '../auth/rbac';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
-import { assertCan, Permission } from '../auth/permissions';
+import { assertCan, can, Permission } from '../auth/permissions';
 import { AuthUser, CurrentUser } from '../auth/current-user.decorator';
 import { InventoryService } from '../inventory/inventory.service';
 import { assertWarehouseAccess, isManagerRole } from '../inventory/warehouse-scope';
@@ -195,8 +195,11 @@ if (isUniqueViolation(err)) {
   async update(@Param('id') id: string, @Body() dto: UpdateProductDto, @CurrentUser() user: AuthUser) {
     const existing = await this.prisma.product.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Product not found');
-    const { stockQty, companions: picked, barcode, ...rest } = dto;
+    const { stockQty, companions: picked, barcode, lastCostMnt, ...rest } = dto;
     const companions = await this.resolveCompanions(picked, id);
+    // The purchase cost is money we owe and the till's price floor: its own right, like on a goods receipt.
+    const costChange = lastCostMnt !== undefined && lastCostMnt !== existing.lastCostMnt;
+    if (costChange) assertCan(user, 'RECEIPT_COST_EDIT');
     // The form always sends the quantity back; only a real change is a stock adjustment.
     const wantsStockChange = stockQty !== undefined && Number(existing.stockQty) !== stockQty;
     try {
@@ -226,14 +229,15 @@ if (isUniqueViolation(err)) {
             actorId: user.id,
           });
         }
-        // Selling price changes are kept for the admin's edits report.
+        // Selling price changes are kept for the admin's edits report; "below cost" means the cost after this save.
+        const costAfter = costChange ? lastCostMnt : existing.lastCostMnt;
         if (dto.priceMnt !== undefined && dto.priceMnt !== existing.priceMnt) {
           await tx.editAudit.create({
             data: {
               entityType: 'PRODUCT_PRICE',
               entityId: id,
               summary: `${existing.sku} ${existing.nameMn}: үнэ ${existing.priceMnt} → ${dto.priceMnt}${
-                existing.lastCostMnt != null && dto.priceMnt < existing.lastCostMnt ? ` (өртөг ${existing.lastCostMnt}₮-өөс доош)` : ''
+                costAfter != null && dto.priceMnt < costAfter ? ` (өртөг ${costAfter}₮-өөс доош)` : ''
               }`,
               before: { priceMnt: existing.priceMnt },
               after: { priceMnt: dto.priceMnt },
@@ -242,10 +246,24 @@ if (isUniqueViolation(err)) {
             },
           });
         }
-        return tx.product.update({
+        if (costChange) {
+          await tx.editAudit.create({
+            data: {
+              entityType: 'PRODUCT_COST',
+              entityId: id,
+              summary: `${existing.sku} ${existing.nameMn}: өртөг ${existing.lastCostMnt ?? 'хоосон'} → ${lastCostMnt ?? 'хоосон'}`,
+              before: { lastCostMnt: existing.lastCostMnt },
+              after: { lastCostMnt },
+              reason: 'Барааны өртгийг гараар засав',
+              actorId: user.id,
+            },
+          });
+        }
+        const saved = await tx.product.update({
           where: { id },
           data: {
             ...rest,
+            ...(costChange ? { lastCostMnt } : {}),
             // Clearing the code gives the product a fresh in-store one rather than leaving it unscannable.
             ...(barcode !== undefined ? { barcode: normalizeBarcode(barcode) ?? (await nextInStoreBarcode(tx)) } : {}),
             ...(companions !== undefined ? { companions: companionsValue(companions) ?? Prisma.DbNull } : {}),
@@ -254,6 +272,10 @@ if (isUniqueViolation(err)) {
             ...(dto.description !== undefined ? { description: dto.description?.trim() || null } : {}),
           },
         });
+        // Someone given the product right without the cost right does not get the cost back.
+        if (can(user, 'RECEIPT_COST_EDIT')) return saved;
+        const { lastCostMnt: _cost, ...shown } = saved;
+        return shown;
       });
     } catch (err) {
 if (isUniqueViolation(err)) {

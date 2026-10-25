@@ -1,6 +1,7 @@
 'use client';
 
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { useAsk } from '@/components/ask-dialog';
 import { Modal } from '@/components/modal';
 import { ProductImage } from '@/components/product-image';
 import { Shell } from '@/components/shell';
@@ -70,6 +71,8 @@ const emptyForm = {
   unit: 'ш',
   category: '',
   priceMnt: 0,
+  /** Purchase cost as typed (₮); only for people with the purchase-cost right, only when editing. */
+  lastCostMnt: '',
   // Sizes are typed as text so an empty box stays empty (width / height are optional) and "0,5" works.
   weightKg: '',
   lengthM: '',
@@ -179,12 +182,16 @@ export default function InventoryPage() {
   const openedForm = useRef(emptyForm);
 
   const canDo = useCan();
-  const { units, addNew: addNewUnit } = useUnits();
-  const { categories: categoryList, addNew: addNewCategory } = useCategories();
+  // New unit / category names are asked in the page (window.prompt is blocked in some browsers).
+  const [ask, askDialog] = useAsk();
+  const { units, addNew: addNewUnit } = useUnits(ask);
+  const { categories: categoryList, addNew: addNewCategory } = useCategories(ask);
   const canManage = hasRole(user?.role, OVERSIGHT_ROLES);
   // The catalog and prices are shared by every shop: admin and the general manager by default, or whoever the admin allows.
   const canEditCatalog = canDo('PRODUCT_WRITE');
   const canAdjust = canDo('STOCK_ADJUST');
+  // The purchase cost (the till's price floor) is corrected by those who enter purchase costs on receipts.
+  const canCost = canDo('RECEIPT_COST_EDIT');
   const showActions = canManage || canEditCatalog || canAdjust;
   const warehouses = report?.warehouses ?? [];
   const severalWarehouses = warehouses.length > 1;
@@ -291,6 +298,7 @@ export default function InventoryPage() {
       // The stored name (an old English key stays as it is; the list shows it in Mongolian).
       category: row.category && !isNoCategory(row.category) ? row.category : '',
       priceMnt: Number(row.priceMnt),
+      lastCostMnt: row.lastCostMnt == null ? '' : String(row.lastCostMnt),
       weightKg: dim(row.weightKg),
       lengthM: dim(row.lengthM),
       widthM: dim(row.widthM),
@@ -385,10 +393,16 @@ export default function InventoryPage() {
       if (problem) return setError(`Дагалдах бараа «${c.name.trim()}»: ${problem}`);
       if (editing && c.productId === editing.id) return setError('Бараа өөрийгөө дагалдах бараа болгохгүй');
     }
+    // A cost typed by hand: whole tugrik ("18 500" and "18,500" alike), empty = none.
+    const costText = form.lastCostMnt.replace(/[\s,₮]/g, '');
+    const typedCost = costText === '' ? null : /^\d+$/.test(costText) ? Number(costText) : NaN;
+    if (Number.isNaN(typedCost)) return setError('Өртгийг бүхэл төгрөгөөр бичнэ үү (жишээ: 18500)');
+    const costChanged = modal === 'edit' && canCost && editing && typedCost !== (editing.lastCostMnt ?? null);
     setSaving(true);
     try {
+      const { lastCostMnt: _typedCost, ...formFields } = form;
       const payload = {
-        ...form,
+        ...formFields,
         priceMnt: Number(form.priceMnt),
         weightKg,
         lengthM: lengthM ?? 0,
@@ -418,7 +432,7 @@ export default function InventoryPage() {
         const { stockQty: _ignored, ...withoutStock } = payload;
         product = await api<Product>(`/products/${editing.id}`, {
           method: 'PATCH',
-          body: JSON.stringify(severalWarehouses ? withoutStock : payload),
+          body: JSON.stringify({ ...(severalWarehouses ? withoutStock : payload), ...(costChanged ? { lastCostMnt: typedCost } : {}) }),
         });
       } else {
         return;
@@ -980,6 +994,21 @@ export default function InventoryPage() {
                   onChange={(e) => setForm({ ...form, priceMnt: Number(e.target.value) })}
                 />
               </label>
+              {modal === 'edit' && canCost && (
+                <label className="col-span-2 text-xs text-slate-400">
+                  Өртөг ₮ (худалдан авсан үнэ)
+                  <input
+                    className="mt-1 w-full"
+                    inputMode="numeric"
+                    placeholder="оруулаагүй"
+                    value={form.lastCostMnt}
+                    onChange={(e) => setForm({ ...form, lastCostMnt: e.target.value })}
+                  />
+                  <span className="mt-1 block text-[11px] text-slate-500">
+                    Ихэвчлэн бараа орлогоос өөрөө ордог; буруу бол энд засна (засварын түүхэд бичигдэнэ). Касс дээр үүнээс доош үнээр зарахгүй.
+                  </span>
+                </label>
+              )}
               <label className="text-xs text-slate-400 col-span-2">
                 Нэр (монгол)
                 <input className="mt-1 w-full" required value={form.nameMn} onChange={(e) => setForm({ ...form, nameMn: e.target.value })} />
@@ -1336,6 +1365,9 @@ export default function InventoryPage() {
           </p>
         </Modal>
       )}
+
+      {/* After the product form, so it opens on top of it. */}
+      {askDialog}
 
       {toast && (
         <div
