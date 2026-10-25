@@ -1,8 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable, Optional, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { BillType, EbarimtStatus, OrderStatus, PayMethod, PaymentStatus, Prisma } from '@prisma/client';
 import { EbarimtClient, EbarimtReceiptItem } from './ebarimt.client';
 import { PrismaService } from '../prisma/prisma.service';
-import { FeaturesService } from '../features/features.service';
 
 const VAT_RATE_INCLUSIVE = 10 / 110;
 const DEFAULT_CLASSIFICATION = '2301010';
@@ -26,13 +25,7 @@ export class EbarimtService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly client: EbarimtClient,
-    @Optional() private readonly features?: FeaturesService,
   ) {}
-
-  /** Switched off: the ERP sends nothing to POSAPI (receipts are issued through another system). */
-  private async enabled() {
-    return this.features ? this.features.isEnabled('EBARIMT') : true;
-  }
 
   /**
    * Issue after full payment. Never throws for POSAPI/network failures so checkout is not blocked.
@@ -48,13 +41,9 @@ export class EbarimtService {
   }
 
   async issueForOrder(orderId: string, opts: { quiet?: boolean } = {}) {
-    if (!(await this.enabled())) {
-      if (opts.quiet) return { ok: false as const, error: 'module_off' };
-      throw new ForbiddenException('Module EBARIMT is switched off');
-    }
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      include: { items: { include: { product: true, returnItems: true } }, payments: true },
+      include: { items: { include: { product: true } }, payments: true },
     });
     if (!order) throw new NotFoundException('Order not found');
     if (order.ebarimtStatus === EbarimtStatus.ISSUED && order.receiptId) {
@@ -73,7 +62,7 @@ export class EbarimtService {
       throw new BadRequestException('E-Barimt can only be issued after the order is fully paid');
     }
     if (order.billType === BillType.COMPANY && !order.customerRegNumber) {
-      const msg = 'Байгууллагын баримтад РД оруулна уу / Company receipt requires customerRegNumber (РД)';
+      const msg = 'Company receipt requires customerRegNumber (РД)';
       await this.markFailed(order.id, msg, order.ebarimtAttempts);
       if (opts.quiet) return { ok: false as const, error: msg };
       throw new BadRequestException(msg);
@@ -96,38 +85,26 @@ export class EbarimtService {
       return { ok: true as const, skipped: true, order };
     }
 
-    // Goods returned before the receipt is issued (e.g. on an order released on account and paid later) were
-    // never sold: the receipt covers what was actually kept and paid for. Later returns go through refunds.
-    const keptLines = order.items
-      .map((line) => {
-        const returnedQty = line.returnItems.reduce((s, r) => s.plus(r.quantity), new Prisma.Decimal(0));
-        const refunded = line.returnItems.reduce((s, r) => s + r.lineRefund, 0);
-        return { ...line, quantity: new Prisma.Decimal(line.quantity.toString()).minus(returnedQty), lineTotal: line.lineTotal - refunded };
-      })
-      .filter((line) => line.quantity.gt(0));
-    const refundedBefore = order.items.reduce((s, line) => s + line.returnItems.reduce((t, r) => t + r.lineRefund, 0), 0);
-    const receiptTotal = order.totalMnt - refundedBefore;
-    const totalVAT = vatOf(receiptTotal);
-    const items = this.buildItems(keptLines, receiptTotal, totalVAT);
+    const totalVAT = vatOf(order.totalMnt);
+    const items = this.buildItems(order.items, order.totalMnt, totalVAT);
     const payload = this.client.buildPosapiBody({
       orderNumber: order.orderNumber,
-      totalAmount: receiptTotal,
+      totalAmount: order.totalMnt,
       totalVAT,
       totalCityTax: 0,
       billType: order.billType,
       customerRegNumber: order.customerRegNumber,
       customerName: order.customerName,
       items,
-      // A closed on-account row is PAID at 0₮; only real money appears on the receipt.
       payments: order.payments
-        .filter((p) => p.status === PaymentStatus.PAID && p.amountMnt > 0)
+        .filter((p) => p.status === PaymentStatus.PAID)
         .map((p) => ({ code: payCode(p.method), paidAmount: p.amountMnt })),
     });
 
     try {
       const result = await this.client.sendReceipt({
         orderNumber: order.orderNumber,
-        totalAmount: receiptTotal,
+        totalAmount: order.totalMnt,
         totalVAT,
         totalCityTax: 0,
         billType: order.billType,
@@ -135,7 +112,7 @@ export class EbarimtService {
         customerName: order.customerName,
         items,
         payments: order.payments
-          .filter((p) => p.status === PaymentStatus.PAID && p.amountMnt > 0)
+          .filter((p) => p.status === PaymentStatus.PAID)
           .map((p) => ({ code: payCode(p.method), paidAmount: p.amountMnt })),
       });
       const updated = await this.prisma.order.update({
@@ -171,10 +148,6 @@ export class EbarimtService {
     amount: number;
     items: Array<{ name: string; qty: number; unitPrice: number; totalAmount: number }>;
   }) {
-    if (!(await this.enabled())) {
-      await this.prisma.salesReturn.update({ where: { id: input.returnId }, data: { ebarimtStatus: null } });
-      return { ok: false as const, error: 'module_off' };
-    }
     try {
       const result = await this.client.returnReceipt({
         orderNumber: input.orderNumber,
@@ -205,7 +178,6 @@ export class EbarimtService {
   }
 
   async retryDue() {
-    if (!(await this.enabled())) return { checked: 0 };
     const due = await this.prisma.order.findMany({
       where: {
         ebarimtStatus: { in: [EbarimtStatus.FAILED, EbarimtStatus.PENDING] },

@@ -8,7 +8,7 @@ async function main() {
 
   const users: Array<{ username: string; email: string; fullName: string; role: Role }> = [
     { username: 'admin', email: 'admin@barilga.mn', fullName: 'Системийн админ', role: Role.ADMIN },
-    { username: 'manager', email: 'manager@barilga.mn', fullName: 'Гантулга', role: Role.SUPER_MANAGER },
+    { username: 'manager', email: 'manager@barilga.mn', fullName: 'Гантулга', role: Role.MANAGER },
     { username: 'cashier', email: 'cashier@barilga.mn', fullName: 'Оюунчимэг', role: Role.BORLUULAGCH },
     { username: 'warehouse', email: 'warehouse@barilga.mn', fullName: 'Төмөрбаатар', role: Role.ACHIGCH_BELTGEGCH },
   ];
@@ -16,8 +16,7 @@ async function main() {
   for (const u of users) {
     await prisma.user.upsert({
       where: { username: u.username },
-      // Re-seeding never resets a password, a role, or re-activates someone an admin switched off.
-      update: { email: u.email, fullName: u.fullName },
+      update: { email: u.email, fullName: u.fullName, role: u.role, passwordHash, isActive: true },
       create: { ...u, passwordHash },
     });
   }
@@ -54,7 +53,7 @@ async function main() {
       code: ZoneCode.ZONE_B,
       nameMn: 'Алслагдсан дүүрэг',
       nameEn: 'Zone B — Outer districts',
-      description: 'СХД, БЗД, БГД захын хороо, Налайх чиглэл.',
+      description: 'SХД, БЗД, БГД захын хороо, Налайх чиглэл.',
       baseDeliveryFeeMnt: 45_000,
       nightDiscountApplies: true,
       sortOrder: 2,
@@ -126,14 +125,14 @@ async function main() {
   }
 
   const products = [
-    { sku: 'CEM-42.5-50', category: 'Cement', nameMn: 'Цемент М400 50кг', nameEn: 'Cement M400 50kg', unit: 'шуудай', priceMnt: 18_500, weightKg: 50, lengthM: 0.6, volumeM3: 0.033, stockQty: 4000, minStockLevel: 200, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Cement', description: 'Суурь, хавтанд зориулсан портланд цемент' },
-    { sku: 'REB-12-12', category: 'Steel', nameMn: 'Арматур Ø12 12м', nameEn: 'Rebar 12mm 12m', unit: 'ширхэг', priceMnt: 32_000, weightKg: 10.66, lengthM: 12, volumeM3: 0.0014, stockQty: 800, minStockLevel: 80, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Rebar+12', description: 'Баганад зориулсан хээтэй арматур' },
-    { sku: 'REB-16-12', category: 'Steel', nameMn: 'Арматур Ø16 12м', nameEn: 'Rebar 16mm 12m', unit: 'ширхэг', priceMnt: 56_000, weightKg: 18.96, lengthM: 12, volumeM3: 0.0024, stockQty: 600, minStockLevel: 60, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Rebar+16' },
-    { sku: 'BRK-RED', category: 'Masonry', nameMn: 'Улаан тоосго', nameEn: 'Red brick', unit: 'ш', priceMnt: 450, weightKg: 3.5, lengthM: 0.25, volumeM3: 0.002, stockQty: 50000, minStockLevel: 5000, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Brick' },
-    { sku: 'SND-M3', category: 'Aggregates', nameMn: 'Элс', nameEn: 'Sand', unit: 'м³', priceMnt: 45_000, weightKg: 1600, lengthM: 1, volumeM3: 1, stockQty: 200, minStockLevel: 30, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Sand' },
-    { sku: 'GRV-M3', category: 'Aggregates', nameMn: 'Хайрга 10-20', nameEn: 'Gravel 10-20', unit: 'м³', priceMnt: 52_000, weightKg: 1650, lengthM: 1, volumeM3: 1, stockQty: 180, minStockLevel: 200, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Gravel' },
-    { sku: 'BLK-190', category: 'Masonry', nameMn: 'Хөөсөн блок 190мм', nameEn: 'AAC block 190mm', unit: 'ш', priceMnt: 6_800, weightKg: 18, lengthM: 0.6, volumeM3: 0.0228, stockQty: 3000, minStockLevel: 200, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Block' },
-    { sku: 'PLY-18', category: 'Wood', nameMn: 'Фанер 18мм', nameEn: 'Plywood 18mm', unit: 'хуудас', priceMnt: 48_000, weightKg: 22, lengthM: 2.44, volumeM3: 0.054, stockQty: 400, minStockLevel: 400, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Plywood' },
+    { sku: 'CEM-42.5-50', category: 'Cement', nameMn: 'Цемент М400 50кг', nameEn: 'Cement 42.5 50kg', unit: 'bag', priceMnt: 18_500, weightKg: 50, lengthM: 0.6, volumeM3: 0.033, stockQty: 4000, minStockLevel: 200, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Cement', description: 'Portland cement for foundations and slabs' },
+    { sku: 'REB-12-12', category: 'Steel', nameMn: 'Арматур Ø12 12м', nameEn: 'Rebar 12mm 12m', unit: 'bar', priceMnt: 32_000, weightKg: 10.66, lengthM: 12, volumeM3: 0.0014, stockQty: 800, minStockLevel: 80, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Rebar+12', description: 'Deformed steel bar for columns' },
+    { sku: 'REB-16-12', category: 'Steel', nameMn: 'Арматур Ø16 12м', nameEn: 'Rebar 16mm 12m', unit: 'bar', priceMnt: 56_000, weightKg: 18.96, lengthM: 12, volumeM3: 0.0024, stockQty: 600, minStockLevel: 60, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Rebar+16' },
+    { sku: 'BRK-RED', category: 'Masonry', nameMn: 'Улаан тоосго', nameEn: 'Red brick', unit: 'pcs', priceMnt: 450, weightKg: 3.5, lengthM: 0.25, volumeM3: 0.002, stockQty: 50000, minStockLevel: 5000, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Brick' },
+    { sku: 'SND-M3', category: 'Aggregates', nameMn: 'Элс', nameEn: 'Sand', unit: 'm³', priceMnt: 45_000, weightKg: 1600, lengthM: 1, volumeM3: 1, stockQty: 200, minStockLevel: 30, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Sand' },
+    { sku: 'GRV-M3', category: 'Aggregates', nameMn: 'Хайрга 10-20', nameEn: 'Gravel 10-20', unit: 'm³', priceMnt: 52_000, weightKg: 1650, lengthM: 1, volumeM3: 1, stockQty: 180, minStockLevel: 200, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Gravel' },
+    { sku: 'BLK-190', category: 'Masonry', nameMn: 'Хөөсөн блок 190мм', nameEn: 'AAC block 190mm', unit: 'pcs', priceMnt: 6_800, weightKg: 18, lengthM: 0.6, volumeM3: 0.0228, stockQty: 3000, minStockLevel: 200, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Block' },
+    { sku: 'PLY-18', category: 'Wood', nameMn: 'Фанер 18мм', nameEn: 'Plywood 18mm', unit: 'sheet', priceMnt: 48_000, weightKg: 22, lengthM: 2.44, volumeM3: 0.054, stockQty: 400, minStockLevel: 400, imageUrl: 'https://placehold.co/480x360/1c2630/e8b923.png?text=Plywood' },
   ];
 
   // The migration normally creates the default warehouse; a database built from scratch by seed gets it here.
@@ -162,7 +161,7 @@ async function main() {
           quantityDelta: stockQty,
           balanceAfter: stockQty,
           refType: 'SEED',
-          reason: 'Туршилтын эхний үлдэгдэл',
+          reason: 'Demo opening balance',
         },
       });
     });

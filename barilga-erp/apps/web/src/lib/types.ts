@@ -1,5 +1,4 @@
-import { matchesSearch } from './translit';
-export type Role = 'ADMIN' | 'SUPER_MANAGER' | 'MANAGER' | 'BORLUULAGCH' | 'ACHIGCH_BELTGEGCH';
+export type Role = 'ADMIN' | 'MANAGER' | 'BORLUULAGCH' | 'ACHIGCH_BELTGEGCH';
 
 export type AuthUser = {
   id: string;
@@ -11,12 +10,7 @@ export type AuthUser = {
   isActive?: boolean;
   /** Warehouse/shop the user is assigned to (null/undefined = not assigned). */
   warehouseId?: string | null;
-  /** Rights in force now (role + what the admin changed for this person); from login and GET /auth/me. */
-  can?: string[];
 };
-
-export type WarehouseKind = 'SHOP' | 'WAREHOUSE';
-export const WAREHOUSE_KIND_LABEL: Record<WarehouseKind, string> = { SHOP: 'Дэлгүүр', WAREHOUSE: 'Агуулах' };
 
 export type Warehouse = {
   id: string;
@@ -26,10 +20,6 @@ export type Warehouse = {
   phone?: string | null;
   isActive: boolean;
   isDefault: boolean;
-  kind?: WarehouseKind;
-  /** Admin listing only: who works here and which branch managers oversee it. */
-  users?: Array<{ id: string; fullName: string; role: Role }>;
-  managers?: Array<{ user: { id: string; fullName: string; role: Role } }>;
 };
 
 export type StaffUser = {
@@ -44,12 +34,6 @@ export type StaffUser = {
   active?: boolean;
   warehouseId?: string | null;
   warehouse?: { id: string; code: string; name: string } | null;
-  /** Branch manager: further warehouses they oversee. */
-  managedWarehouses?: Array<{ id: string; code: string; name: string }>;
-  /** Rights the admin gave to (grant) or took from (revoke) this person on top of the role. */
-  permissions?: { grant: string[]; revoke: string[] };
-  /** The Google account linked for «Google-ээр нэвтрэх» (null = none). */
-  googleEmail?: string | null;
   createdAt: string;
   updatedAt?: string;
 };
@@ -78,19 +62,12 @@ export type Vehicle = {
 export type Product = {
   id: string;
   sku: string;
-  /** Purchase cost from the last goods receipt (managers only; not sent to the till). */
-  lastCostMnt?: number | null;
-  /** Scanned at the till: manufacturer code or an in-store 200… EAN-13. */
-  barcode?: string | null;
   nameMn: string;
   nameEn: string;
   unit: string;
   priceMnt: number;
   weightKg: number;
   lengthM: number;
-  /** Package width / height (m), when registered. */
-  widthM?: number | null;
-  heightM?: number | null;
   volumeM3: number;
   stockQty: number;
   minStockLevel?: number;
@@ -98,27 +75,17 @@ export type Product = {
   description?: string | null;
   category?: string;
   active?: boolean;
-  /** Items handed over with every unit (e.g. a hardener with resin paint). */
-  companions?: Companion[] | null;
 };
 
-export type Companion = { name: string; qtyPerUnit: number; unit: string; /** Chosen from the catalog (display only; no stock effect). */ productId?: string };
-
-/** "Хатаагч × 2 ш" lines for a quantity of a product with companions. */
-export function companionLines(companions: Companion[] | null | undefined, quantity: number) {
-  return (companions ?? []).map((c) => {
-    const n = Math.round(c.qtyPerUnit * quantity * 1000) / 1000;
-    return `${c.name} × ${n.toLocaleString('mn-MN', { maximumFractionDigits: 3 })} ${c.unit}`;
-  });
-}
-
 export function productMatchesQuery(
-  p: { sku?: string; nameMn?: string; nameEn?: string; description?: string | null; barcode?: string | null },
+  p: { sku?: string; nameMn?: string; nameEn?: string; description?: string | null },
   q: string,
 ) {
-  if (p.barcode && p.barcode === q.trim()) return true;
-  // Same rule as the server's product search: either alphabet, any case.
-  return matchesSearch([p.sku, p.nameMn, p.nameEn, p.description ?? ''].join(' '), q);
+  const term = q.trim().toLowerCase();
+  if (!term) return true;
+  return [p.sku, p.nameMn, p.nameEn, p.description].some((value) =>
+    (value ?? '').toLowerCase().includes(term),
+  );
 }
 
 export type StockStatus = 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'NEGATIVE_STOCK';
@@ -213,14 +180,10 @@ export type PaymentSplit = {
 
 export type Order = {
   id: string;
-  /** Its invoice, if one was made: the number is the payment reference the buyer writes. */
-  invoice?: { invoiceNumber: string; cancelledAt: string | null } | null;
   orderNumber: string;
   status: 'PENDING_PAYMENT' | 'READY_FOR_LOADING' | 'COMPLETED' | 'CANCELLED';
   customerName: string;
   customerPhone: string;
-  /** Registered customer the order is for (null = walk-in). */
-  customerId?: string | null;
   warehouse?: { id: string; code: string; name: string } | null;
   deliveryAddress?: string | null;
   notes?: string | null;
@@ -246,25 +209,18 @@ export type Order = {
     id: string;
     quantity: number;
     unitPrice: number;
-    /** Set when the price was changed at the till: the price it would have had. */
-    listPriceMnt?: number | null;
     lineTotal: number;
     sourceType?: 'INTERNAL' | 'EXTERNAL_SUPPLIER';
     supplierName?: string | null;
-    /** Picking checklist: when and by whom this line was ticked as prepared. */
-    pickedAt?: string | null;
-    pickedBy?: { id: string; fullName: string } | null;
     product: Product;
   }>;
   returns?: Array<{
     id: string;
     reason: string;
     refundAmount: number;
-    refundMethod: 'CASH' | 'QPAY' | 'CARD' | 'TRANSFER' | 'CREDIT';
-    /** Cash and debt refunds are done at once; card and transfer ones until a manager marks them sent. */
+    refundMethod: 'CASH' | 'QPAY' | 'CARD';
+    /** PENDING_PAYOUT until money is actually handed back; no payout flow exists yet. */
     refundStatus?: 'PENDING_PAYOUT' | 'PAID_OUT';
-    refundAccount?: string | null;
-    paidOutAt?: string | null;
     createdAt: string;
     ebarimtRefundId?: string | null;
     ebarimtStatus?: string | null;
@@ -298,16 +254,12 @@ export type Order = {
     createdAt: string;
     actor: { name?: string; fullName?: string; role: string };
   }>;
-  createdAt?: string;
   createdBy: { name?: string; fullName?: string; role: string };
   completedBy?: { name?: string; fullName?: string; role: string } | null;
   completedAt?: string | null;
   preparedBy?: { id?: string; name?: string; fullName?: string; role: string } | null;
   preparedById?: string | null;
   preparedAt?: string | null;
-  /** Set when someone pressed «Би бэлдье» (or ticked the first line). */
-  pickingStartedAt?: string | null;
-  pickingStartedBy?: { id: string; fullName: string } | null;
   billType?: 'CITIZEN' | 'COMPANY';
   customerRegNumber?: string | null;
   receiptId?: string | null;
@@ -325,24 +277,17 @@ export function ebarimtStatusLabel(status?: string | null) {
   return 'Олгоогүй';
 }
 
-export const ORDER_STATUS_LABEL: Record<string, string> = {
-  PENDING_PAYMENT: 'Төлбөр хүлээж буй',
-  READY_FOR_LOADING: 'Бэлтгэх / ачихад бэлэн',
-  COMPLETED: 'Олгосон',
-  CANCELLED: 'Цуцалсан',
-};
-
 export const VEHICLE_LABEL: Record<string, string> = {
-  PORTER: 'Портер (≤1.5тн)',
-  DUMP: 'Өөрөө буулгагч (≤5тн)',
-  MANIPULATOR: 'Манипулятор (≤10тн)',
+  PORTER: 'Porter (≤1.5t)',
+  DUMP: 'Dump (≤5t)',
+  MANIPULATOR: 'Manipulator (≤10t)',
 };
 
 export const DELIVERY_LABEL: Record<string, string> = {
-  OUR_DELIVERY: 'Манай хүргэлт',
-  DELIVERY: 'Манай хүргэлт',
-  SELF_PICKUP: 'Өөрөө авах',
-  CUSTOMER_DRIVER: 'Харилцагчийн жолооч',
+  OUR_DELIVERY: 'Hired transport',
+  DELIVERY: 'Hired transport',
+  SELF_PICKUP: 'Self pickup',
+  CUSTOMER_DRIVER: 'Customer driver',
 };
 
 export function isHiredTransport(method?: string | null) {
@@ -357,7 +302,6 @@ export type DailyReport = {
     cashMnt: number;
     qpayMnt: number;
     cardMnt: number;
-    transferMnt?: number;
     pendingMnt: number;
     deliveryFeesMnt: number;
     unloadingFeesMnt: number;
@@ -373,8 +317,7 @@ export type DailyReport = {
     count: number;
   };
   payments: Array<{
-    method: 'CASH' | 'QPAY' | 'CARD' | 'TRANSFER';
-    grossMnt?: number;
+    method: 'CASH' | 'QPAY' | 'CARD';
     paidMnt: number;
     pendingMnt: number;
     paidCount: number;
@@ -435,383 +378,29 @@ export type AttendanceBoard = {
   recent: Attendance[];
 };
 
-export type PayrollSettings = {
-  defaultBaseMnt: Record<Role, number>;
-  ticketBonusMnt: number;
-  salesCommissionPct: number;
-  prorateByAttendance: boolean;
-  workDaysPerWeek: number;
-  socialInsurancePct: number;
-  incomeTaxPct: number;
-};
-
-export type PayrollRow = {
-  id: string;
-  userId: string;
-  periodMonth: string;
-  baseSalary: number;
-  customBase: boolean;
-  earnedBase: number;
-  workedDays: number;
-  workingDays: number;
-  ticketCount: number;
-  ticketBonus: number;
-  salesAmountMnt: number;
-  salesBonus: number;
-  adjustmentsMnt: number;
-  bonusMnt: number;
-  deductionMnt: number;
-  grossSalary: number;
-  socialInsuranceMnt: number;
-  incomeTaxMnt: number;
-  netSalary: number;
-  status: 'DRAFT' | 'PAID';
-  paidAt: string | null;
-  adjustments: Array<{ id: string; amountMnt: number; reason: string; createdAt: string; by: string }>;
-  user: { id: string; fullName: string; username: string; role: Role; isActive?: boolean };
-};
-
 export type PayrollReport = {
   periodMonth: string;
   timeZone: string;
-  /** PAYROLL_FORMULA module: false = pay is base salary + bonuses − deductions entered by hand. */
-  formula: boolean;
-  settings: PayrollSettings;
-  workingDays: number;
-  totals: { base: number; bonus: number; deduction: number; gross: number; net: number; insurance: number; tax: number; paid: number; unpaid: number };
-  rows: PayrollRow[];
+  rates: { ticketBonusMnt: number; salesCommissionBps: number; baseSalary: Record<Role, number> };
+  rows: Array<{
+    id: string;
+    userId: string;
+    periodMonth: string;
+    baseSalary: number;
+    fulfillmentBonus: number;
+    netSalary: number;
+    status: 'DRAFT' | 'PAID';
+    ticketCount: number;
+    salesAmountMnt: number;
+    ticketBonus: number;
+    salesBonus: number;
+    user: { id: string; fullName: string; username: string; role: Role };
+  }>;
 };
 
 export const ROLE_LABEL: Record<Role, string> = {
   ADMIN: 'Админ',
-  SUPER_MANAGER: 'Ерөнхий менежер',
-  MANAGER: 'Салбарын менежер',
+  MANAGER: 'Менежер',
   BORLUULAGCH: 'Кассчин',
-  ACHIGCH_BELTGEGCH: 'Агуулахын ажилтан',
-};
-
-// ───────── Phase 2B: customers, transfers, gathering, module switches ─────────
-
-export type CustomerType = 'INDIVIDUAL' | 'COMPANY';
-
-export type Customer = {
-  id: string;
-  type: CustomerType;
-  name: string;
-  phone: string;
-  regNumber: string | null;
-  email: string | null;
-  address: string | null;
-  notes: string | null;
-  isActive: boolean;
-  createdAt: string;
-  priceListId?: string | null;
-  /** What the partner is to us (managers set these). */
-  buysFromUs?: boolean;
-  creditAllowed?: boolean;
-  sellsToUs?: boolean;
-  barterContract?: string | null;
-};
-
-export type CustomerDetail = Customer & {
-  priceList?: { id: string; name: string } | null;
-  stats: { completedOrders: number; completedTotalMnt: number };
-  recentOrders: Array<{ id: string; orderNumber: string; status: Order['status']; totalMnt: number; createdAt: string }>;
-  /** Goods released on account and not yet paid for. */
-  credit?: { owedMnt: number; orders: Array<{ orderId: string; orderNumber: string; totalMnt: number; owedMnt: number; createdAt: string }> };
-};
-
-export type PriceList = { id: string; name: string; notes: string | null; isActive: boolean; productCount?: number; customerCount?: number };
-
-export type TransferStatus = 'REQUESTED' | 'IN_TRANSIT' | 'RECEIVED' | 'CANCELLED';
-
-type WarehouseRef = { id: string; code: string; name: string };
-type PersonRef = { id: string; fullName: string } | null;
-
-export type StockTransfer = {
-  id: string;
-  transferNumber: string;
-  status: TransferStatus;
-  fromWarehouse: WarehouseRef;
-  toWarehouse: WarehouseRef;
-  notes: string | null;
-  order: { id: string; orderNumber: string } | null;
-  requestedBy?: PersonRef;
-  requestedAt?: string | null;
-  sentBy: PersonRef;
-  sentAt: string | null;
-  hasShortage?: boolean;
-  receivedBy: PersonRef;
-  receivedAt: string | null;
-  cancelledBy: PersonRef;
-  cancelledAt: string | null;
-  cancelReason: string | null;
-  items: Array<{
-    id: string;
-    quantity: string | number;
-    requestedQty?: string | number | null;
-    receivedQty?: string | number | null;
-    shortageReason?: string | null;
-    product: { id: string; sku: string; nameMn: string; unit: string };
-  }>;
-};
-
-export type GatherPlan = {
-  orderId: string;
-  orderNumber: string;
-  status: Order['status'];
-  dispatchWarehouse: WarehouseRef;
-  complete: boolean;
-  lines: Array<{
-    product: { id: string; sku?: string; nameMn?: string; unit?: string };
-    needed: number;
-    atDispatch: number;
-    inTransit: number;
-    toGather: number;
-    unavailable: number;
-  }>;
-  transfers: Array<{ from?: WarehouseRef; items: Array<{ product: { id: string; sku?: string; nameMn?: string }; quantity: number }> }>;
-};
-
-export type FeatureKey =
-  | 'CUSTOMERS'
-  | 'STOCK_TRANSFERS'
-  | 'STOCK_RECEIPTS'
-  | 'PICKING'
-  | 'WAREHOUSE_REPORT'
-  | 'DELIVERY'
-  | 'UNLOADING'
-  | 'CREDIT_SALES'
-  | 'PRICE_LISTS'
-  | 'PARTNER_ACCOUNTS'
-  | 'HR'
-  | 'PAYROLL_FORMULA'
-  | 'CASH_SESSIONS'
-  | 'INVOICES'
-  | 'EBARIMT'
-  | 'ONLINE_SHOP';
-
-export type FeatureSwitch = {
-  key: FeatureKey;
-  nameMn: string;
-  enabled: boolean;
-  isDefault: boolean;
-  /** Not used by this business for now: always off and hidden from the module page. */
-  dormant?: boolean;
-  updatedAt: string | null;
-};
-
-/** Wording and empty spaces of one printed document (Админ → Компанийн мэдээлэл → Баримтын загвар). */
-export type DocTemplate = {
-  title: string;
-  headerNote: string;
-  footerNote: string;
-  blankBuyer: boolean;
-  blankRows: number;
-  signatures: string[];
-  stamp: boolean;
-  showPrices: boolean;
-  /** Optional parts switched off in the template editor (e.g. "cashier", "watermark"). */
-  hidden: string[];
-};
-export type PrintDocKey = 'invoice' | 'receipt' | 'issueNote' | 'picklist';
-
-/** Seller details printed on invoices and receipts (admin settings). */
-export type CompanySettings = {
-  name: string;
-  regNumber: string;
-  address: string;
-  phone: string;
-  email: string;
-  bankAccounts: Array<{ bankName: string; accountNumber: string; accountName: string }>;
-  invoiceNote: string;
-  receiptFooter: string;
-  /** Uploaded logo path (/uploads/company/…), '' when none. */
-  logoUrl?: string;
-  /** Print the logo faintly behind invoices and receipts. */
-  watermark?: boolean;
-  configured: boolean;
-};
-
-export type StockReceipt = {
-  id: string;
-  receiptNumber: string;
-  warehouse: { id: string; code: string; name: string };
-  supplierName: string;
-  supplierInvoiceNo: string | null;
-  supplierCustomer?: { id: string; name: string } | null;
-  notes: string | null;
-  receivedBy: { id: string; fullName: string } | null;
-  receivedAt: string;
-  items: Array<{
-    id: string;
-    quantity: string | number;
-    unitCostMnt: number | null;
-    product: { id: string; sku: string; nameMn: string; unit: string };
-  }>;
-};
-
-export type WarehouseReport = {
-  range: { startDate: string; endDate: string; timeZone: string };
-  warehouse: { id: string; code: string; name: string } | null;
-  lines: Array<{
-    productId: string;
-    sku: string;
-    nameMn: string;
-    unit: string;
-    category: string;
-    opening: number;
-    receipts: number;
-    transfersIn: number;
-    transfersOut: number;
-    sales: number;
-    returns: number;
-    adjustments: number;
-    closing: number;
-    minStockLevel: number;
-    lowStock: boolean;
-    valueAtPriceMnt: number;
-    valueAtCostMnt: number | null;
-  }>;
-  totals: {
-    products: number;
-    receipts: number;
-    transfersIn: number;
-    transfersOut: number;
-    sales: number;
-    returns: number;
-    adjustments: number;
-    valueAtPriceMnt: number;
-    lowStock: number;
-  };
-  inTransit: Array<{
-    id: string;
-    transferNumber: string;
-    from: string;
-    to: string;
-    sentAt: string;
-    items: Array<{ sku: string; nameMn: string; unit: string; quantity: number }>;
-  }>;
-};
-
-/** Two-way partner account (харилцагчийн тооцоо). net > 0: they owe us; net < 0: we owe them. */
-export type AccountLineKind =
-  | 'ON_ACCOUNT'
-  | 'PAID_BY_THEM'
-  | 'RETURNED'
-  | 'PURCHASE'
-  | 'PAYMENT_TO_PARTNER'
-  | 'OFFSET'
-  | 'ADJUSTMENT'
-  | 'CHARGE'
-  | 'PAYMENT_FROM_PARTNER';
-
-export type AccountStatement = {
-  customer: { id: string; name: string; phone?: string; regNumber?: string | null; address?: string | null; barterContract: string | null };
-  receivableMnt: number;
-  payableMnt: number;
-  netMnt: number;
-  /** Part of the receivable owed on on-account orders (what «хасалт» and «өр төлөх» settle). */
-  ordersOwedMnt?: number;
-  /** Sum of the partner ledger: + we owe them, − they owe us. */
-  ledgerMnt?: number;
-  /** With a date range: balance brought forward, debit (they owe more), credit (they owe less), closing. */
-  period?: { from: string | null; to: string | null; openingMnt: number; debitMnt: number; creditMnt: number; closingMnt: number };
-  lines: Array<{
-    at: string;
-    kind: AccountLineKind;
-    description: string;
-    effectMnt: number;
-    balanceMnt: number;
-    orderId?: string;
-    entryId?: string;
-    refType?: string | null;
-    refId?: string | null;
-    method?: string | null;
-    editable?: boolean;
-    voided?: boolean;
-  }>;
-};
-
-/** What we sold one partner and bought from them in a period (GET /customers/:id/trade). */
-export type PartnerTrade = {
-  customer: { id: string; name: string };
-  range: { from: string | null; to: string | null };
-  purchasesShown: boolean;
-  totals: {
-    salesCount: number;
-    salesMnt: number;
-    returnedMnt: number;
-    netSalesMnt: number;
-    moneyMnt: number;
-    offsetMnt: number;
-    owedMnt: number;
-    purchasesCount: number;
-    purchasesMnt: number;
-    unpricedLines: number;
-  };
-  sales: Array<{
-    id: string;
-    orderNumber: string;
-    at: string;
-    status: string;
-    warehouse: string | null;
-    totalMnt: number;
-    moneyMnt: number;
-    offsetMnt: number;
-    owedMnt: number;
-    returnedMnt: number;
-    items: Array<{ id: string; sku: string; nameMn: string; unit: string; quantity: number; unitPrice: number; lineTotal: number }>;
-  }>;
-  purchases: Array<{
-    id: string;
-    receiptNumber: string;
-    at: string;
-    warehouse: string;
-    supplierInvoiceNo: string | null;
-    totalMnt: number;
-    unpricedLines: number;
-    /** id is the product; itemId the receipt line (for pricing it later). */
-    items: Array<{ id: string; itemId: string; sku: string; nameMn: string; unit: string; quantity: number; unitCostMnt: number | null; lineMnt: number | null }>;
-  }>;
-  goods: Array<{ id: string; sku: string; nameMn: string; unit: string; soldQty: number; soldMnt: number; boughtQty: number; boughtMnt: number }>;
-  truncated: boolean;
-};
-
-export type InvoiceState = 'DRAFT' | 'SENT' | 'VIEWED' | 'PARTIAL' | 'OVERDUE' | 'PAID' | 'CANCELLED';
-
-export const INVOICE_STATE_LABEL: Record<InvoiceState, string> = {
-  DRAFT: 'Илгээгээгүй',
-  SENT: 'Илгээсэн',
-  VIEWED: 'Харилцагч нээсэн',
-  PARTIAL: 'Хэсэгчлэн төлсөн',
-  OVERDUE: 'Хугацаа хэтэрсэн',
-  PAID: 'Төлөгдсөн',
-  CANCELLED: 'Цуцалсан',
-};
-
-export type Invoice = {
-  id: string;
-  invoiceNumber: string;
-  orderId: string;
-  customerId: string | null;
-  recipientEmail: string | null;
-  recipientPhone: string | null;
-  dueDate: string | null;
-  note: string | null;
-  lastSentVia: string | null;
-  sentAt: string | null;
-  sendCount: number;
-  viewedAt: string | null;
-  cancelledAt: string | null;
-  createdAt: string;
-  publicPath: string;
-  /** Only on the single-order read, for building the link. */
-  token?: string;
-  paidMnt: number;
-  owedMnt: number;
-  state: InvoiceState;
-  order: { id: string; orderNumber: string; status: string; totalMnt: number; customerName: string; customerPhone: string; createdAt: string };
-  customer: { id: string; name: string; email: string | null } | null;
-  createdBy: { id: string; fullName: string } | null;
+  ACHIGCH_BELTGEGCH: 'Агуулах',
 };

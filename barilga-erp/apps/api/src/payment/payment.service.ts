@@ -14,12 +14,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CheckoutPaymentMethod } from '../orders/dto/order.dto';
 import { QpayClient } from './qpay.client';
 
-/**
- * When the server asks QPay about an unpaid invoice, counted from its creation: often at first (most people
- * pay within a minute or two), then less often, up to 30 minutes. The webhook still settles it at once when
- * QPay can reach us, and the cashier can ask at any time ("Төлбөр шалгах").
- */
-export const POLL_OFFSETS_MS = [20_000, 45_000, 90_000, 180_000, 300_000, 600_000, 1_200_000, 1_800_000];
+export const POLL_OFFSETS_MS = [60_000, 180_000, 300_000];
 
 export const LATE_PAYMENT_MARKER = 'LATE_PAYMENT_AFTER_EXPIRY';
 
@@ -43,9 +38,6 @@ function firstString(...values: unknown[]): string | null {
 function appendNote(existing: string | null | undefined, line: string) {
   return [existing?.trim(), line].filter(Boolean).join('\n');
 }
-
-/** How an on-account debt is paid: money (cash, card, bank transfer) or netting against what we owe them. */
-export type SettleMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'OFFSET';
 
 @Injectable()
 export class PaymentService {
@@ -79,7 +71,7 @@ export class PaymentService {
    * Persist one row per split. Cash/Card are PAID immediately (cashier recorded).
    * QPay invoices are created only for the QPay slice, not the order total.
    */
-  async settleSplits(orderId: string, splits: SplitInput[], actorId?: string) {
+  async settleSplits(orderId: string, splits: SplitInput[]) {
     const order = await this.prisma.order.findUnique({ where: { id: orderId } });
     if (!order) throw new NotFoundException('Order not found');
 
@@ -87,9 +79,6 @@ export class PaymentService {
       .map((s) => ({
         method: this.toPayMethod(s.method),
         amount: Math.round(Number(s.amount)),
-        // A bank transfer (or an invoice sent for one) is held UNPAID until someone sees it on the bank
-        // statement and presses «Мөнгө орсон»; until then the goods are not released.
-        awaiting: s.method === 'INVOICE' || s.method === 'TRANSFER',
       }))
       .filter((s) => s.amount > 0);
 
@@ -97,9 +86,6 @@ export class PaymentService {
       throw new BadRequestException('At least one payment split with amount > 0 is required');
     }
 
-    if (normalized.filter((s) => s.method === PayMethod.CREDIT).length > 1) {
-      throw new BadRequestException('Only one on-account (CREDIT) part per order');
-    }
     const sum = normalized.reduce((acc, s) => acc + s.amount, 0);
     if (sum !== order.totalMnt) {
       throw new BadRequestException(
@@ -127,39 +113,11 @@ export class PaymentService {
         );
         continue;
       }
-      if (split.method === PayMethod.CREDIT) {
-        // Released on account: an UNPAID row holding what the customer still owes. E-Barimt waits until it is paid.
-        rows.push({
-          orderId: order.id,
-          method: PayMethod.CREDIT,
-          provider: 'CREDIT',
-          amountMnt: split.amount,
-          status: PaymentStatus.UNPAID,
-          paidAt: null,
-          nextPollAt: null,
-          qpayPayload: { channel: 'CREDIT', originalMnt: split.amount, settlements: [] },
-        });
-        continue;
-      }
-      if (split.awaiting) {
-        rows.push({
-          orderId: order.id,
-          method: PayMethod.TRANSFER,
-          provider: 'INVOICE',
-          amountMnt: split.amount,
-          status: PaymentStatus.UNPAID,
-          paidAt: null,
-          nextPollAt: null,
-          qpayPayload: { channel: 'INVOICE', awaitingTransfer: true },
-        });
-        continue;
-      }
       rows.push({
         orderId: order.id,
         method: split.method,
         provider: split.method,
         amountMnt: split.amount,
-        recordedById: actorId ?? order.createdById,
         status: PaymentStatus.PAID,
         paidAt: new Date(),
         nextPollAt: null,
@@ -338,16 +296,12 @@ export class PaymentService {
     if (!order || order.status !== OrderStatus.PENDING_PAYMENT) return;
     const splits = await this.prisma.payment.findMany({ where: { orderId } });
     const live = splits.filter((s) => s.status !== PaymentStatus.EXPIRED && s.status !== PaymentStatus.FAILED);
-    // An open CREDIT row is the part released on account: it does not hold the order back, every other
-    // split must be paid. Paid + still-owed must equal the order total.
-    const owed = live.filter((s) => s.method === PayMethod.CREDIT && s.status === PaymentStatus.UNPAID);
-    const rest = live.filter((s) => !owed.includes(s));
-    if (!live.length || !rest.every((s) => s.status === PaymentStatus.PAID)) return;
+    if (!live.length || !live.every((s) => s.status === PaymentStatus.PAID)) return;
 
-    const coveredTotal = live.reduce((sum, s) => sum + s.amountMnt, 0);
-    if (coveredTotal !== order.totalMnt) {
+    const paidTotal = live.reduce((sum, s) => sum + s.amountMnt, 0);
+    if (paidTotal !== order.totalMnt) {
       this.log.error(
-        `Order ${order.orderNumber}: paid+owed ${coveredTotal}₮ != total ${order.totalMnt}₮; not releasing for loading`,
+        `Order ${order.orderNumber}: paid ${paidTotal}₮ != total ${order.totalMnt}₮; not releasing for loading`,
       );
       return;
     }
@@ -357,169 +311,8 @@ export class PaymentService {
       data: { status: OrderStatus.READY_FOR_LOADING },
     });
     if (claimed.count !== 1) return;
-    if (owed.length) {
-      const due = owed.reduce((sum, s) => sum + s.amountMnt, 0);
-      this.log.log(`Order ${order.orderNumber} released on account (${due}₮ owed) -> READY_FOR_LOADING; E-Barimt after payment`);
-      return;
-    }
     this.log.log(`Order ${order.orderNumber} all splits PAID -> READY_FOR_LOADING`);
     await this.ebarimt.issueAfterPaid(orderId);
-  }
-
-  // ---------------------------------------------------------------------------------------------
-  // Goods released on account: collecting what is owed
-  // ---------------------------------------------------------------------------------------------
-
-  /** What is still owed on an order released on account (0 when nothing is owed). */
-  async outstandingCredit(orderId: string, db: Prisma.TransactionClient | PrismaService = this.prisma) {
-    const rows = await db.payment.findMany({ where: { orderId, method: PayMethod.CREDIT, status: PaymentStatus.UNPAID } });
-    return { row: rows[0] ?? null, amountMnt: rows.reduce((s, r) => s + r.amountMnt, 0) };
-  }
-
-  /**
-   * The customer pays (part of) what they owe. Recorded as a normal PAID cash/card row dated today, and the
-   * open CREDIT row shrinks by the same amount, so paid + owed always equals the order total. When nothing is
-   * owed any more the CREDIT row is closed (PAID at 0₮) and the E-Barimt is issued, because the sale is now
-   * fully paid.
-   */
-  /**
-   * A staff member saw the invoiced bank transfer arrive: the awaiting transfer rows become PAID and the order is
-   * released. Conditional on the rows still being UNPAID, so two people confirming at once record it once.
-   */
-  async confirmTransfer(orderId: string, actorId: string) {
-    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
-    if (!order) throw new NotFoundException('Order not found');
-    if (order.status === OrderStatus.CANCELLED) throw new BadRequestException('Order is cancelled');
-    const now = new Date();
-    const res = await this.prisma.payment.updateMany({
-      where: { orderId, method: PayMethod.TRANSFER, status: PaymentStatus.UNPAID },
-      data: { status: PaymentStatus.PAID, paidAt: now, recordedById: actorId, qpayPayload: { channel: 'INVOICE', confirmedBy: actorId, confirmedAt: now.toISOString() } },
-    });
-    if (res.count === 0) throw new BadRequestException('Шилжүүлэг хүлээж буй төлбөр алга / No transfer is awaited on this order');
-    this.log.log(`Invoice transfer confirmed on ${order.orderNumber} by ${actorId}`);
-    await this.syncOrderStatus(orderId);
-    return { confirmed: res.count };
-  }
-
-  /**
-   * The rest of a waiting order was paid another way (the QPay invoice was never paid, or the invoiced transfer
-   * came as cash): the unpaid QPay / awaited-transfer parts are closed and one PAID part of `method` replaces
-   * them, so a half-paid order can always be released. A QPay that is paid after this is flagged by the
-   * late-payment check like any expired invoice.
-   */
-  async payRemaining(orderId: string, method: 'CASH' | 'CARD' | 'TRANSFER', actorId: string) {
-    // Ask QPay first, as cancelling does: the customer may have just paid the invoice, and taking the same
-    // amount again in cash would charge them twice.
-    const qpayOpen = await this.prisma.payment.findMany({ where: { orderId, status: PaymentStatus.UNPAID, method: PayMethod.QPAY } });
-    for (const payment of qpayOpen) {
-      let outcome: VerifyOutcome;
-      try {
-        outcome = await this.verifyAndSettle(payment, 'pay-remaining-guard');
-      } catch {
-        throw new ServiceUnavailableException('QPay-ийн төлөвийг шалгаж чадсангүй, дахин оролдоно уу / Cannot confirm QPay status right now');
-      }
-      if (outcome === 'paid') {
-        throw new ConflictException('QPay-ээр дөнгөж төлөгдсөн байна — дахин мөнгө авах хэрэггүй / The QPay invoice was just paid');
-      }
-    }
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        const order = await tx.order.findUnique({ where: { id: orderId } });
-        if (!order) throw new NotFoundException('Order not found');
-        if (order.status !== OrderStatus.PENDING_PAYMENT) throw new BadRequestException('Захиалга төлбөр хүлээгээгүй байна / Order is not waiting for payment');
-        const open = await tx.payment.findMany({
-          where: { orderId, status: PaymentStatus.UNPAID, method: { in: [PayMethod.QPAY, PayMethod.TRANSFER] } },
-        });
-        if (!open.length) throw new BadRequestException('Хүлээгдэж буй төлбөр алга / Nothing is waiting');
-        const amountMnt = open.reduce((s, p) => s + p.amountMnt, 0);
-        const closed = await tx.payment.updateMany({
-          where: { id: { in: open.map((p) => p.id) }, status: PaymentStatus.UNPAID },
-          data: { status: PaymentStatus.EXPIRED, nextPollAt: null },
-        });
-        if (closed.count !== open.length) throw new ConflictException('A payment just changed; reload and try again');
-        const now = new Date();
-        await tx.payment.create({
-          data: {
-            orderId,
-            method: PayMethod[method],
-            provider: method,
-            amountMnt,
-            recordedById: actorId,
-            status: PaymentStatus.PAID,
-            paidAt: now,
-            nextPollAt: null,
-            qpayPayload: { channel: method, cashierRecorded: true, replaces: open.map((p) => p.id), actorId },
-          },
-        });
-        return { orderNumber: order.orderNumber, amountMnt };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-    this.log.log(`Remaining ${result.amountMnt}₮ on ${result.orderNumber} paid by ${method} (recorded by ${actorId})`);
-    await this.syncOrderStatus(orderId);
-    return result;
-  }
-
-  /**
-   * `hooks.before` / `hooks.after` run inside the same Serializable transaction, so a caller (offset, contract
-   * sale) can check its own limit and write its own record atomically with the settlement.
-   */
-  async settleCredit(
-    orderId: string,
-    method: SettleMethod,
-    amountMnt: number,
-    actorId: string,
-    hooks: { before?: (tx: Prisma.TransactionClient) => Promise<void>; after?: (tx: Prisma.TransactionClient, orderNumber: string) => Promise<void> } = {},
-  ) {
-    if (!Number.isInteger(amountMnt) || amountMnt <= 0) throw new BadRequestException('Amount must be a positive whole number');
-    const result = await this.prisma.$transaction(
-      async (tx) => {
-        const order = await tx.order.findUnique({ where: { id: orderId } });
-        if (!order) throw new NotFoundException('Order not found');
-        if (order.status === OrderStatus.CANCELLED) throw new BadRequestException('Order is cancelled');
-        // Only goods actually released can be owed: a pending order's other parts (QPay, transfer) come first.
-        if (order.status === OrderStatus.PENDING_PAYMENT) {
-          throw new BadRequestException('Захиалгын бусад төлбөр хараахан ороогүй / Order is still waiting for its other payments');
-        }
-        await hooks.before?.(tx);
-        const { row, amountMnt: owed } = await this.outstandingCredit(orderId, tx);
-        if (!row || owed <= 0) throw new BadRequestException('Nothing is owed on this order');
-        if (amountMnt > owed) throw new BadRequestException(`Only ${owed}₮ is owed on this order`);
-        const now = new Date();
-        await tx.payment.create({
-          data: {
-            orderId,
-            method: PayMethod[method],
-            provider: method,
-            amountMnt,
-            recordedById: actorId,
-            status: PaymentStatus.PAID,
-            paidAt: now,
-            nextPollAt: null,
-            qpayPayload: { channel: method, cashierRecorded: true, settlesCredit: row.id, actorId },
-          },
-        });
-        const left = owed - amountMnt;
-        const payload = (row.qpayPayload ?? {}) as Prisma.JsonObject;
-        const settlements = Array.isArray(payload.settlements) ? payload.settlements : [];
-        // Conditional on the amount we read: two cashiers taking the same debt at once cannot both succeed.
-        const updated = await tx.payment.updateMany({
-          where: { id: row.id, status: PaymentStatus.UNPAID, amountMnt: owed },
-          data: {
-            amountMnt: left,
-            ...(left === 0 ? { status: PaymentStatus.PAID, paidAt: now } : {}),
-            qpayPayload: { ...payload, settlements: [...settlements, { at: now.toISOString(), amountMnt, method, actorId }] },
-          },
-        });
-        if (updated.count !== 1) throw new ConflictException('This debt was just changed by someone else; reload and try again');
-        await hooks.after?.(tx, order.orderNumber);
-        return { orderNumber: order.orderNumber, left };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
-    this.log.log(`Credit payment ${amountMnt}₮ ${method} on ${result.orderNumber} by ${actorId}; still owed ${result.left}₮`);
-    if (result.left === 0) await this.ebarimt.issueAfterPaid(orderId);
-    return { owedMnt: result.left };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -604,12 +397,11 @@ export class PaymentService {
         createdAt: { lt: cutoff },
         payments: { some: {}, none: { status: PaymentStatus.PAID } },
       },
-      select: { id: true, payments: { select: { method: true, status: true } } },
+      select: { id: true },
       take: 50,
     });
     let expired = 0;
-    // An invoiced order waits for the buyer's bank transfer for days, not minutes: the QPay window does not apply.
-    for (const { id } of stale.filter((o) => !o.payments.some((p) => p.method === PayMethod.TRANSFER && p.status === PaymentStatus.UNPAID))) {
+    for (const { id } of stale) {
       try {
         await this.cancelUnpaidOrder(id, `Payment window of ${ttlMinutes} min expired`);
         expired += 1;
@@ -712,8 +504,6 @@ export class PaymentService {
     if (raw === 'CASH') return PayMethod.CASH;
     if (raw === 'CARD') return PayMethod.CARD;
     if (raw === 'QPAY') return PayMethod.QPAY;
-    if (raw === 'CREDIT') return PayMethod.CREDIT;
-    if (raw === 'TRANSFER' || raw === 'INVOICE') return PayMethod.TRANSFER;
     throw new BadRequestException(`Unsupported payment method ${raw}`);
   }
 
@@ -742,7 +532,7 @@ export class PaymentService {
         where: { id: paymentId },
         data: { pollAttempts: attempts, nextPollAt: null },
       });
-      this.log.warn(`QPay poll exhausted (30 min) for payment ${paymentId}`);
+      this.log.warn(`QPay poll exhausted (1m/3m/5m) for payment ${paymentId}`);
       return;
     }
     const nextPollAt = new Date(createdAt.getTime() + POLL_OFFSETS_MS[attempts]);

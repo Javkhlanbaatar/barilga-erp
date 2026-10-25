@@ -1,6 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { audit, changedKeys, fieldNames } from '../common/audit';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateWarehouseDto, UpdateWarehouseDto } from './dto/warehouse.dto';
 
@@ -10,22 +9,14 @@ export class WarehousesService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  list(includeInactive: boolean, withPeople = false) {
+  list(includeInactive: boolean) {
     return this.prisma.warehouse.findMany({
       where: includeInactive ? {} : { isActive: true },
-      orderBy: [{ isDefault: 'desc' }, { kind: 'asc' }, { code: 'asc' }],
-      ...(withPeople
-        ? {
-            include: {
-              users: { where: { isActive: true }, select: { id: true, fullName: true, role: true }, orderBy: { fullName: 'asc' } },
-              managers: { where: { user: { isActive: true } }, select: { user: { select: { id: true, fullName: true, role: true } } } },
-            },
-          }
-        : {}),
+      orderBy: [{ isDefault: 'desc' }, { code: 'asc' }],
     });
   }
 
-  async create(dto: CreateWarehouseDto, actorId?: string) {
+  async create(dto: CreateWarehouseDto) {
     try {
       const created = await this.prisma.warehouse.create({
         data: {
@@ -33,19 +24,9 @@ export class WarehousesService {
           name: dto.name,
           address: dto.address || null,
           phone: dto.phone || null,
-          kind: dto.kind ?? 'SHOP',
         },
       });
       this.log.log(`Warehouse ${created.code} created`);
-      if (actorId) {
-        await audit(this.prisma, {
-          entityType: 'WAREHOUSE',
-          entityId: created.id,
-          summary: `Шинэ ${created.kind === 'WAREHOUSE' ? 'агуулах' : 'дэлгүүр'}: ${created.name} (${created.code})`,
-          after: { name: created.name, kind: created.kind },
-          actorId,
-        });
-      }
       return created;
     } catch (err) {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
@@ -55,28 +36,7 @@ export class WarehousesService {
     }
   }
 
-  async update(id: string, dto: UpdateWarehouseDto, actorId?: string) {
-    const old = await this.prisma.warehouse.findUnique({ where: { id } });
-    const result = await this.applyUpdate(id, dto);
-    if (actorId && old) {
-      const before: Record<string, unknown> = { name: old.name, address: old.address, phone: old.phone, kind: old.kind, isActive: old.isActive, isDefault: old.isDefault };
-      const after = { name: result.name, address: result.address, phone: result.phone, kind: result.kind, isActive: result.isActive, isDefault: result.isDefault };
-      const keys = changedKeys(before, after);
-      if (keys.length) {
-        await audit(this.prisma, {
-          entityType: 'WAREHOUSE',
-          entityId: id,
-          summary: `${result.name}: ${fieldNames(keys)}`,
-          before: Object.fromEntries(keys.map((k) => [k, before[k]])),
-          after: Object.fromEntries(keys.map((k) => [k, after[k as keyof typeof after]])),
-          actorId,
-        });
-      }
-    }
-    return result;
-  }
-
-  private async applyUpdate(id: string, dto: UpdateWarehouseDto) {
+  async update(id: string, dto: UpdateWarehouseDto) {
     const existing = await this.prisma.warehouse.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Warehouse not found');
 
@@ -111,7 +71,6 @@ export class WarehousesService {
       ...(dto.address !== undefined ? { address: dto.address || null } : {}),
       ...(dto.phone !== undefined ? { phone: dto.phone || null } : {}),
       ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-      ...(dto.kind !== undefined ? { kind: dto.kind } : {}),
     };
 
     if (dto.isDefault === true && !existing.isDefault) {

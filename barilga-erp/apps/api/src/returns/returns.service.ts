@@ -1,10 +1,9 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { OrderStatus, PayableStatus, PaymentStatus, PayMethod, Prisma, RefundStatus, Role, SourceType } from '@prisma/client';
+import { OrderStatus, PayableStatus, Prisma, Role, SourceType } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { EbarimtService } from '../ebarimt/ebarimt.service';
-import { assertCashDrawerOpen } from '../cash/cash-drawer';
 import { InventoryService } from '../inventory/inventory.service';
-import { assertWarehouseAccess, isManagerRole, orderWarehouseWhere, seesAllWarehouses } from '../inventory/warehouse-scope';
+import { assertWarehouseAccess } from '../inventory/warehouse-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateReturnDto } from './dto/create-return.dto';
 
@@ -24,11 +23,9 @@ export class ReturnsService {
   ) {}
 
   async create(orderId: string, dto: CreateReturnDto, user: AuthUser) {
-    if (user.role !== Role.BORLUULAGCH && !isManagerRole(user.role)) {
+    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER && user.role !== Role.BORLUULAGCH) {
       throw new ForbiddenException('Only cashiers, managers, or admin can process returns');
     }
-    // Cash handed back comes out of someone's drawer.
-    if (dto.refundMethod === PayMethod.CASH) await assertCashDrawerOpen(this.prisma, user.id);
 
     const maxAttempts = 3;
     let lastError: unknown;
@@ -38,8 +35,6 @@ export class ReturnsService {
           async (tx) => this.processReturn(tx, orderId, dto, user),
           { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
         );
-        // The return paid off the last of the debt: the order is now fully settled and gets its receipt.
-        if (created.debtClosed) await this.ebarimt.issueAfterPaid(orderId);
         await this.ebarimt.refundForReturn({
           returnId: created.id,
           orderNumber: created.orderNumber,
@@ -158,71 +153,12 @@ export class ReturnsService {
       throw new BadRequestException('Refund amount must be greater than 0');
     }
 
-    // Goods released on account and not yet paid for: returning them lowers the debt; no money is handed
-    // back for goods that were never paid. While anything is owed, the debt is reduced first.
-    if (dto.refundMethod === PayMethod.OFFSET) {
-      throw new BadRequestException('A refund is paid out (cash, card, QPay, transfer) or taken off a debt (CREDIT)');
-    }
-    // QPay cannot send money back to the payer: QPay purchases are refunded by bank transfer.
-    if (dto.refundMethod === PayMethod.QPAY) {
-      throw new BadRequestException('QPay-ээр мөнгө буцаах боломжгүй — «Банкны шилжүүлэг» сонгож дансыг бичнэ үү / Refund QPay payments by bank transfer');
-    }
-    const refundAccount = dto.refundAccount?.trim() || null;
-    if (dto.refundMethod === PayMethod.TRANSFER && (!refundAccount || refundAccount.length < 6)) {
-      throw new BadRequestException('Мөнгө шилжүүлэх данс (банк, дансны дугаар, нэр)-ыг бичнэ үү / Enter the account to refund to');
-    }
-    let debtClosed = false;
-    const credit = order.payments.find((p) => p.method === PayMethod.CREDIT && p.status === PaymentStatus.UNPAID);
-    if (credit && credit.amountMnt > 0) {
-      if (dto.refundMethod !== PayMethod.CREDIT) {
-        throw new BadRequestException(
-          `Энэ захиалгад ${credit.amountMnt}₮ өр байна: буцаалт өрөөс хасагдана / Refund method must be CREDIT`,
-        );
-      }
-      if (refundAmount > credit.amountMnt) {
-        throw new BadRequestException(
-          `Буцаалт (${refundAmount}₮) өрөөс (${credit.amountMnt}₮) их байна: эхлээд өрийн хэмжээгээр буцаана уу`,
-        );
-      }
-      const left = credit.amountMnt - refundAmount;
-      const lowered = await tx.payment.updateMany({
-        where: { id: credit.id, status: PaymentStatus.UNPAID, amountMnt: credit.amountMnt },
-        data: { amountMnt: left, ...(left === 0 ? { status: PaymentStatus.PAID, paidAt: new Date() } : {}) },
-      });
-      if (lowered.count !== 1) throw new BadRequestException('The debt on this order just changed; reload and try again');
-      debtClosed = left === 0;
-    } else if (dto.refundMethod === PayMethod.CREDIT) {
-      throw new BadRequestException('Nothing is owed on this order; choose how the money is refunded');
-    } else {
-      // Money handed back can never exceed money actually received on the order (cash, card, QPay, transfer)
-      // less earlier money refunds: a contract-offset order or a discounted order cannot be turned into cash.
-      const received = order.payments
-        .filter((p) => p.status === PaymentStatus.PAID && p.method !== PayMethod.OFFSET && p.method !== PayMethod.CREDIT)
-        .reduce((s, p) => s + p.amountMnt, 0);
-      const earlier = await tx.salesReturn.aggregate({
-        where: { orderId, refundMethod: { notIn: [PayMethod.CREDIT, PayMethod.OFFSET] } },
-        _sum: { refundAmount: true },
-      });
-      const left = received - (earlier._sum.refundAmount ?? 0);
-      if (refundAmount > left) {
-        throw new BadRequestException(
-          `Буцааж өгөх мөнгө (${refundAmount}₮) энэ захиалгад орсон мөнгөнөөс (${Math.max(0, left)}₮) их байна. Гэрээгээр олгосон бол тооцоонд залруулга хийнэ.`,
-        );
-      }
-    }
-
     const salesReturn = await tx.salesReturn.create({
       data: {
         orderId,
         reason: dto.reason.trim(),
         refundAmount,
         refundMethod: dto.refundMethod,
-        refundAccount: dto.refundMethod === PayMethod.TRANSFER ? refundAccount : null,
-        // Lowering a debt hands nothing back, and cash leaves the drawer right here (the drawer count already
-        // subtracts it), so both are done. Card and transfer refunds wait until someone marks them paid out.
-        ...(dto.refundMethod === PayMethod.CREDIT || dto.refundMethod === PayMethod.CASH
-          ? { refundStatus: RefundStatus.PAID_OUT, paidOutAt: new Date(), paidOutById: user.id }
-          : {}),
         createdById: user.id,
         ebarimtStatus: 'PENDING',
         items: {
@@ -241,7 +177,7 @@ export class ReturnsService {
         warehouseId: order.warehouseId,
         refType: 'RETURN',
         refId: salesReturn.id,
-        reason: `Буцаалт — ${order.orderNumber}`,
+        reason: `Return on ${order.orderNumber}`,
         actorId: user.id,
       });
     }
@@ -271,7 +207,6 @@ export class ReturnsService {
     return {
       id: salesReturn.id,
       refundAmount,
-      debtClosed,
       orderNumber: order.orderNumber,
       receiptId: order.receiptId,
       ebarimtItems: returnLines.map((l) => ({
@@ -281,61 +216,5 @@ export class ReturnsService {
         totalAmount: l.lineRefund,
       })),
     };
-  }
-
-  /**
-   * Card / transfer refunds, for the person who sends the money: still to pay first, then the last 30 days
-   * of ones already sent. Managers only, limited to their warehouses.
-   */
-  async payouts(user: AuthUser) {
-    if (!isManagerRole(user.role)) throw new ForbiddenException('Only managers can see refund payouts');
-    const scope: Prisma.OrderWhereInput = seesAllWarehouses(user) ? {} : orderWarehouseWhere(user, await this.inventory.defaultWarehouseId());
-    const select = {
-      id: true,
-      refundAmount: true,
-      refundMethod: true,
-      refundStatus: true,
-      refundAccount: true,
-      reason: true,
-      createdAt: true,
-      paidOutAt: true,
-      createdBy: { select: { fullName: true } },
-      order: { select: { id: true, orderNumber: true, customerName: true, customerPhone: true } },
-    } as const;
-    const [pending, sent] = await Promise.all([
-      this.prisma.salesReturn.findMany({
-        where: { refundStatus: RefundStatus.PENDING_PAYOUT, refundAmount: { gt: 0 }, order: scope },
-        select,
-        orderBy: { createdAt: 'asc' },
-      }),
-      this.prisma.salesReturn.findMany({
-        where: {
-          refundStatus: RefundStatus.PAID_OUT,
-          refundMethod: { in: [PayMethod.TRANSFER, PayMethod.CARD, PayMethod.QPAY] },
-          paidOutAt: { gte: new Date(Date.now() - 30 * 86_400_000) },
-          order: scope,
-        },
-        select,
-        orderBy: { paidOutAt: 'desc' },
-        take: 100,
-      }),
-    ]);
-    return { pending, sent, pendingMnt: pending.reduce((s, r) => s + r.refundAmount, 0) };
-  }
-
-  /** A card or bank-transfer refund was actually sent to the customer (managers, their own warehouses). */
-  async markPaidOut(returnId: string, user: AuthUser) {
-    if (!isManagerRole(user.role)) throw new ForbiddenException('Only managers can confirm a refund payout');
-    const ret = await this.prisma.salesReturn.findUnique({ where: { id: returnId }, include: { order: { select: { warehouseId: true } } } });
-    if (!ret) throw new NotFoundException('Return not found');
-    assertWarehouseAccess(user, ret.order.warehouseId, ret.order.warehouseId ? undefined : await this.inventory.defaultWarehouseId());
-    const done = await this.prisma.salesReturn.updateMany({
-      where: { id: returnId, refundStatus: RefundStatus.PENDING_PAYOUT },
-      data: { refundStatus: RefundStatus.PAID_OUT, paidOutAt: new Date(), paidOutById: user.id },
-    });
-    if (done.count === 1) {
-      this.log.log(`Refund ${returnId} (${ret.refundAmount}₮ ${ret.refundMethod}) paid out, confirmed by ${user.id}`);
-    }
-    return this.prisma.salesReturn.findUniqueOrThrow({ where: { id: returnId } });
   }
 }

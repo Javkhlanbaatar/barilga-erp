@@ -1,69 +1,28 @@
 'use client';
 
-import { hasRole } from '@/lib/rbac';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { CashierSummary } from '@/components/cashier-summary';
-import { api } from '@/lib/api';
-import { useFeatures } from '@/lib/features';
-import { can, storeRights, type PermissionKey } from '@/lib/permissions';
-import { NotificationBell, useAlerts } from '@/components/notification-bell';
-import { AuthUser, FeatureKey, ROLE_LABEL } from '@/lib/types';
+import { AuthUser, ROLE_LABEL } from '@/lib/types';
 
-/** `permission`: shown to whoever has that right (the role's default, or given/taken by the admin) instead of by role. */
-const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][]; feature?: FeatureKey; permission?: PermissionKey }> = [
+const NAV: Array<{ href: string; label: string; roles: AuthUser['role'][] }> = [
   { href: '/pos', label: 'ПОС / Захиалга', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
   { href: '/orders', label: 'Захиалгууд', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
-  { href: '/invoices', label: 'Нэхэмжлэх', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'INVOICES' },
   { href: '/warehouse/tickets', label: 'Агуулах / тасалбар', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
-  { href: '/me/attendance', label: 'Миний ирц', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'], feature: 'HR' },
-  { href: '/admin/attendance', label: 'Ирц', roles: ['ADMIN', 'MANAGER'], feature: 'HR', permission: 'ATTENDANCE_MANAGE' },
-  { href: '/admin/payroll', label: 'Цалин', roles: ['ADMIN', 'MANAGER'], feature: 'HR' },
-  { href: '/reports', label: 'Тайлан', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
+  { href: '/admin/attendance', label: 'Ирц', roles: ['ADMIN', 'MANAGER'] },
+  { href: '/admin/payroll', label: 'Цалин', roles: ['ADMIN', 'MANAGER'] },
+  { href: '/reports/daily', label: 'Өдрийн тайлан', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'] },
   { href: '/inventory', label: 'Агуулахын үлдэгдэл', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
-  { href: '/inventory/receipts', label: 'Бараа орлого', roles: ['ADMIN', 'MANAGER', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_RECEIPTS', permission: 'RECEIPT_CREATE' },
-  { href: '/inventory/transfers', label: 'Шилжүүлэг', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'], feature: 'STOCK_TRANSFERS' },
-  { href: '/customers', label: 'Харилцагчид', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH'], feature: 'CUSTOMERS' },
-  { href: '/admin/price-lists', label: 'Үнийн жагсаалт', roles: ['ADMIN', 'SUPER_MANAGER'], feature: 'PRICE_LISTS', permission: 'PRICE_LIST_WRITE' },
   { href: '/admin/warehouses', label: 'Дэлгүүр / агуулах', roles: ['ADMIN'] },
   { href: '/admin/users', label: 'Хэрэглэгчид', roles: ['ADMIN'] },
-  { href: '/admin/features', label: 'Модулиуд', roles: ['ADMIN'] },
-  { href: '/admin/settings', label: 'Компанийн мэдээлэл', roles: ['ADMIN'] },
-  { href: '/admin/documents', label: 'Баримтын загвар', roles: ['ADMIN', 'SUPER_MANAGER'] },
-  { href: '/admin', label: 'Хяналтын самбар', roles: ['ADMIN', 'MANAGER'] },
-  { href: '/devices', label: 'Төхөөрөмж шалгах', roles: ['ADMIN', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
-  { href: '/me/account', label: 'Миний бүртгэл', roles: ['ADMIN', 'SUPER_MANAGER', 'MANAGER', 'BORLUULAGCH', 'ACHIGCH_BELTGEGCH'] },
+  { href: '/admin', label: 'Хяналт самбар', roles: ['ADMIN', 'MANAGER'] },
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<AuthUser | null>(null);
-  const features = useFeatures();
-  const [menuOpen, setMenuOpen] = useState(false);
-  /** Transfers waiting for this user (requests to send + stock to receive), shown as a badge. */
-  const [transfersWaiting, setTransfersWaiting] = useState(0);
-
-  useEffect(() => {
-    if (!user || !features.enabled('STOCK_TRANSFERS')) return;
-    let alive = true;
-    const poll = () =>
-      api<{ total: number }>('/inventory/transfers/pending')
-        .then((p) => alive && setTransfersWaiting(p.total))
-        .catch(() => undefined);
-    void poll();
-    const h = window.setInterval(poll, 60_000);
-    return () => {
-      alive = false;
-      window.clearInterval(h);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, pathname]);
-
-  const alerts = useAlerts(Boolean(user), pathname);
-
-  useEffect(() => setMenuOpen(false), [pathname]);
 
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');
@@ -73,81 +32,29 @@ export function Shell({ children }: { children: React.ReactNode }) {
       return;
     }
     setUser(JSON.parse(raw));
-    // Rights can change while someone is signed in (the admin gives or takes one): refresh them on every page.
-    api<AuthUser & { can?: string[] }>('/auth/me')
-      .then((me) => {
-        storeRights(me);
-        const fresh = localStorage.getItem('barilga_user');
-        if (fresh) setUser(JSON.parse(fresh));
-      })
-      .catch(() => undefined);
-    // A change on «Миний бүртгэл» (name, a new token) shows at once.
-    const onChange = () => {
-      const next = localStorage.getItem('barilga_user');
-      if (next) setUser(JSON.parse(next));
-    };
-    window.addEventListener('barilga-user', onChange);
-    return () => window.removeEventListener('barilga-user', onChange);
   }, [router]);
 
   if (!user) return <div className="p-8 text-slate-400">Уншиж байна…</div>;
 
-  const visible = NAV.filter(
-    (n) =>
-      (n.permission ? can(user, n.permission) : hasRole(user.role, n.roles)) &&
-      (!n.feature || features.enabled(n.feature)) &&
-      // A cashier's only report is the sales report: no right to it, no reports menu.
-      !(n.href === '/reports' && user.role === 'BORLUULAGCH' && !can(user, 'REPORT_SALES')),
-  );
-  // The most specific matching link is active (so /inventory/transfers does not also light up /inventory).
-  const activeHref = visible
-    .filter((n) => pathname === n.href || (n.href !== '/admin' && pathname.startsWith(`${n.href}/`)))
-    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
-
   return (
-    <div className="min-h-screen md:grid md:grid-cols-[240px_1fr] print:block">
-      {/* Phone / tablet: a top bar with a menu button instead of the fixed sidebar (above the open menu, so the bell's list shows over it). */}
-      <div className="sticky top-0 z-[46] flex items-center justify-between border-b border-slate-800 bg-steel-900 px-4 py-2 md:hidden print:hidden">
-        <span className="font-bold">Барилга Хангамж</span>
-        <span className="ml-auto mr-2">
-          <NotificationBell feed={alerts} align="right" />
-        </span>
-        <button className="btn-ghost text-sm" onClick={() => setMenuOpen((o) => !o)} aria-label="Цэс">
-          ☰ Цэс{transfersWaiting > 0 ? ` (${transfersWaiting})` : ''}
-        </button>
-      </div>
-      {/* Tap outside the open menu to close it. */}
-      {menuOpen && <div className="fixed inset-0 top-14 z-[41] bg-black/50 md:hidden print:hidden" onClick={() => setMenuOpen(false)} />}
-      <aside
-        className={`bg-steel-900 border-r border-slate-800 p-4 flex-col print:hidden ${
-          menuOpen ? 'fixed inset-y-0 left-0 top-14 z-[45] flex w-72 max-w-[85vw] overflow-auto' : 'hidden'
-        } md:static md:flex md:min-h-screen md:w-auto`}
-      >
-        <div className="mb-8 flex items-start justify-between gap-2">
-          <div>
-            <p className="text-amber-brand text-[10px] tracking-[0.25em] uppercase">Barilga ERP</p>
-            <h1 className="font-bold text-lg">Барилга Хангамж</h1>
-          </div>
-          <span className="hidden md:block">
-            <NotificationBell feed={alerts} />
-          </span>
+    <div className="min-h-screen grid grid-cols-[240px_1fr] print:grid-cols-1">
+      <aside className="bg-steel-900 border-r border-slate-800 p-4 flex flex-col print:hidden">
+        <div className="mb-8">
+          <p className="text-amber-brand text-[10px] tracking-[0.25em] uppercase">Barilga ERP</p>
+          <h1 className="font-bold text-lg">Барилга Хангамж</h1>
         </div>
         <nav className="space-y-1 flex-1">
-          {visible.map((n) => (
+          {NAV.filter((n) => n.roles.includes(user.role)).map((n) => (
             <Link
               key={n.href}
               href={n.href}
-              onClick={() => setMenuOpen(false)}
-              className={`block rounded-md px-3 py-2.5 text-sm md:py-2 ${
-                n.href === activeHref
+              className={`block rounded-md px-3 py-2 text-sm ${
+                pathname === n.href || (n.href !== '/admin' && pathname.startsWith(n.href))
                   ? 'bg-amber-brand text-steel-950 font-semibold'
                   : 'hover:bg-steel-800'
               }`}
             >
               {n.label}
-              {n.href === '/inventory/transfers' && transfersWaiting > 0 && (
-                <span className="ml-2 rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">{transfersWaiting}</span>
-              )}
             </Link>
           ))}
         </nav>
@@ -160,7 +67,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {ROLE_LABEL[user.role]}
             </span>
           </div>
-          {user.role === 'BORLUULAGCH' && can(user, 'REPORT_SALES') && <CashierSummary />}
+          {user.role === 'BORLUULAGCH' && <CashierSummary />}
           <button
             className="btn-ghost w-full text-xs"
             onClick={() => {
@@ -172,7 +79,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
-      <main className="min-w-0 overflow-auto p-3 sm:p-4 md:p-6 print:p-0 print:overflow-visible">{children}</main>
+      <main className="p-6 overflow-auto print:p-0 print:overflow-visible">{children}</main>
     </div>
   );
 }

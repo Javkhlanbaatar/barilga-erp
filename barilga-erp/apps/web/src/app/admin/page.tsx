@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Shell } from '@/components/shell';
-import { useFeatures } from '@/lib/features';
 import { api, tugrik } from '@/lib/api';
 import Link from 'next/link';
 import { AuthUser, ReconciliationReport, Vehicle, Zone } from '@/lib/types';
@@ -17,7 +16,6 @@ export default function AdminPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [recon, setRecon] = useState<ReconciliationReport | null>(null);
   const isAdmin = user?.role === 'ADMIN';
-  const delivery = useFeatures().enabled('DELIVERY');
 
   async function load() {
     setZones(await api('/zones'));
@@ -68,34 +66,38 @@ export default function AdminPage() {
 
   return (
     <Shell>
-      <h2 className="text-xl font-bold mb-4">Хяналт самбар</h2>
+      <h2 className="text-xl font-bold mb-4">Админ — бүс, машин, хэрэглэгч</h2>
+      {!isAdmin && (
+        <p className="text-sm text-slate-400 mb-4">
+          Zone and vehicle limits are read-only. Only admin can change rates.
+        </p>
+      )}
       <div className="grid gap-6">
         <section className="card">
-          <h3 className="font-semibold mb-1">Үлдэгдлээс илүү зарагдсан бараа</h3>
+          <h3 className="font-semibold mb-1">Stock reconciliation</h3>
           <p className="text-sm text-slate-400 mb-3">
-            Агуулахын үлдэгдлээс илүү зарагдсан мөрүүд. Захиалга дээр нийлүүлэгчийг сонгож тохируулна.
+            Internal lines sold past available warehouse stock. Assign a supplier on the order to restore qty and open a payable.
           </p>
           <div className="grid grid-cols-2 gap-3 mb-3">
             <article className="rounded-lg border border-slate-700 p-3">
-              <p className="text-xs text-slate-400 uppercase">Хасах үлдэгдэлтэй бараа</p>
+              <p className="text-xs text-slate-400 uppercase">Negative SKUs</p>
               <p className="text-2xl font-bold text-rose-200">{recon?.summary.negativeProducts ?? 0}</p>
             </article>
             <article className="rounded-lg border border-slate-700 p-3">
-              <p className="text-xs text-slate-400 uppercase">Шийдээгүй мөр</p>
+              <p className="text-xs text-slate-400 uppercase">Unassigned lines</p>
               <p className="text-2xl font-bold text-amber-200">{recon?.summary.unassignedLines ?? 0}</p>
             </article>
           </div>
           {(recon?.lines.length ?? 0) === 0 ? (
-            <p className="text-sm text-slate-500">Илүү зарагдсан бараа алга.</p>
+            <p className="text-sm text-slate-500">No unassigned oversold items.</p>
           ) : (
-            <div className="table-scroll">
-            <table className="w-full min-w-[420px] text-sm">
+            <table className="w-full text-sm">
               <thead className="text-left text-slate-400 border-b border-slate-700">
                 <tr>
-                  <th className="py-2">Захиалга</th>
-                  <th>Бараа</th>
-                  <th className="text-right">Тоо</th>
-                  <th className="text-right">Үлдэгдэл</th>
+                  <th className="py-2">Order</th>
+                  <th>SKU</th>
+                  <th className="text-right">Qty</th>
+                  <th className="text-right">Stock</th>
                 </tr>
               </thead>
               <tbody>
@@ -117,22 +119,18 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
-            </div>
           )}
         </section>
-        {delivery && (
         <section className="card">
           <h3 className="font-semibold mb-3">Хүргэлтийн бүс</h3>
           {zones.map((z, idx) => (
-            <div key={z.id} className="grid grid-cols-2 gap-2 items-center mb-2 sm:grid-cols-[2fr_1fr_auto]">
-              <div className="col-span-2 sm:col-span-1">
+            <div key={z.id} className="grid grid-cols-[2fr_1fr_auto] gap-2 items-center mb-2">
+              <div>
                 <p className="font-medium">{z.nameMn}</p>
                 <p className="text-xs text-slate-400">{z.description}</p>
               </div>
               <input
                 type="number"
-                inputMode="numeric"
-                aria-label="Хүргэлтийн үнэ ₮"
                 disabled={!isAdmin}
                 value={z.baseDeliveryFeeMnt}
                 onChange={(e) => {
@@ -151,19 +149,13 @@ export default function AdminPage() {
             </div>
           ))}
         </section>
-        )}
-        {delivery && (
         <section className="card">
-          <h3 className="font-semibold mb-1">Машины хязгаар (Портер 1.5т · Өөрөө буулгагч 5т · Манипулятор 10т)</h3>
-          <p className="mb-3 text-xs text-slate-400">Нүд бүр: даац (кг) · урт (м) · эзлэхүүн (м³).</p>
+          <h3 className="font-semibold mb-3">Машины хязгаар (Porter 1.5т · Dump 5т · Manipulator 10т)</h3>
           {vehicles.map((v, idx) => (
-            <div key={v.id} className="grid grid-cols-2 gap-2 items-center mb-3 text-sm sm:mb-2 sm:grid-cols-5">
-              <p className="col-span-2 font-medium sm:col-span-1 sm:font-normal">{v.nameMn}</p>
+            <div key={v.id} className="grid grid-cols-5 gap-2 items-center mb-2 text-sm">
+              <p>{v.nameMn}</p>
               <input
                 type="number"
-                inputMode="decimal"
-                aria-label="Даац (кг)"
-                placeholder="кг"
                 disabled={!isAdmin}
                 value={v.maxWeightKg}
                 onChange={(e) => {
@@ -174,9 +166,6 @@ export default function AdminPage() {
               />
               <input
                 type="number"
-                inputMode="decimal"
-                aria-label="Урт (м)"
-                placeholder="м"
                 disabled={!isAdmin}
                 value={Number(v.maxLengthM)}
                 onChange={(e) => {
@@ -187,9 +176,6 @@ export default function AdminPage() {
               />
               <input
                 type="number"
-                inputMode="decimal"
-                aria-label="Эзлэхүүн (м³)"
-                placeholder="м³"
                 disabled={!isAdmin}
                 value={Number(v.maxVolumeM3)}
                 onChange={(e) => {
@@ -203,49 +189,48 @@ export default function AdminPage() {
                   Хадгалах
                 </button>
               ) : (
-                <span className="text-xs text-slate-500">Зөвхөн харах</span>
+                <span className="text-xs text-slate-500">Read-only</span>
               )}
             </div>
           ))}
         </section>
-        )}
-        <section className="card flex flex-wrap items-center justify-between gap-4">
+        <section className="card flex items-center justify-between gap-4">
           <div>
             <h3 className="font-semibold">Ирц</h3>
-            <p className="text-sm text-slate-400 mt-1">Менежер ажилтны ирэх, явах цагийг бүртгэнэ.</p>
+            <p className="text-sm text-slate-400 mt-1">Managers record staff check-in and check-out. Staff cannot punch themselves.</p>
           </div>
           <Link href="/admin/attendance" className="btn-ghost">
-            Ирц нээх
+            Open attendance
           </Link>
         </section>
-        <section className="card flex flex-wrap items-center justify-between gap-4">
+        <section className="card flex items-center justify-between gap-4">
           <div>
             <h3 className="font-semibold">Цалин</h3>
-            <p className="text-sm text-slate-400 mt-1">Сарын үндсэн цалин, бэлтгэлийн урамшуулал, кассын борлуулалтын шагнал.</p>
+            <p className="text-sm text-slate-400 mt-1">Monthly base pay, fulfillment ticket bonuses, and cashier sales commission.</p>
           </div>
           <Link href="/admin/payroll" className="btn-ghost">
-            Цалин нээх
+            Open payroll
           </Link>
         </section>
         {isAdmin && (
-        <section className="card flex flex-wrap items-center justify-between gap-4">
+        <section className="card flex items-center justify-between gap-4">
           <div>
             <h3 className="font-semibold">Дэлгүүр / агуулах</h3>
-            <p className="text-sm text-slate-400 mt-1">Дэлгүүр, агуулах нэмэх. Үлдэгдэл, захиалга, ажилтан агуулах тус бүрээр.</p>
+            <p className="text-sm text-slate-400 mt-1">Add shops/warehouses; stock, orders and staff are kept per warehouse.</p>
           </div>
           <Link href="/admin/warehouses" className="btn-primary">
-            Агуулах удирдах
+            Manage warehouses
           </Link>
         </section>
         )}
         {isAdmin && (
-        <section className="card flex flex-wrap items-center justify-between gap-4">
+        <section className="card flex items-center justify-between gap-4">
           <div>
             <h3 className="font-semibold">Хэрэглэгчид</h3>
-            <p className="text-sm text-slate-400 mt-1">Ажилтны эрх үүсгэх, засах, идэвхгүй болгох.</p>
+            <p className="text-sm text-slate-400 mt-1">Create, edit, and deactivate staff accounts.</p>
           </div>
           <Link href="/admin/users" className="btn-primary">
-            Хэрэглэгчид
+            Open user management
           </Link>
         </section>
         )}

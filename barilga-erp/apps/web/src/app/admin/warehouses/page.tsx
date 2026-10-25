@@ -2,15 +2,14 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Modal } from '@/components/modal';
 import { Shell } from '@/components/shell';
 import { api } from '@/lib/api';
 import { homeForRole } from '@/lib/rbac';
-import { AuthUser, ROLE_LABEL, WAREHOUSE_KIND_LABEL, Warehouse, WarehouseKind } from '@/lib/types';
+import { AuthUser, Warehouse } from '@/lib/types';
 
 type Toast = { kind: 'error' | 'ok'; text: string };
 
-const emptyForm = { code: '', name: '', address: '', phone: '', kind: 'SHOP' as WarehouseKind };
+const emptyForm = { code: '', name: '', address: '', phone: '' };
 
 export default function AdminWarehousesPage() {
   const router = useRouter();
@@ -33,7 +32,7 @@ export default function AdminWarehousesPage() {
     try {
       setRows(await api<Warehouse[]>('/inventory/warehouses?all=true'));
     } catch (err) {
-      flash('error', err instanceof Error ? err.message : 'Ачаалж чадсангүй');
+      flash('error', err instanceof Error ? err.message : 'Failed to load');
     } finally {
       setLoading(false);
     }
@@ -62,7 +61,7 @@ export default function AdminWarehousesPage() {
 
   function openEdit(row: Warehouse) {
     setEditing(row);
-    setForm({ code: row.code, name: row.name, address: row.address ?? '', phone: row.phone ?? '', kind: row.kind ?? 'SHOP' });
+    setForm({ code: row.code, name: row.name, address: row.address ?? '', phone: row.phone ?? '' });
     setFormError('');
     setModal('edit');
   }
@@ -80,21 +79,20 @@ export default function AdminWarehousesPage() {
             name: form.name.trim(),
             address: form.address.trim() || undefined,
             phone: form.phone.trim() || undefined,
-            kind: form.kind,
           }),
         });
         flash('ok', 'Агуулах үүслээ');
       } else if (editing) {
         await api(`/inventory/warehouses/${editing.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ name: form.name.trim(), address: form.address.trim(), phone: form.phone.trim(), kind: form.kind }),
+          body: JSON.stringify({ name: form.name.trim(), address: form.address.trim(), phone: form.phone.trim() }),
         });
         flash('ok', 'Хадгалагдлаа');
       }
       setModal(null);
       await load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
+      setFormError(err instanceof Error ? err.message : 'Save failed');
     } finally {
       setSaving(false);
     }
@@ -106,7 +104,7 @@ export default function AdminWarehousesPage() {
       flash('ok', okText);
       await load();
     } catch (err) {
-      flash('error', err instanceof Error ? err.message : 'Алдаа гарлаа');
+      flash('error', err instanceof Error ? err.message : 'Failed');
     }
   }
 
@@ -114,31 +112,30 @@ export default function AdminWarehousesPage() {
     <Shell>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-4">
         <div>
-          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Админ</p>
+          <p className="text-amber-brand text-xs tracking-[0.2em] uppercase">Admin</p>
           <h2 className="text-xl font-bold">Дэлгүүр / агуулах</h2>
           <p className="text-slate-400 text-sm mt-1">
             Дэлгүүр бүр өөрийн агуулахтай. Анхдагч агуулахад хуучин үлдэгдэл хуваарилагдсан.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex gap-2">
           <button className="btn-primary" onClick={openCreate}>
             Агуулах нэмэх
           </button>
           <button className="btn-ghost" onClick={() => void load()} disabled={loading}>
-            Шинэчлэх
+            Refresh
           </button>
         </div>
       </div>
 
-      <div className="card table-scroll p-0">
-        <table className="w-full text-sm min-w-[720px]">
+      <div className="card overflow-auto p-0">
+        <table className="w-full text-sm min-w-[640px]">
           <thead className="text-left text-slate-400 border-b border-slate-700">
             <tr>
               <th className="p-3">Код</th>
               <th>Нэр</th>
-              <th>Төрөл</th>
-              <th>Хаяг / утас</th>
-              <th>Ажилтан / хариуцсан менежер</th>
+              <th>Хаяг</th>
+              <th>Утас</th>
               <th>Төлөв</th>
               <th className="pr-3 text-right">Үйлдэл</th>
             </tr>
@@ -148,26 +145,8 @@ export default function AdminWarehousesPage() {
               <tr key={row.id} className={`border-t border-slate-800 ${row.isActive ? '' : 'opacity-60'}`}>
                 <td className="p-3 font-mono text-xs">{row.code}</td>
                 <td className="font-medium">{row.name}</td>
-                <td className="text-xs">{WAREHOUSE_KIND_LABEL[row.kind ?? 'SHOP']}</td>
-                <td className="text-slate-300 text-xs">
-                  {row.address || '—'}
-                  {row.phone && <p className="text-slate-500">{row.phone}</p>}
-                </td>
-                <td className="text-xs">
-                  {(row.users ?? []).map((u) => (
-                    <p key={u.id}>
-                      {u.fullName} <span className="text-slate-500">· {ROLE_LABEL[u.role]}</span>
-                    </p>
-                  ))}
-                  {(row.managers ?? []).map((m) => (
-                    <p key={m.user.id} className="text-sky-300">
-                      {m.user.fullName} <span className="text-slate-500">· хянадаг</span>
-                    </p>
-                  ))}
-                  {!(row.users ?? []).length && !(row.managers ?? []).length && (
-                    <span className="text-slate-500">{row.isDefault ? 'Томилоогүй ажилтнууд энд ажиллана' : 'Хүн томилоогүй'}</span>
-                  )}
-                </td>
+                <td className="text-slate-300">{row.address || '—'}</td>
+                <td className="text-slate-300">{row.phone || '—'}</td>
                 <td>
                   <div className="flex flex-wrap gap-1">
                     {row.isDefault && (
@@ -187,7 +166,7 @@ export default function AdminWarehousesPage() {
                   </div>
                 </td>
                 <td className="pr-3">
-                  <div className="flex flex-wrap justify-end gap-1">
+                  <div className="flex justify-end gap-1">
                     <button className="btn-ghost text-xs px-3 py-1" onClick={() => openEdit(row)}>
                       Засах
                     </button>
@@ -225,23 +204,9 @@ export default function AdminWarehousesPage() {
       </div>
 
       {modal && (
-        <Modal
-          onClose={() => setModal(null)}
-          title={modal === 'create' ? 'Агуулах нэмэх' : 'Агуулах засах'}
-          size="md"
-          busy={saving}
-          footer={
-            <>
-              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
-                Болих
-              </button>
-              <button type="submit" form="warehouse-form" className="btn-primary" disabled={saving}>
-                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
-              </button>
-            </>
-          }
-        >
-          <form id="warehouse-form" onSubmit={save} className="space-y-3">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4">
+          <form onSubmit={save} className="card w-full max-w-md space-y-3">
+            <h3 className="font-semibold text-lg">{modal === 'create' ? 'Агуулах нэмэх' : 'Агуулах засах'}</h3>
             {formError && <p className="text-red-400 text-sm">{formError}</p>}
             <label className="block text-xs text-slate-400">
               Код (давтагдахгүй, дараа нь солигдохгүй)
@@ -265,30 +230,28 @@ export default function AdminWarehousesPage() {
               />
             </label>
             <label className="block text-xs text-slate-400">
-              Төрөл
-              <select className="mt-1 w-full" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as WarehouseKind })}>
-                <option value="SHOP">Дэлгүүр — касс дээр зардаг</option>
-                <option value="WAREHOUSE">Агуулах — хадгалж, дэлгүүр рүү шилжүүлдэг</option>
-              </select>
-              <span className="mt-1 block text-[11px] text-slate-500">
-                Аль аль нь үлдэгдэл хадгална. Ажилтнаа «Хэрэглэгчид» хэсэгт энэ дэлгүүр/агуулахад томилно.
-              </span>
-            </label>
-            <label className="block text-xs text-slate-400">
               Хаяг
               <input className="mt-1 w-full" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
             </label>
             <label className="block text-xs text-slate-400">
               Утас
-              <input className="mt-1 w-full" type="tel" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              <input className="mt-1 w-full" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </label>
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" className="btn-ghost" onClick={() => setModal(null)}>
+                Болих
+              </button>
+              <button className="btn-primary" disabled={saving}>
+                {saving ? 'Хадгалж байна…' : 'Хадгалах'}
+              </button>
+            </div>
           </form>
-        </Modal>
+        </div>
       )}
 
       {toast && (
         <div
-          className={`fixed bottom-4 left-4 right-4 z-[60] sm:left-auto rounded-lg border px-4 py-3 text-sm shadow-lg ${
+          className={`fixed bottom-4 right-4 z-[60] rounded-lg border px-4 py-3 text-sm shadow-lg ${
             toast.kind === 'error'
               ? 'border-red-700 bg-red-950 text-red-100'
               : 'border-emerald-700 bg-emerald-950 text-emerald-100'

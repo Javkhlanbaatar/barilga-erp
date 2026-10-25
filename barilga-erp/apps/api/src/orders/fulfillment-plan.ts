@@ -43,7 +43,7 @@ export function planFulfillment(items: PlanItem[], returns: PlanReturn[]): Fulfi
     if (item.sourceType === SourceType.EXTERNAL_SUPPLIER) {
       plan.payables.push({
         orderItemId: item.id,
-        supplierName: item.supplierName?.trim() || 'Өөр дэлгүүр',
+        supplierName: item.supplierName?.trim() || 'Other store',
         quantity: remaining,
         amountMnt: Math.max(0, item.lineTotal - (returnedMoney.get(item.id) ?? 0)),
       });
