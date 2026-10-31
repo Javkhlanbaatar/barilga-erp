@@ -14,7 +14,7 @@ import { FakeDb } from './helpers/fake-db';
 
 const D = (n: number | string) => new Prisma.Decimal(n);
 const admin: any = { id: 'u-admin', role: Role.ADMIN, name: 'Admin' };
-const manager: any = { id: 'u-mgr', role: Role.SUPER_MANAGER, name: 'Manager' };
+const manager: any = { id: 'u-mgr', role: Role.MANAGER, name: 'Manager' };
 const staffA: any = { id: 'u-a', role: Role.ACHIGCH_BELTGEGCH, name: 'A', warehouseId: 'wh-main' };
 const staffB: any = { id: 'u-b', role: Role.BORLUULAGCH, name: 'B', warehouseId: 'wh-b' };
 const unassigned: any = { id: 'u-x', role: Role.ACHIGCH_BELTGEGCH, name: 'X', warehouseId: null };

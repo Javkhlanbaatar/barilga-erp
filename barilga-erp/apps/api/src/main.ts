@@ -30,19 +30,8 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
     }),
   );
-  // CORS_ORIGIN may list several sites, comma separated (e.g. the shop PC's LAN address). Outside production,
-  // localhost and 127.0.0.1 on any port are also let in, so opening the app either way does not break login.
-  const allowed = (config.get<string>('CORS_ORIGIN') ?? 'http://localhost:3000')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
-  const isProduction = String(config.get<string>('NODE_ENV') ?? process.env.NODE_ENV ?? '').toLowerCase() === 'production';
   app.enableCors({
-    origin: (origin: string | undefined, cb: (err: Error | null, ok?: boolean) => void) => {
-      if (!origin || allowed.includes(origin)) return cb(null, true);
-      if (!isProduction && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return cb(null, true);
-      return cb(null, false);
-    },
+    origin: config.get<string>('CORS_ORIGIN') ?? 'http://localhost:3000',
     credentials: true,
   });
   app.enableShutdownHooks();

@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { api, tugrik } from '@/lib/api';
 import { DailyReport } from '@/lib/types';
 
@@ -22,7 +21,7 @@ export function CashierSummary() {
       const day = todayYmd();
       setReport(await api<DailyReport>(`/reports/daily?startDate=${day}&endDate=${day}`));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Хураангуй ачаалж чадсангүй');
+      setError(err instanceof Error ? err.message : 'Failed to load summary');
       setReport(null);
     } finally {
       setLoading(false);
@@ -41,9 +40,7 @@ export function CashierSummary() {
       <button type="button" className="btn-ghost w-full text-xs py-1.5" onClick={() => void openDrawer()}>
         Өнөөдрийн борлуулалт
       </button>
-      {/* Drawn at the page root: inside the phone menu it would sit under the top bar. */}
-      {open &&
-        createPortal(
+      {open && (
         <div className="fixed inset-0 z-[70] flex justify-end bg-black/55" onClick={() => setOpen(false)}>
           <aside
             className="h-full w-full max-w-sm border-l border-slate-700 bg-steel-900 p-5 shadow-2xl overflow-auto"
@@ -53,47 +50,45 @@ export function CashierSummary() {
               <div>
                 <p className="text-amber-brand text-[10px] tracking-[0.2em] uppercase">Кассын хураангуй</p>
                 <h3 className="text-lg font-bold">Өнөөдрийн борлуулалт</h3>
-                <p className="text-xs text-slate-400 mt-1">{todayYmd()} · Улаанбаатарын цагаар</p>
+                <p className="text-xs text-slate-400 mt-1">{todayYmd()} · Asia/Ulaanbaatar</p>
               </div>
               <button type="button" className="btn-ghost text-xs px-3 py-1" onClick={() => setOpen(false)}>
-                Хаах
+                Close
               </button>
             </div>
             {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
-            {loading && <p className="text-slate-500 text-sm">Уншиж байна…</p>}
+            {loading && <p className="text-slate-500 text-sm">Loading…</p>}
             {report && (
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-2">
                   <article className="rounded-lg border border-slate-700 bg-steel-800/60 p-3">
-                    <p className="text-[10px] uppercase text-slate-400">Цэвэр орлого</p>
+                    <p className="text-[10px] uppercase text-slate-400">Net</p>
                     <p className="text-lg font-bold text-amber-brand">
                       {tugrik(report.totals.netRevenueMnt ?? report.totals.revenueMnt - refunds)}
                     </p>
                   </article>
                   <article className="rounded-lg border border-slate-700 bg-steel-800/60 p-3">
-                    <p className="text-[10px] uppercase text-slate-400">Захиалга</p>
+                    <p className="text-[10px] uppercase text-slate-400">Orders</p>
                     <p className="text-lg font-bold">{report.totals.orderCount}</p>
                   </article>
                 </div>
                 <div className="rounded-lg border border-slate-700 divide-y divide-slate-800">
-                  <Row label="Бэлэн" value={report.totals.cashMnt} tone="text-emerald-300" />
-                  <Row label="Карт" value={report.totals.cardMnt} tone="text-violet-300" />
+                  <Row label="Cash" value={report.totals.cashMnt} tone="text-emerald-300" />
+                  <Row label="Card" value={report.totals.cardMnt} tone="text-violet-300" />
                   <Row label="QPay" value={report.totals.qpayMnt} tone="text-sky-300" />
-                  <Row label="Шилжүүлэг" value={report.totals.transferMnt ?? 0} tone="text-indigo-300" />
-                  <Row label="Буцаалт" value={refunds} tone="text-rose-300" />
+                  <Row label="Returns" value={refunds} tone="text-rose-300" />
                 </div>
                 {(report.refunds?.count ?? 0) > 0 && (
-                  <p className="text-xs text-slate-500">Өнөөдөр {report.refunds!.count} буцаалт</p>
+                  <p className="text-xs text-slate-500">{report.refunds!.count} return(s) today</p>
                 )}
                 <a href="/reports/daily" className="btn-ghost w-full text-xs">
-                  Өдрийн тайлан бүтнээр нээх
+                  Open full daily report
                 </a>
               </div>
             )}
           </aside>
-        </div>,
-          document.body,
-        )}
+        </div>
+      )}
     </>
   );
 }

@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { OrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/current-user.decorator';
 import { WEBSHOP_USERNAME } from '../auth/rbac';
-import { FeaturesService } from '../features/features.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AssignDriverDto,
@@ -22,16 +21,7 @@ export class PublicService {
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
     private readonly config: ConfigService,
-    private readonly features?: FeaturesService,
   ) {}
-
-  /** What the public shop may offer right now (module switches). */
-  async shopConfig() {
-    const on = (key: 'ONLINE_SHOP' | 'UNLOADING' | 'DELIVERY') =>
-      this.features ? this.features.isEnabled(key) : Promise.resolve(key === 'ONLINE_SHOP');
-    const [shopOpen, delivery, unloading] = await Promise.all([on('ONLINE_SHOP'), on('DELIVERY'), on('UNLOADING')]);
-    return { shopOpen, delivery, unloading: delivery && unloading };
-  }
 
   async catalog() {
     const [products, zones] = await Promise.all([
@@ -73,8 +63,7 @@ export class PublicService {
   }
 
   quote(dto: QuoteOrderDto) {
-    // customerId is staff-only: a visitor must not see another customer's price list.
-    return this.orders.quote({ ...dto, customerId: undefined, items: this.publicItems(dto.items) });
+    return this.orders.quote({ ...dto, items: this.publicItems(dto.items) });
   }
 
   async create(dto: CreateOrderDto) {

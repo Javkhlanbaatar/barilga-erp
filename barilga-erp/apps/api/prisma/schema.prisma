@@ -9,9 +9,6 @@ datasource db {
 
 enum Role {
   ADMIN
-  /// Ерөнхий менежер: every warehouse, all manager work, salaries. Not users/modules/company settings.
-  SUPER_MANAGER
-  /// Салбарын менежер: manager work limited to the warehouses assigned to them (UserWarehouseAccess).
   MANAGER
   BORLUULAGCH
   ACHIGCH_BELTGEGCH
@@ -60,29 +57,6 @@ enum PayMethod {
   QPAY
   CASH
   CARD
-  /// Goods released on account (зарлагын баримтаар): an UNPAID row holding what the customer still owes.
-  CREDIT
-  /// Bank transfer into the company account (шилжүүлэг).
-  TRANSFER
-  /// Settled by netting against what we owe the same partner (хасалт); no money moves.
-  OFFSET
-}
-
-/// A line in the two-way account with a partner: what WE owe THEM (positive) — goods bought from them, and
-/// what reduces it (our payments, offsets). What they owe us comes from their on-account orders.
-enum AccountEntryKind {
-  /// We received goods/services from the partner (бараа авсан).
-  PURCHASE
-  /// We paid the partner (бэлэн / шилжүүлэг).
-  PAYMENT_TO_PARTNER
-  /// Netted against their on-account orders (хасалт).
-  OFFSET
-  /// Manager correction, either sign.
-  ADJUSTMENT
-  /// They owe us more without an order (e.g. a service or a fee we billed them). Stored negative.
-  CHARGE
-  /// They paid us money outside an order (an advance, or after their order debts were cleared). Stored positive.
-  PAYMENT_FROM_PARTNER
 }
 
 enum BillType {
@@ -119,39 +93,6 @@ enum AttendanceStatus {
   OVERTIME
 }
 
-/// Who recorded a check-in: a manager, the person themselves, a correction, or the automatic close.
-enum AttendanceSource {
-  MANAGER
-  SELF
-  FIX
-  AUTO_CLOSE
-}
-
-/// A whole day's status for one person (instead of, or as well as, check-ins).
-enum DayMark {
-  /// Цалинтай чөлөө
-  PAID_LEAVE
-  /// Цалингүй чөлөө
-  UNPAID_LEAVE
-  /// Өвчтэй
-  SICK
-  /// Ээлжийн амралт
-  ANNUAL_LEAVE
-  /// Томилолт
-  BUSINESS_TRIP
-  /// Тасалсан (ирээгүй, мэдэгдээгүй)
-  ABSENT
-  /// Амралтын өдөр
-  DAY_OFF
-}
-
-enum LeaveStatus {
-  PENDING
-  APPROVED
-  REJECTED
-  CANCELLED
-}
-
 enum PayrollStatus {
   DRAFT
   PAID
@@ -164,8 +105,6 @@ enum CustomerType {
 
 /// Same legal entity on both sides, so a transfer only moves stock (no sale, no E-Barimt).
 enum TransferStatus {
-  /// A shop asked for stock; nothing has moved yet.
-  REQUESTED
   IN_TRANSIT
   RECEIVED
   CANCELLED
@@ -176,12 +115,6 @@ model User {
   username     String     @unique
   email        String?    @unique
   passwordHash String
-  /// Google account the person signs in with (its stable id), and its address as shown on «Миний бүртгэл».
-  googleSub    String?    @unique @map("google_sub")
-  googleEmail  String?    @map("google_email")
-  /// Sign-ins (tokens) issued before this moment no longer work: set when the password changes or the person
-  /// signs out of every device.
-  sessionsValidFrom DateTime? @map("sessions_valid_from")
   fullName     String     @map("name")
   phone        String?
   role         Role
@@ -203,36 +136,9 @@ model User {
   payrolls             Payroll[]
   customersCreated     Customer[]                 @relation("CustomerCreatedBy")
   transfersSent        StockTransfer[]            @relation("TransferSentBy")
-  transfersRequested   StockTransfer[]            @relation("TransferRequestedBy")
-  /// Monthly base salary set by admin; empty = the default for the role (payroll settings).
-  baseSalaryMnt        Int?                       @map("base_salary_mnt")
-  payrollAdjustments   PayrollAdjustment[]        @relation("PayrollAdjustmentFor")
-  payrollAdjustmentsBy PayrollAdjustment[]        @relation("PayrollAdjustmentBy")
-  cashSessions         CashSession[]              @relation("CashSessionOf")
-  cashSessionsClosed   CashSession[]              @relation("CashSessionClosedBy")
-  cashMovements        CashMovement[]             @relation("CashMovementBy")
   transfersReceived    StockTransfer[]            @relation("TransferReceivedBy")
   transfersCancelled   StockTransfer[]            @relation("TransferCancelledBy")
   featureFlagChanges   FeatureFlag[]              @relation("FeatureFlagUpdatedBy")
-  pickedItems          OrderItem[]                @relation("ItemPickedBy")
-  pickingStarted       Order[]                    @relation("PickingStartedBy")
-  stockReceipts        StockReceipt[]             @relation("StockReceiptBy")
-  settingChanges       AppSetting[]               @relation("AppSettingUpdatedBy")
-  /// Extra warehouses a branch manager oversees (besides their home warehouse).
-  managedWarehouses    UserWarehouseAccess[]
-  accountEntries       AccountEntry[]             @relation("AccountEntryBy")
-  editAudits           EditAudit[]                @relation("EditAuditBy")
-  invoices             Invoice[]                  @relation("InvoiceBy")
-  salaryRates          SalaryRate[]               @relation("SalaryRateOf")
-  salaryRatesSet       SalaryRate[]               @relation("SalaryRateBy")
-  attendanceDays       AttendanceDay[]            @relation("AttendanceDayOf")
-  attendanceDaysSet    AttendanceDay[]            @relation("AttendanceDayBy")
-  leaveRequests        LeaveRequest[]             @relation("LeaveRequestOf")
-  leaveDecisions       LeaveRequest[]             @relation("LeaveRequestDecidedBy")
-  priceShares          PriceShare[]               @relation("PriceShareBy")
-  /// Rights added to or taken from this person on top of their role: { "grant": [...], "revoke": [...] }
-  /// (keys from auth/permissions.ts). Empty = exactly what the role allows.
-  permissions          Json?                      @map("permissions")
 
   @@map("sys_users")
 }
@@ -271,30 +177,19 @@ model VehicleType {
 model Product {
   id             String              @id @default(uuid())
   sku            String              @unique
-  /// Scanned at the till. A manufacturer code (EAN/UPC) when the goods have one; otherwise an in-store
-  /// EAN-13 starting with 200 is assigned automatically so every product can be labelled and scanned.
-  barcode        String?             @unique
   nameMn         String
   nameEn         String
   unit           String
   priceMnt       Int
   weightKg       Decimal             @db.Decimal(12, 3)
   lengthM        Decimal             @db.Decimal(10, 2)
-  volumeM3       Decimal             @db.Decimal(14, 6)
-  /// Package width and height (m), when known; with the length they give the volume.
-  widthM         Decimal?            @map("width_m") @db.Decimal(10, 2)
-  heightM        Decimal?            @map("height_m") @db.Decimal(10, 2)
+  volumeM3       Decimal             @db.Decimal(10, 3)
   stockQty       Decimal             @map("stock_quantity") @db.Decimal(12, 3)
   minStockLevel  Decimal             @default(0) @map("min_stock_level") @db.Decimal(12, 3)
   imageUrl       String?             @map("image_url")
   description    String?
   category       String              @default("General")
   sourceType     SourceType          @default(INTERNAL) @map("source_type")
-  /// Unit cost from the latest stock receipt that recorded one (cost is optional on receipts).
-  lastCostMnt    Int?                @map("last_cost_mnt")
-  /// Items that go out with this product (e.g. a hardener with resin paint): [{ name, qtyPerUnit, unit }].
-  /// Printed on tickets and pick lists so the warehouse hands them over; they are not separate stock lines.
-  companions     Json?
   active         Boolean             @default(true)
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
@@ -302,9 +197,6 @@ model Product {
   stockBalances  StockBalance[]
   stockMovements StockMovement[]
   transferItems  StockTransferItem[]
-  receiptItems   StockReceiptItem[]
-  priceListItems PriceListItem[]
-  customerPrices CustomerPrice[]
 
   @@map("inv_products")
 }
@@ -318,9 +210,6 @@ model Order {
   /// Registered customer, when staff picked one. Name/phone above stay as the snapshot printed on the order.
   customerId      String?     @map("customer_id")
   customer        Customer?   @relation(fields: [customerId], references: [id])
-  /// Price list the line prices came from (the customer's list at the time of sale); null = retail prices.
-  priceListId     String?     @map("price_list_id")
-  priceList       PriceList?  @relation(fields: [priceListId], references: [id])
   deliveryAddress String?
   notes           String?
 
@@ -332,7 +221,7 @@ model Order {
 
   totalWeightKg   Decimal      @db.Decimal(12, 3)
   maxLengthM      Decimal      @db.Decimal(10, 2)
-  totalVolumeM3   Decimal      @db.Decimal(14, 6)
+  totalVolumeM3   Decimal      @db.Decimal(12, 3)
   assignedVehicle VehicleCode?
   driverName      String?      @map("driver_name")
   vehicleNumber   String?      @map("vehicle_number")
@@ -350,18 +239,14 @@ model Order {
   warehouseId String?    @map("warehouse_id")
   warehouse   Warehouse? @relation("OrderWarehouse", fields: [warehouseId], references: [id])
 
-  createdById        String
-  createdBy          User      @relation("CreatedBy", fields: [createdById], references: [id])
-  completedById      String?
-  completedBy        User?     @relation("CompletedBy", fields: [completedById], references: [id])
-  completedAt        DateTime?
-  preparedById       String?   @map("prepared_by_id")
-  preparedBy         User?     @relation("PreparedBy", fields: [preparedById], references: [id])
-  preparedAt         DateTime? @map("prepared_at")
-  /// When a worker pressed "Би бэлдье" (or ticked the first line): the order moves to "being prepared".
-  pickingStartedAt   DateTime? @map("picking_started_at")
-  pickingStartedById String?   @map("picking_started_by_id")
-  pickingStartedBy   User?     @relation("PickingStartedBy", fields: [pickingStartedById], references: [id])
+  createdById   String
+  createdBy     User      @relation("CreatedBy", fields: [createdById], references: [id])
+  completedById String?
+  completedBy   User?     @relation("CompletedBy", fields: [completedById], references: [id])
+  completedAt   DateTime?
+  preparedById  String?   @map("prepared_by_id")
+  preparedBy    User?     @relation("PreparedBy", fields: [preparedById], references: [id])
+  preparedAt    DateTime? @map("prepared_at")
 
   billType           BillType      @default(CITIZEN)
   customerRegNumber  String?
@@ -382,7 +267,6 @@ model Order {
   payments             Payment[]
   feeOverrides         FeeOverrideAudit[]
   returns              SalesReturn[]
-  invoice              Invoice?
   supplierPayables     SupplierPayable[]
   stockReconciliations StockReconciliationAudit[]
   /// Transfers that collect this order's stock from other warehouses into its dispatch warehouse.
@@ -405,17 +289,10 @@ model OrderItem {
   unitPrice            Int
   weightKg             Decimal                    @db.Decimal(12, 3)
   lengthM              Decimal                    @db.Decimal(10, 2)
-  volumeM3             Decimal                    @db.Decimal(14, 6)
+  volumeM3             Decimal                    @db.Decimal(10, 3)
   lineTotal            Int
-  /// Set when a person changed the price at the till: the price the line would have had (the customer's own
-  /// price, their list or retail). Null when the price was not changed.
-  listPriceMnt         Int?                       @map("list_price_mnt")
   sourceType           SourceType                 @default(INTERNAL) @map("source_type")
   supplierName         String?                    @map("supplier_name")
-  /// Picking checklist: set when a warehouse worker ticks this line as prepared (several people can pick one order).
-  pickedAt             DateTime?                  @map("picked_at")
-  pickedById           String?                    @map("picked_by_id")
-  pickedBy             User?                      @relation("ItemPickedBy", fields: [pickedById], references: [id])
   returnItems          ReturnItem[]
   payables             SupplierPayable[]
   stockReconciliations StockReconciliationAudit[]
@@ -431,11 +308,6 @@ model SalesReturn {
   refundAmount    Int          @map("refund_amount")
   refundMethod    PayMethod    @map("refund_method")
   refundStatus    RefundStatus @default(PENDING_PAYOUT) @map("refund_status")
-  /// Bank transfer refunds: where to send the money (bank, account number, holder).
-  refundAccount   String?      @map("refund_account")
-  /// When and by whom a pending refund was actually paid out.
-  paidOutAt       DateTime?    @map("paid_out_at")
-  paidOutById     String?      @map("paid_out_by_id")
   createdById     String       @map("created_by_id")
   createdBy       User         @relation("ReturnCreatedBy", fields: [createdById], references: [id])
   ebarimtRefundId String?      @map("ebarimt_refund_id")
@@ -503,47 +375,25 @@ model StockReconciliationAudit {
 
 /// A shop/warehouse. In this business a shop and its warehouse are the same place.
 model Warehouse {
-  id        String        @id @default(uuid())
-  code      String        @unique
+  id        String   @id @default(uuid())
+  code      String   @unique
   name      String
   address   String?
   phone     String?
-  isActive  Boolean       @default(true) @map("active")
+  isActive  Boolean  @default(true) @map("active")
   /// Exactly one warehouse is the default (used for legacy rows and users/orders without a warehouse).
-  isDefault Boolean       @default(false) @map("is_default")
-  /// Дэлгүүр (sells at the till) or агуулах (stores and sends); both hold stock the same way.
-  kind      WarehouseKind @default(SHOP)
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  users        User[]                @relation("UserWarehouse")
-  orders       Order[]               @relation("OrderWarehouse")
+  users        User[]          @relation("UserWarehouse")
+  orders       Order[]         @relation("OrderWarehouse")
   balances     StockBalance[]
   movements    StockMovement[]
-  transfersOut StockTransfer[]       @relation("TransferFrom")
-  transfersIn  StockTransfer[]       @relation("TransferTo")
-  receipts     StockReceipt[]
-  managers     UserWarehouseAccess[]
+  transfersOut StockTransfer[] @relation("TransferFrom")
+  transfersIn  StockTransfer[] @relation("TransferTo")
 
   @@map("inv_warehouses")
-}
-
-enum WarehouseKind {
-  SHOP
-  WAREHOUSE
-}
-
-/// A branch manager's access to a warehouse other than (or in addition to) their home one.
-model UserWarehouseAccess {
-  userId      String    @map("user_id")
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  warehouseId String    @map("warehouse_id")
-  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
-  createdAt   DateTime  @default(now())
-
-  @@id([userId, warehouseId])
-  @@index([warehouseId])
-  @@map("usr_warehouse_access")
 }
 
 /// Current quantity of one product in one warehouse. Product.stockQty is kept equal to the sum of these.
@@ -609,8 +459,6 @@ model Payment {
   qpayQrText    String?
   qpayQrImage   String?       @db.Text
   qpayPayload   Json?
-  /// The staff member who recorded the money (cash drawer reports follow this, not who made the order).
-  recordedById  String?       @map("recorded_by_id")
   paidAt        DateTime?
   pollAttempts  Int           @default(0)
   nextPollAt    DateTime?
@@ -644,135 +492,35 @@ model FeeOverrideAudit {
 }
 
 model Attendance {
-  id            String           @id @default(uuid())
-  userId        String
-  user          User             @relation(fields: [userId], references: [id])
-  checkIn       DateTime
-  checkOut      DateTime?
-  status        AttendanceStatus @default(ON_TIME)
-  notes         String?
-  /// How it was recorded; a SELF check-in waits for a manager until confirmedAt is set.
-  source        AttendanceSource @default(MANAGER)
-  recordedById  String?          @map("recorded_by_id")
-  confirmedById String?          @map("confirmed_by_id")
-  confirmedAt   DateTime?        @map("confirmed_at")
-  /// The shop the person worked in that day (their home shop when recorded).
-  warehouseId   String?          @map("warehouse_id")
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id])
+  checkIn   DateTime
+  checkOut  DateTime?
+  status    AttendanceStatus @default(ON_TIME)
+  notes     String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
 
   @@index([userId, checkIn])
   @@map("hr_attendance")
 }
 
-/// One person's status for one day (YYYY-MM-DD, Ulaanbaatar): leave, sick, absent… set by a manager or by an
-/// approved request. It does not change pay by itself: the payroll shows the counts for the manager to act on.
-model AttendanceDay {
-  id          String   @id @default(uuid())
-  userId      String   @map("user_id")
-  user        User     @relation("AttendanceDayOf", fields: [userId], references: [id])
-  date        String
-  mark        DayMark
-  note        String?
-  requestId   String?  @map("request_id")
-  createdById String   @map("created_by_id")
-  createdBy   User     @relation("AttendanceDayBy", fields: [createdById], references: [id])
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@unique([userId, date])
-  @@index([date])
-  @@map("hr_attendance_days")
-}
-
-/// An employee asks for leave (чөлөө, амралт…) for some days; a manager approves or rejects it.
-model LeaveRequest {
-  id           String      @id @default(uuid())
-  userId       String      @map("user_id")
-  user         User        @relation("LeaveRequestOf", fields: [userId], references: [id])
-  kind         DayMark
-  fromDate     String      @map("from_date")
-  toDate       String      @map("to_date")
-  reason       String
-  status       LeaveStatus @default(PENDING)
-  /// The requester's shop when they asked (decides which manager sees it).
-  warehouseId  String?     @map("warehouse_id")
-  decidedById  String?     @map("decided_by_id")
-  decidedBy    User?       @relation("LeaveRequestDecidedBy", fields: [decidedById], references: [id])
-  decidedAt    DateTime?   @map("decided_at")
-  decisionNote String?     @map("decision_note")
-  createdAt    DateTime    @default(now())
-
-  @@index([status, warehouseId])
-  @@index([userId, fromDate])
-  @@map("hr_leave_requests")
-}
-
-/// A person's monthly base salary from a month on (until a later row). Changing a salary never rewrites
-/// earlier months.
-model SalaryRate {
-  id            String   @id @default(uuid())
-  userId        String   @map("user_id")
-  user          User     @relation("SalaryRateOf", fields: [userId], references: [id])
-  /// First month (YYYY-MM) it applies to.
-  fromMonth     String   @map("from_month")
-  /// null = no own salary from this month (the role default when the payroll formula is on, otherwise 0).
-  baseSalaryMnt Int?     @map("base_salary_mnt")
-  reason        String?
-  createdById   String   @map("created_by_id")
-  createdBy     User     @relation("SalaryRateBy", fields: [createdById], references: [id])
-  createdAt     DateTime @default(now())
-
-  @@unique([userId, fromMonth])
-  @@map("hr_salary_rates")
-}
-
 model Payroll {
-  id                 String        @id @default(uuid())
-  userId             String
-  user               User          @relation(fields: [userId], references: [id])
-  periodMonth        String        @map("period_month")
-  baseSalary         Int           @map("base_salary")
-  fulfillmentBonus   Int           @map("fulfillment_bonus")
-  netSalary          Int           @map("net_salary")
-  /// Breakdown kept with the row, so a paid month never changes when rates or attendance change later.
-  ticketCount        Int           @default(0) @map("ticket_count")
-  salesAmountMnt     Int           @default(0) @map("sales_amount_mnt")
-  ticketBonus        Int           @default(0) @map("ticket_bonus")
-  salesBonus         Int           @default(0) @map("sales_bonus")
-  workedDays         Int           @default(0) @map("worked_days")
-  workingDays        Int           @default(0) @map("working_days")
-  /// Base actually earned (pro-rated by attendance when that rule is on).
-  earnedBase         Int           @default(0) @map("earned_base")
-  adjustmentsMnt     Int           @default(0) @map("adjustments_mnt")
-  grossSalary        Int           @default(0) @map("gross_salary")
-  socialInsuranceMnt Int           @default(0) @map("social_insurance_mnt")
-  incomeTaxMnt       Int           @default(0) @map("income_tax_mnt")
-  paidAt             DateTime?     @map("paid_at")
-  paidById           String?       @map("paid_by_id")
-  status             PayrollStatus @default(DRAFT)
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id])
+  periodMonth      String        @map("period_month")
+  baseSalary       Int           @map("base_salary")
+  fulfillmentBonus Int           @map("fulfillment_bonus")
+  netSalary        Int           @map("net_salary")
+  status           PayrollStatus @default(DRAFT)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
 
   @@unique([userId, periodMonth])
   @@index([periodMonth])
   @@map("hr_payrolls")
-}
-
-/// A one-off bonus (+) or deduction (−) for one employee in one month: advance, fine, overtime pay, etc.
-model PayrollAdjustment {
-  id          String   @id @default(uuid())
-  userId      String   @map("user_id")
-  user        User     @relation("PayrollAdjustmentFor", fields: [userId], references: [id])
-  periodMonth String   @map("period_month")
-  amountMnt   Int      @map("amount_mnt")
-  reason      String
-  createdById String   @map("created_by_id")
-  createdBy   User     @relation("PayrollAdjustmentBy", fields: [createdById], references: [id])
-  createdAt   DateTime @default(now())
-
-  @@index([userId, periodMonth])
-  @@map("hr_payroll_adjustments")
 }
 
 /// A registered customer (person or company). Credit, invoices and contracts will hang off this in later phases.
@@ -783,8 +531,7 @@ model Customer {
   phone       String
   /// Company registration number (РД) or a citizen's register number. Unique when present.
   regNumber   String?      @unique @map("reg_number")
-  /// Unique so it can later be the online-shop login.
-  email       String?      @unique
+  email       String?
   address     String?
   notes       String?
   /// Lower-cased name + phone + register number, maintained by the app. Search matches against this so it
@@ -796,47 +543,11 @@ model Customer {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  /// Prices this customer buys at (cost, barter, wholesale...). Null = retail.
-  priceListId String?    @map("price_list_id")
-  priceList   PriceList? @relation(fields: [priceListId], references: [id])
-
-  /// What the partner is to us (managers set these). A partner can be several at once.
-  buysFromUs     Boolean @default(true) @map("buys_from_us")
-  /// May take goods on account (зарлагаар) — set by a manager.
-  creditAllowed  Boolean @default(false) @map("credit_allowed")
-  /// We buy goods from them (нийлүүлэгч).
-  sellsToUs      Boolean @default(false) @map("sells_to_us")
-  /// Barter contract number / note; set = barter partner.
-  barterContract String? @map("barter_contract")
-
-  orders         Order[]
-  accountEntries AccountEntry[]
-  invoices       Invoice[]
-  receipts       StockReceipt[]
-  ownPrices      CustomerPrice[]
+  orders Order[]
 
   @@index([phone])
   @@index([name])
   @@map("crm_customers")
-}
-
-/// One customer's own price for one product: saved when someone with the right changes the price at the till
-/// for that customer. Comes before the customer's price list and retail; the next sale shows it by itself.
-model CustomerPrice {
-  id          String   @id @default(uuid())
-  customerId  String   @map("customer_id")
-  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  productId   String   @map("product_id")
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  priceMnt    Int      @map("price_mnt")
-  /// Who set it last (the edit history has every change).
-  updatedById String?  @map("updated_by_id")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  @@unique([customerId, productId])
-  @@index([productId])
-  @@map("crm_customer_prices")
 }
 
 /// Moving stock from one shop/warehouse to another. Sending takes it out of the source (TRANSFER_OUT);
@@ -853,16 +564,9 @@ model StockTransfer {
   /// Set when the transfer collects stock for an order (its dispatch warehouse is the destination).
   orderId         String?        @map("order_id")
   order           Order?         @relation(fields: [orderId], references: [id])
-  /// Who asked for it (requests only) and when.
-  requestedById   String?        @map("requested_by_id")
-  requestedBy     User?          @relation("TransferRequestedBy", fields: [requestedById], references: [id])
-  requestedAt     DateTime?      @map("requested_at")
-  /// Empty while it is only a request.
-  sentById        String?        @map("sent_by_id")
-  sentBy          User?          @relation("TransferSentBy", fields: [sentById], references: [id])
-  sentAt          DateTime?      @map("sent_at")
-  /// Some lines arrived short (see receivedQty / shortageReason on the items).
-  hasShortage     Boolean        @default(false) @map("has_shortage")
+  sentById        String         @map("sent_by_id")
+  sentBy          User           @relation("TransferSentBy", fields: [sentById], references: [id])
+  sentAt          DateTime       @default(now()) @map("sent_at")
   receivedById    String?        @map("received_by_id")
   receivedBy      User?          @relation("TransferReceivedBy", fields: [receivedById], references: [id])
   receivedAt      DateTime?      @map("received_at")
@@ -883,18 +587,12 @@ model StockTransfer {
 }
 
 model StockTransferItem {
-  id             String        @id @default(uuid())
-  transferId     String        @map("transfer_id")
-  transfer       StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
-  productId      String        @map("product_id")
-  product        Product       @relation(fields: [productId], references: [id])
-  /// What was sent (0 while it is only a request).
-  quantity       Decimal       @db.Decimal(12, 3)
-  /// What the requesting shop asked for.
-  requestedQty   Decimal?      @map("requested_qty") @db.Decimal(12, 3)
-  /// What actually arrived; set on receipt.
-  receivedQty    Decimal?      @map("received_qty") @db.Decimal(12, 3)
-  shortageReason String?       @map("shortage_reason")
+  id         String        @id @default(uuid())
+  transferId String        @map("transfer_id")
+  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  productId  String        @map("product_id")
+  product    Product       @relation(fields: [productId], references: [id])
+  quantity   Decimal       @db.Decimal(12, 3)
 
   @@unique([transferId, productId])
   @@map("inv_stock_transfer_items")
@@ -909,244 +607,4 @@ model FeatureFlag {
   updatedAt   DateTime @updatedAt
 
   @@map("sys_feature_flags")
-}
-
-/// Goods received from a supplier into one warehouse (бараа орлого). Each line adds stock with a RECEIPT movement.
-model StockReceipt {
-  id                 String    @id @default(uuid())
-  receiptNumber      String    @unique @map("receipt_number")
-  warehouseId        String    @map("warehouse_id")
-  warehouse          Warehouse @relation(fields: [warehouseId], references: [id])
-  supplierName       String    @map("supplier_name")
-  /// The supplier's own invoice / waybill number, when there is one.
-  supplierInvoiceNo  String?   @map("supplier_invoice_no")
-  /// The registered partner the goods came from; with unit costs this becomes a PURCHASE in their account.
-  supplierCustomerId String?   @map("supplier_customer_id")
-  supplierCustomer   Customer? @relation(fields: [supplierCustomerId], references: [id])
-  notes              String?
-  receivedById       String    @map("received_by_id")
-  receivedBy         User      @relation("StockReceiptBy", fields: [receivedById], references: [id])
-  receivedAt         DateTime  @default(now()) @map("received_at")
-  createdAt          DateTime  @default(now())
-
-  items StockReceiptItem[]
-
-  @@index([warehouseId, receivedAt])
-  @@index([supplierCustomerId, receivedAt])
-  @@map("inv_stock_receipts")
-}
-
-model StockReceiptItem {
-  id          String       @id @default(uuid())
-  receiptId   String       @map("receipt_id")
-  receipt     StockReceipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
-  productId   String       @map("product_id")
-  product     Product      @relation(fields: [productId], references: [id])
-  quantity    Decimal      @db.Decimal(12, 3)
-  /// Optional purchase price per unit.
-  unitCostMnt Int?         @map("unit_cost_mnt")
-
-  @@unique([receiptId, productId])
-  @@map("inv_stock_receipt_items")
-}
-
-/// Small admin-editable settings stored as JSON by key (e.g. COMPANY = seller details printed on invoices).
-model AppSetting {
-  key         String   @id
-  value       Json
-  updatedById String?  @map("updated_by_id")
-  updatedBy   User?    @relation("AppSettingUpdatedBy", fields: [updatedById], references: [id])
-  updatedAt   DateTime @updatedAt
-
-  @@map("sys_settings")
-}
-
-/// A named set of per-product prices (e.g. өртгийн үнэ, бартерын үнэ). A product missing from the list sells at retail.
-model PriceList {
-  id         String    @id @default(uuid())
-  name       String    @unique
-  notes      String?
-  isActive   Boolean   @default(true) @map("active")
-  /// Printed on the sheet: the prices hold until this day (optional).
-  validUntil DateTime? @map("valid_until") @db.Date
-  /// Secret for the customer's read-only link (/price/<token>); null = not shared.
-  shareToken String?   @unique @map("share_token")
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-
-  items     PriceListItem[]
-  customers Customer[]
-  orders    Order[]
-  shares    PriceShare[]
-
-  @@map("crm_price_lists")
-}
-
-/// A link sent to a customer: a price list (or the retail prices) limited to chosen products or categories.
-/// Prices stay live; the selection is fixed per link, so changing one link never changes what others see.
-model PriceShare {
-  id              String     @id @default(uuid())
-  token           String     @unique
-  label           String?
-  /// null = the retail prices.
-  priceListId     String?    @map("price_list_id")
-  priceList       PriceList? @relation(fields: [priceListId], references: [id], onDelete: Cascade)
-  productIds      String[]   @default([]) @map("product_ids")
-  categories      String[]   @default([])
-  /// Also show products not on the list (at retail).
-  includeUnlisted Boolean    @default(false) @map("include_unlisted")
-  expiresAt       DateTime?  @map("expires_at") @db.Date
-  revokedAt       DateTime?  @map("revoked_at")
-  createdById     String?    @map("created_by_id")
-  createdBy       User?      @relation("PriceShareBy", fields: [createdById], references: [id])
-  createdAt       DateTime   @default(now())
-
-  @@index([priceListId])
-  @@map("crm_price_shares")
-}
-
-model PriceListItem {
-  id          String    @id @default(uuid())
-  priceListId String    @map("price_list_id")
-  priceList   PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
-  productId   String    @map("product_id")
-  product     Product   @relation(fields: [productId], references: [id])
-  priceMnt    Int       @map("price_mnt")
-  updatedAt   DateTime  @updatedAt
-
-  @@unique([priceListId, productId])
-  @@map("crm_price_list_items")
-}
-
-/// One line of the partner account (see AccountEntryKind). Amounts are what WE owe THEM: + increases it.
-model AccountEntry {
-  id          String           @id @default(uuid())
-  customerId  String           @map("customer_id")
-  customer    Customer         @relation(fields: [customerId], references: [id])
-  kind        AccountEntryKind
-  amountMnt   Int              @map("amount_mnt")
-  occurredAt  DateTime         @default(now()) @map("occurred_at")
-  description String
-  /// What caused it, e.g. RECEIPT + receipt id, OFFSET + order id.
-  refType     String?          @map("ref_type")
-  refId       String?          @map("ref_id")
-  /// How money moved for payment lines (cash / card / transfer); null for goods and corrections.
-  method      PayMethod?
-  createdById String           @map("created_by_id")
-  createdBy   User             @relation("AccountEntryBy", fields: [createdById], references: [id])
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-
-  @@index([customerId, occurredAt])
-  @@index([refType, refId])
-  @@map("crm_account_entries")
-}
-
-/// Every later change to money figures (purchase prices, account lines): who, when, before → after, why.
-model EditAudit {
-  id         String   @id @default(uuid())
-  entityType String   @map("entity_type")
-  entityId   String   @map("entity_id")
-  summary    String
-  before     Json
-  after      Json
-  reason     String
-  actorId    String   @map("actor_id")
-  actor      User     @relation("EditAuditBy", fields: [actorId], references: [id])
-  createdAt  DateTime @default(now())
-
-  @@index([entityType, entityId])
-  @@index([createdAt])
-  @@map("aud_edits")
-}
-
-/// An invoice sent to a buyer for one order. Paid / owed is read from the order's payments, never stored twice.
-model Invoice {
-  id             String    @id @default(uuid())
-  invoiceNumber  String    @unique @map("invoice_number")
-  orderId        String    @unique @map("order_id")
-  order          Order     @relation(fields: [orderId], references: [id])
-  customerId     String?   @map("customer_id")
-  customer       Customer? @relation(fields: [customerId], references: [id])
-  /// Unguessable key of the read-only public link sent to the buyer.
-  token          String    @unique
-  recipientEmail String?   @map("recipient_email")
-  recipientPhone String?   @map("recipient_phone")
-  dueDate        DateTime? @map("due_date")
-  note           String?
-  /// How it was last sent: LINK, EMAIL, PRINT.
-  lastSentVia    String?   @map("last_sent_via")
-  sentAt         DateTime? @map("sent_at")
-  sendCount      Int       @default(0) @map("send_count")
-  /// First time the buyer opened the public link.
-  viewedAt       DateTime? @map("viewed_at")
-  cancelledAt    DateTime? @map("cancelled_at")
-  createdById    String    @map("created_by_id")
-  createdBy      User      @relation("InvoiceBy", fields: [createdById], references: [id])
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  @@index([customerId])
-  @@index([createdAt])
-  @@map("ord_invoices")
-}
-
-enum CashSessionStatus {
-  OPEN
-  CLOSED
-}
-
-enum CashMovementKind {
-  /**
-   * Money put into the drawer (change float top-up).
-   */
-  IN
-  /**
-   * Money taken out (bank deposit, petty expense).
-   */
-  OUT
-}
-
-/**
- * One cashier's shift at the drawer: counted float at the start, cash in/out during it, counted cash at the
- * end. The expected cash is worked out from the payments and refunds the cashier recorded in the window.
- */
-model CashSession {
-  id              String            @id @default(uuid())
-  userId          String            @map("user_id")
-  user            User              @relation("CashSessionOf", fields: [userId], references: [id])
-  warehouseId     String?           @map("warehouse_id")
-  status          CashSessionStatus @default(OPEN)
-  openedAt        DateTime          @default(now()) @map("opened_at")
-  openingFloatMnt Int               @map("opening_float_mnt")
-  closedAt        DateTime?         @map("closed_at")
-  closedById      String?           @map("closed_by_id")
-  closedBy        User?             @relation("CashSessionClosedBy", fields: [closedById], references: [id])
-  /// Frozen at close: what the system expected, what was counted, and the difference (counted − expected).
-  expectedCashMnt Int?              @map("expected_cash_mnt")
-  countedCashMnt  Int?              @map("counted_cash_mnt")
-  differenceMnt   Int?              @map("difference_mnt")
-  closingNote     String?           @map("closing_note")
-  movements       CashMovement[]
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-
-  @@index([userId, status])
-  @@index([openedAt])
-  @@map("cash_sessions")
-}
-
-model CashMovement {
-  id          String           @id @default(uuid())
-  sessionId   String           @map("session_id")
-  session     CashSession      @relation(fields: [sessionId], references: [id])
-  kind        CashMovementKind
-  amountMnt   Int              @map("amount_mnt")
-  reason      String
-  createdById String           @map("created_by_id")
-  createdBy   User             @relation("CashMovementBy", fields: [createdById], references: [id])
-  createdAt   DateTime         @default(now())
-
-  @@index([sessionId])
-  @@map("cash_movements")
 }

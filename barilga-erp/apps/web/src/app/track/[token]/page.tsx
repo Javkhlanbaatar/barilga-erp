@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { publicApi, tugrik } from '@/lib/api';
-import { DELIVERY_LABEL, ORDER_STATUS_LABEL, isHiredTransport } from '@/lib/types';
+import { isHiredTransport } from '@/lib/types';
 
 type PublicOrder = {
   orderNumber: string;
@@ -45,7 +45,7 @@ export default function TrackOrderPage() {
         setVehicleNumber(row.vehicleNumber ?? '');
         setDriverPhone(row.driverPhone ?? '');
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Захиалга олдсонгүй'));
+      .catch((err) => setError(err instanceof Error ? err.message : 'Not found'));
   }, [token]);
 
   async function save(e: FormEvent) {
@@ -61,7 +61,7 @@ export default function TrackOrderPage() {
       setOrder(row);
       setOk('Хүргэлтийн мэдээлэл хадгалагдлаа');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Хадгалж чадсангүй');
+      setError(err instanceof Error ? err.message : 'Update failed');
     } finally {
       setBusy(false);
     }
@@ -81,13 +81,13 @@ export default function TrackOrderPage() {
       {error && <p className="text-red-400 mb-3">{error}</p>}
       {order && (
         <div className="card space-y-3">
-          <p className="text-amber-brand text-xs">{ORDER_STATUS_LABEL[order.status] ?? order.status}</p>
+          <p className="text-amber-brand text-xs">{order.status}</p>
           <h2 className="text-xl font-bold">{order.orderNumber}</h2>
           <p className="text-sm text-slate-300">
             {order.customerName} · {order.customerPhone}
           </p>
           <p className="text-sm">
-            {DELIVERY_LABEL[order.deliveryMethod] ?? order.deliveryMethod} · {order.zone.nameMn}
+            {order.deliveryMethod} · {order.zone.nameMn}
           </p>
           {order.deliveryAddress && <p className="text-sm">{order.deliveryAddress}</p>}
           <ul className="text-sm space-y-1">
@@ -101,7 +101,7 @@ export default function TrackOrderPage() {
           {order.payments.map((p, i) => (
             <div key={`${p.method}-${i}`} className="text-sm">
               <p>
-                {({ QPAY: 'QPay', CASH: 'Бэлэн', CARD: 'Карт', TRANSFER: 'Шилжүүлэг', CREDIT: 'Дараа төлөх', OFFSET: 'Тооцоонд хасагдсан' } as Record<string, string>)[p.method] ?? p.method} — {tugrik(p.amountMnt)} — {({ PAID: 'төлөгдсөн', UNPAID: 'хүлээгдэж буй', EXPIRED: 'хүчингүй', FAILED: 'амжилтгүй' } as Record<string, string>)[p.status] ?? p.status}
+                {p.method} — {tugrik(p.amountMnt)} — {p.status}
               </p>
               {p.method === 'QPAY' && p.qpayQrImage && p.status !== 'PAID' && (
                 // eslint-disable-next-line @next/next/no-img-element

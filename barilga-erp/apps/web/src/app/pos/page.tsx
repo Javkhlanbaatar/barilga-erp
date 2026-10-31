@@ -2,86 +2,24 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { CashDrawerBar } from '@/components/cash-drawer';
-import { PosLookup } from '@/components/pos-lookup';
 import { Shell } from '@/components/shell';
 import { api, tugrik } from '@/lib/api';
-import { CustomerPicker } from '@/components/customer-picker';
 import { ProductImage } from '@/components/product-image';
-import { useFeatures } from '@/lib/features';
-import { useCan } from '@/lib/permissions';
-import { AuthUser, Customer, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, companionLines, productMatchesQuery, productStockStatus } from '@/lib/types';
-import { POS_ROLES, TOP_ROLES, hasRole, homeForRole } from '@/lib/rbac';
+import { AuthUser, Product, StockReport, VEHICLE_LABEL, Warehouse, Zone, productMatchesQuery, productStockStatus } from '@/lib/types';
+import { POS_ROLES, hasRole, homeForRole } from '@/lib/rbac';
 
-/** INVOICE: an invoice is made with the order; the buyer pays it later by bank transfer (goods wait until then). */
-type PaymentMethod = 'QPAY' | 'CASH' | 'CARD' | 'TRANSFER' | 'CREDIT' | 'CONTRACT' | 'INVOICE';
-/** POST /orders answers with the order and, for an invoice sale, the invoice made with it (or why it was not). */
-type CreatedOrder = {
-  id: string;
-  orderNumber: string;
-  invoice?: { id: string; invoiceNumber: string; token: string } | null;
-  invoiceError?: string;
-};
+type PaymentMethod = 'QPAY' | 'CASH' | 'CARD';
 type DeliveryType = 'OUR_DELIVERY' | 'SELF_PICKUP' | 'CUSTOMER_DRIVER';
-/** A sale put on hold (хүлээлгэсэн): kept in this browser for this cashier until it is resumed or the day ends. */
-type HeldSale = {
-  id: string;
-  at: string;
-  label: string;
-  lines: Array<{ productId: string; quantity: number; sourceType: 'INTERNAL' | 'EXTERNAL_SUPPLIER'; supplierName: string; price?: string }>;
-  customer: Customer | null;
-  customerName: string;
-  customerPhone: string;
-};
-
-const heldKey = (userId: string) => `pos_held_${userId}`;
-const todayUb = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date());
-
-function readHeld(userId: string): HeldSale[] {
-  try {
-    const all = JSON.parse(localStorage.getItem(heldKey(userId)) ?? '[]') as HeldSale[];
-    // Yesterday's held carts are dropped: prices and stock may have changed.
-    return all.filter((h) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ulaanbaatar' }).format(new Date(h.at)) === todayUb());
-  } catch {
-    return [];
-  }
-}
-
-function writeHeld(userId: string, held: HeldSale[]) {
-  try {
-    localStorage.setItem(heldKey(userId), JSON.stringify(held));
-  } catch {
-    // private window: holds last only for this page
-  }
-}
-
 type CartLine = {
   product: Product;
   quantity: number;
   sourceType: 'INTERNAL' | 'EXTERNAL_SUPPLIER';
   supplierName: string;
-  /** A unit price typed at the till (needs the right); undefined = the usual price. */
-  price?: string;
 };
 
-/** A typed price as whole tugrik ("23 000", "23,000" and "23000" alike); undefined when empty or not a number. */
-function typedPrice(v: string | undefined): number | undefined {
-  if (v === undefined) return undefined;
-  const s = v.replace(/[\s,₮]/g, '');
-  if (!s || !/^\d+$/.test(s)) return undefined;
-  return Number(s);
-}
-
 type Quote = {
-  /** Name of the customer's price list when one applied; null = retail prices. */
-  priceList?: string | null;
-  /**
-   * The price each line will be sold at, the price it would have without a typed one, and where that comes from
-   * (the customer's own price, their list or retail; MANUAL = typed now).
-   */
-  lines?: Array<{ productId: string; unitPrice: number; lineTotal: number; basePrice?: number; priceSource?: 'CUSTOMER' | 'LIST' | 'RETAIL' | 'MANUAL' }>;
   breakdown: {
-    assignedVehicle: string | null;
+    assignedVehicle: string;
     subtotalMnt: number;
     deliveryFeeMnt: number;
     unloadingFeeMnt: number;
@@ -90,77 +28,8 @@ type Quote = {
   };
 };
 
-const PRICE_SOURCE_LABEL = { CUSTOMER: 'харилцагчийн хувийн үнэ', LIST: 'үнийн жагсаалт', RETAIL: 'жижиглэнгийн үнэ' } as const;
-
-/**
- * The unit price of a cart line for someone allowed to change it: shows the usual price (the customer's own, their
- * list or retail) and takes a typed one. With a registered customer the typed price becomes their own price.
- * The server refuses a price below cost.
- */
-function PriceEditor(props: {
-  line: CartLine;
-  quoted?: { unitPrice: number; basePrice?: number; priceSource?: 'CUSTOMER' | 'LIST' | 'RETAIL' | 'MANUAL' };
-  customerName: string | null;
-  onChange: (price: string | undefined) => void;
-}) {
-  const { line, quoted } = props;
-  const base = quoted?.basePrice ?? quoted?.unitPrice ?? line.product.priceMnt;
-  // What is being typed; applied (and priced by the server) on leaving the box or Enter, not on every key.
-  const [draft, setDraft] = useState(line.price ?? '');
-  useEffect(() => setDraft(line.price ?? ''), [line.price]);
-  const apply = () => {
-    const v = draft.trim();
-    if ((v || undefined) !== line.price) props.onChange(v ? v : undefined);
-  };
-  const typed = typedPrice(line.price);
-  const changed = typed !== undefined && typed !== base;
-  const source = quoted?.priceSource && quoted.priceSource !== 'MANUAL' ? PRICE_SOURCE_LABEL[quoted.priceSource] : null;
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-      <label className="flex items-center gap-1 text-slate-400">
-        Үнэ
-        <input
-          inputMode="numeric"
-          enterKeyHint="done"
-          className={`w-28 rounded-lg border bg-slate-950 p-1 text-base md:text-sm ${changed ? 'border-amber-500 text-amber-200' : 'border-slate-700'} ${
-            draft.trim() && typedPrice(draft) === undefined ? '!border-red-500' : ''
-          }`}
-          placeholder={String(base)}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={apply}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              apply();
-            }
-          }}
-          aria-label={`${line.product.nameMn}: нэгжийн үнэ`}
-        />
-        ₮
-      </label>
-      {draft.trim() && typedPrice(draft) === undefined && <span className="text-red-300">зөвхөн тоо (жишээ: 23000)</span>}
-      {changed ? (
-        <>
-          <span className="text-slate-500">
-            байсан <span className="line-through">{tugrik(base)}</span>
-          </span>
-          <button type="button" className="text-amber-brand hover:underline" onClick={() => props.onChange(undefined)}>
-            буцаах
-          </button>
-          <span className="basis-full text-amber-300/90">
-            {props.customerName ? `«${props.customerName}»-ийн хувийн үнэ болж хадгалагдана.` : 'Зөвхөн энэ худалдаанд (харилцагч сонговол хадгалагдана).'}
-          </span>
-        </>
-      ) : (
-        source && <span className="text-slate-500">{source}</span>
-      )}
-    </div>
-  );
-}
-
 function chipClass(active: boolean, activeCls: string) {
-  return `min-h-[40px] py-2 px-1 text-xs font-medium rounded-lg border transition ${
+  return `py-2 px-1 text-xs font-medium rounded-lg border transition ${
     active ? activeCls : 'bg-slate-800 text-slate-300 border-slate-700'
   }`;
 }
@@ -176,39 +45,12 @@ export default function CheckoutPOS() {
   // Cashiers assigned to a warehouse can only sell from it; admin/manager may pick any.
   const [warehouseLocked, setWarehouseLocked] = useState(false);
   const [cart, setCart] = useState<CartLine[]>([]);
-  // The last single payment method this cashier used (cash until they pick another).
-  const [paymentMethod, setPaymentMethodState] = useState<PaymentMethod>('CASH');
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('pos_pay_method');
-      if (saved === 'QPAY' || saved === 'CARD' || saved === 'TRANSFER') setPaymentMethodState(saved);
-    } catch {
-      // private window: start with cash
-    }
-  }, []);
-  const setPaymentMethod = (m: PaymentMethod) => {
-    setPaymentMethodState(m);
-    try {
-      if (m === 'CASH' || m === 'QPAY' || m === 'CARD' || m === 'TRANSFER') localStorage.setItem('pos_pay_method', m);
-    } catch {
-      // private window: not remembered
-    }
-  };
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('QPAY');
   const [paymentMode, setPaymentMode] = useState<'SINGLE' | 'SPLIT'>('SINGLE');
   const [splitCash, setSplitCash] = useState(0);
   const [splitCard, setSplitCard] = useState(0);
   const [splitQpay, setSplitQpay] = useState(0);
-  const [splitCredit, setSplitCredit] = useState(0);
-  const [splitTransfer, setSplitTransfer] = useState(0);
-  const [splitContract, setSplitContract] = useState(0);
-  const [splitInvoice, setSplitInvoice] = useState(0);
-  /** Cash is the balancing line: it holds whatever the other methods do not cover, until typed by hand. */
-  const [cashManual, setCashManual] = useState(false);
-  /** The order was made but its invoice was not: say so and point to the order (retrying would make a second order). */
-  const [invoiceFail, setInvoiceFail] = useState<{ id: string; orderNumber: string; message: string } | null>(null);
-  /** What we owe the selected supply/barter partner — the most a contract sale can take. */
-  const [partnerPayable, setPartnerPayable] = useState<number | null>(null);
-  const [deliveryType, setDeliveryType] = useState<DeliveryType>('SELF_PICKUP');
+  const [deliveryType, setDeliveryType] = useState<DeliveryType>('OUR_DELIVERY');
   const [zoneId, setZoneId] = useState('');
   const [time, setTime] = useState('STANDARD');
   const [isUnloading, setIsUnloading] = useState(false);
@@ -217,8 +59,6 @@ export default function CheckoutPOS() {
   const [address, setAddress] = useState('');
   const [billType, setBillType] = useState<'CITIZEN' | 'COMPANY'>('CITIZEN');
   const [customerRegNumber, setCustomerRegNumber] = useState('');
-  const [customer, setCustomer] = useState<Customer | null>(null);
-  const features = useFeatures();
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -228,13 +68,7 @@ export default function CheckoutPOS() {
   const scanRef = useRef<HTMLInputElement>(null);
   const productsRef = useRef<Product[]>([]);
   const cartAddRef = useRef<(p: Product) => void>(() => undefined);
-  const holdRef = useRef<() => void>(() => undefined);
   const scanBuffer = useRef('');
-  const [userId, setUserId] = useState('');
-  const [held, setHeld] = useState<HeldSale[]>([]);
-  const [showHeld, setShowHeld] = useState(false);
-  const [lookupOpen, setLookupOpen] = useState(false);
-  const [cashRefresh, setCashRefresh] = useState(0);
 
   const ourDelivery = deliveryType === 'OUR_DELIVERY';
   const selectedZone = zones.find((z) => z.id === zoneId);
@@ -243,17 +77,13 @@ export default function CheckoutPOS() {
   useEffect(() => {
     const raw = localStorage.getItem('barilga_user');
     const role = raw ? (JSON.parse(raw) as AuthUser).role : null;
-    const uid = raw ? (JSON.parse(raw) as AuthUser).id : '';
-    setUserId(uid);
-    if (uid) setHeld(readHeld(uid));
     if (!hasRole(role, POS_ROLES)) {
       router.replace(homeForRole(role));
       return;
     }
     const mine = (raw ? (JSON.parse(raw) as AuthUser).warehouseId : null) ?? null;
     setMyWarehouseId(mine);
-    // Staff sell from their own shop; the general manager and admin may pick any (a branch manager picks among theirs; the API checks).
-    setWarehouseLocked(!!mine && !hasRole(role, TOP_ROLES) && role !== 'MANAGER');
+    setWarehouseLocked(!!mine && role !== 'ADMIN' && role !== 'MANAGER');
     api<Warehouse[]>('/inventory/warehouses')
       .then(setWarehouses)
       .catch(() => undefined);
@@ -262,26 +92,6 @@ export default function CheckoutPOS() {
       if (z[0]) setZoneId(z[0].id);
     });
   }, [router]);
-
-  // Opened from a partner's account (?customer=<id>&pay=CONTRACT): the partner is chosen and the goods are paid
-  // with what we owe them (бараагаар тооцоо хаах). ?pay=INVOICE (from «+ Шинэ нэхэмжлэх»): pay by invoice.
-  useEffect(() => {
-    if (!userId) return;
-    const params = new URLSearchParams(window.location.search);
-    const pay = params.get('pay');
-    if (pay === 'INVOICE') {
-      setPaymentMode('SINGLE');
-      setPaymentMethodState('INVOICE');
-    }
-    const id = params.get('customer');
-    if (!id) return;
-    api<Customer>(`/customers/${id}`)
-      .then((c) => {
-        pickCustomer(c);
-        if (pay === 'CONTRACT' || pay === 'INVOICE') setPaymentMethodState(pay);
-      })
-      .catch(() => undefined);
-  }, [userId]);
 
   // Load the full active catalog once. Search only filters the grid, so the barcode
   // scanner (which reads productsRef) still resolves any SKU while a search is active.
@@ -302,7 +112,7 @@ export default function CheckoutPOS() {
         setProducts(list.map((p) => ({ ...p, stockQty: qty.get(p.id) ?? p.stockQty })));
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Бараа ачаалж чадсангүй');
+        setError(err instanceof Error ? err.message : 'Catalog failed');
       });
   }, [warehouseChoice, myWarehouseId, warehouses]);
 
@@ -314,24 +124,17 @@ export default function CheckoutPOS() {
           productId: c.product.id,
           quantity: c.quantity,
           sourceType: c.sourceType,
-          supplierName: c.sourceType === 'EXTERNAL_SUPPLIER' ? c.supplierName || 'Өөр дэлгүүр' : undefined,
-          unitPriceMnt: typedPrice(c.price),
+          supplierName: c.sourceType === 'EXTERNAL_SUPPLIER' ? c.supplierName || 'Other store' : undefined,
         })),
     [cart],
   );
-  // Changing a price at the till: managers by role, others when given the right («Хэрэглэгчид → Эрх»).
-  const canDo = useCan();
-  const mayChangePrice = canDo('PRICE_OVERRIDE');
-
-  const unloadingOffered = features.enabled('UNLOADING');
-  useEffect(() => {
-    // Without delivery (or with the unloading service switched off) these options do not apply.
-    if (!ourDelivery || !unloadingOffered) setIsUnloading(false);
-    if (!ourDelivery) setTime('STANDARD');
-  }, [ourDelivery, unloadingOffered]);
 
   useEffect(() => {
-    if (!cart.length || (ourDelivery && !zoneId)) {
+    if (!ourDelivery) setIsUnloading(false);
+  }, [ourDelivery]);
+
+  useEffect(() => {
+    if (!cart.length || !zoneId) {
       setQuote(null);
       return;
     }
@@ -339,20 +142,19 @@ export default function CheckoutPOS() {
     api<Quote>('/orders/quote', {
       method: 'POST',
       body: JSON.stringify({
-        zoneId: ourDelivery ? zoneId : undefined,
+        zoneId,
         deliveryMethod: deliveryType,
         timeCondition: time,
         unloadingRequested: ourDelivery && isUnloading,
         items,
-        customerId: customer?.id,
       }),
     })
       .then(setQuote)
       .catch((err: unknown) => {
         setQuote(null);
-        setError(err instanceof Error ? err.message : 'Тооцоо амжилтгүй');
+        setError(err instanceof Error ? err.message : 'Quote failed');
       });
-  }, [zoneId, deliveryType, time, isUnloading, ourDelivery, items, cart, customer]);
+  }, [zoneId, deliveryType, time, isUnloading, ourDelivery, items, cart]);
 
   function add(p: Product) {
     setCart((prev) => {
@@ -369,19 +171,18 @@ export default function CheckoutPOS() {
     const code = raw.trim();
     if (!code) return;
     const match =
-      productsRef.current.find((p) => p.barcode === code) ??
       productsRef.current.find((p) => p.sku.toLowerCase() === code.toLowerCase()) ??
       (productsRef.current.filter((p) => productMatchesQuery(p, code)).length === 1
         ? productsRef.current.find((p) => productMatchesQuery(p, code))
         : undefined);
     if (!match) {
-      setError(`Ийм баркод / SKU-тай бараа алга: ${code}`);
+      setError(`No product for barcode / SKU: ${code}`);
       setScanFlash('');
       return;
     }
     cartAddRef.current(match);
     setError('');
-    setScanFlash(`Нэмэгдлээ: ${match.sku} — ${match.nameMn}`);
+    setScanFlash(`Added ${match.sku} — ${match.nameMn}`);
     window.setTimeout(() => setScanFlash(''), 2500);
     setScanCode('');
     scanRef.current?.focus();
@@ -393,16 +194,6 @@ export default function CheckoutPOS() {
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'F2') {
-        e.preventDefault();
-        setLookupOpen(true);
-        return;
-      }
-      if (e.key === 'F8') {
-        e.preventDefault();
-        holdRef.current();
-        return;
-      }
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
@@ -424,27 +215,7 @@ export default function CheckoutPOS() {
 
   const b = quote?.breakdown;
   const totalMnt = b?.totalMnt ?? 0;
-  // Credit only for a customer a manager allowed; contract only for a supply/barter partner we owe money to.
-  const creditOffered = features.enabled('CREDIT_SALES') && !!customer?.creditAllowed;
-  const contractPartner = !!customer && (!!customer.sellsToUs || !!customer.barterContract);
-  const contractOffered = features.enabled('PARTNER_ACCOUNTS') && contractPartner && (partnerPayable ?? 0) > 0;
-  const deliveryOffered = features.enabled('DELIVERY');
-  const splitOthers = splitCard + splitQpay + splitTransfer + splitCredit + splitContract + splitInvoice;
-  const splitSum = splitCash + splitCard + splitQpay + splitTransfer + splitCredit + splitContract + splitInvoice;
-  useEffect(() => {
-    if (paymentMode === 'SPLIT' && !cashManual) setSplitCash(Math.max(0, totalMnt - splitOthers));
-  }, [paymentMode, cashManual, totalMnt, splitOthers]);
-  /** Another method's amount was typed: cash takes the rest again. */
-  const other = (set: (n: number) => void) => (n: number) => {
-    setCashManual(false);
-    set(n);
-  };
-  /** Moves everything still on cash onto this method. */
-  const restTo = (set: (n: number) => void, current: number) => () => {
-    setCashManual(false);
-    set(current + Math.max(0, totalMnt - splitOthers));
-  };
-  const linePrice = new Map((quote?.lines ?? []).map((l) => [l.productId, l]));
+  const splitSum = splitCash + splitCard + splitQpay;
   const splitOk = paymentMode === 'SPLIT' && totalMnt > 0 && splitSum === totalMnt && splitSum > 0;
 
   function paymentsPayload() {
@@ -453,104 +224,16 @@ export default function CheckoutPOS() {
         { method: 'CASH' as const, amount: splitCash, status: 'PAID' },
         { method: 'CARD' as const, amount: splitCard, status: 'PAID' },
         { method: 'QPAY' as const, amount: splitQpay, status: 'PENDING' },
-        // A bank transfer is confirmed once it shows on the bank statement (Мөнгө орсон on the order).
-        { method: 'TRANSFER' as const, amount: splitTransfer, status: 'PENDING' },
-        { method: 'CREDIT' as const, amount: splitCredit, status: 'PENDING' },
-        { method: 'CONTRACT' as const, amount: splitContract, status: 'PAID' },
-        // Paid later against the invoice made with the order (Мөнгө орсон on the order once it arrives).
-        { method: 'INVOICE' as const, amount: splitInvoice, status: 'PENDING' },
       ].filter((p) => p.amount > 0);
     }
-    // A single invoice payment goes as paymentMethod (the server takes the order total).
-    if (paymentMethod === 'INVOICE') return undefined;
-    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' || paymentMethod === 'CREDIT' || paymentMethod === 'TRANSFER' ? 'PENDING' : 'PAID' }];
+    return [{ method: paymentMethod, amount: totalMnt, status: paymentMethod === 'QPAY' ? 'PENDING' : 'PAID' }];
   }
-
-  /** Picking a registered customer fills the order snapshot (still editable); a company also sets the E-Barimt РД. */
-  function pickCustomer(c: Customer | null) {
-    // Prices typed for one customer do not carry over to another (each would become that one's own price).
-    if (customer && c?.id !== customer.id) setCart((prev) => prev.map((l) => (l.price === undefined ? l : { ...l, price: undefined })));
-    setCustomer(c);
-    setPartnerPayable(null);
-    if (paymentMethod === 'CREDIT' || paymentMethod === 'CONTRACT') setPaymentMethod('CASH');
-    setSplitCredit(0);
-    setSplitContract(0);
-    if (!c) {
-      // Unlinking clears what the customer filled in, so the next sale cannot go out under their name or РД.
-      setCustomerName('');
-      setCustomerPhone('');
-      setAddress('');
-      setBillType('CITIZEN');
-      setCustomerRegNumber('');
-      return;
-    }
-    if ((c.sellsToUs || c.barterContract) && features.enabled('PARTNER_ACCOUNTS')) {
-      api<{ payableMnt: number }>(`/accounts/${c.id}`)
-        .then((st) => setPartnerPayable(st.payableMnt))
-        .catch(() => setPartnerPayable(null));
-    }
-    setCustomerName(c.name);
-    setCustomerPhone(c.phone);
-    if (c.type === 'COMPANY' && c.regNumber) {
-      setBillType('COMPANY');
-      setCustomerRegNumber(c.regNumber);
-    }
-    if (c.address && !address) setAddress(c.address);
-  }
-
-  /** Puts the current cart aside so the next customer can be served; resume it later from the list. */
-  function holdSale() {
-    if (!cart.length || !userId) return;
-    const label = customer?.name || customerName.trim() || `${cart.length} бараа · ${tugrik(quote?.breakdown.totalMnt ?? 0)}`;
-    const entry: HeldSale = {
-      id: `${Date.now()}`,
-      at: new Date().toISOString(),
-      label,
-      lines: cart.map((l) => ({ productId: l.product.id, quantity: l.quantity, sourceType: l.sourceType, supplierName: l.supplierName, price: l.price })),
-      customer,
-      customerName,
-      customerPhone,
-    };
-    const next = [entry, ...readHeld(userId)];
-    writeHeld(userId, next);
-    setHeld(next);
-    setCart([]);
-    pickCustomer(null);
-    setScanFlash(`Хүлээлгэлээ: ${label}`);
-  }
-
-  function resumeSale(h: HeldSale) {
-    if (cart.length && !window.confirm('Одоогийн сагсыг хүлээлгээд сонгосныг нээх үү?')) return;
-    if (cart.length) holdSale();
-    const rest = readHeld(userId).filter((x) => x.id !== h.id);
-    writeHeld(userId, rest);
-    setHeld(rest);
-    const byId = new Map(products.map((p) => [p.id, p]));
-    const lines = h.lines
-      .filter((l) => byId.has(l.productId))
-      .map((l) => ({ ...l, price: mayChangePrice ? l.price : undefined, product: byId.get(l.productId)! }));
-    setCart(lines);
-    if (h.customer) pickCustomer(h.customer);
-    setCustomerName(h.customerName);
-    setCustomerPhone(h.customerPhone);
-    setShowHeld(false);
-    if (lines.length < h.lines.length) setError('Зарим бараа идэвхгүй болсон тул сагснаас хасагдлаа');
-  }
-
-  function dropHeld(id: string) {
-    const rest = readHeld(userId).filter((x) => x.id !== id);
-    writeHeld(userId, rest);
-    setHeld(rest);
-  }
-
-  holdRef.current = holdSale;
 
   async function handleCheckout() {
     setBusy(true);
     setError('');
-    setInvoiceFail(null);
     try {
-      const order = await api<CreatedOrder>('/orders', {
+      const order = await api<{ id: string }>('/orders', {
         method: 'POST',
         body: JSON.stringify({
           warehouseId: warehouseChoice || undefined,
@@ -561,130 +244,42 @@ export default function CheckoutPOS() {
           isUnloading: ourDelivery && isUnloading,
           unloadingRequested: ourDelivery && isUnloading,
           items,
-          customerId: customer?.id,
-          // A walk-in sale needs no name; the order still shows who it was for when one was typed.
-          customerName: customerName.trim() || 'Энгийн харилцагч',
-          customerPhone: customerPhone.trim(),
+          customerName,
+          customerPhone,
           deliveryAddress: address,
           billType,
           customerRegNumber: billType === 'COMPANY' ? customerRegNumber : undefined,
-          paymentMethod: paymentMode === 'SINGLE' && paymentMethod === 'INVOICE' ? 'INVOICE' : undefined,
           payments: paymentsPayload(),
         }),
       });
-      setCashRefresh((n) => n + 1);
-      if (usesInvoice) {
-        if (order.invoice) {
-          // The order page prints the invoice straight away (NH number, due date, blank buyer lines if none).
-          router.push(`/orders/${order.id}?new=1&invoice=1`);
-          return;
-        }
-        // The order exists but its invoice does not: clear the till so it is not sold twice, and say where to finish.
-        setInvoiceFail({
-          id: order.id,
-          orderNumber: order.orderNumber,
-          message: order.invoiceError ?? 'Захиалга үүссэн боловч нэхэмжлэх үүсгэж чадсангүй. Захиалгын хуудаснаас нэхэмжлэхээ үүсгэнэ үү.',
-        });
-        setCart([]);
-        pickCustomer(null);
-        return;
-      }
-      router.push(`/orders/${order.id}?new=1`);
+      router.push(`/orders/${order.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Захиалга үүсгэж чадсангүй');
+      setError(err instanceof Error ? err.message : 'Create failed');
     } finally {
       setBusy(false);
     }
   }
 
   const usesQpay = paymentMode === 'SPLIT' ? splitQpay > 0 : paymentMethod === 'QPAY';
-  // Pay by invoice: the invoice is made with the order; the buyer may be added later.
-  const invoiceOffered = features.enabled('INVOICES');
-  const usesInvoice = paymentMode === 'SPLIT' ? splitInvoice > 0 : paymentMethod === 'INVOICE';
-  // On account (зарлагаар): goods leave now, the customer pays later; only for a registered customer.
-  const usesCredit = paymentMode === 'SPLIT' ? splitCredit > 0 : paymentMethod === 'CREDIT';
-  const contractAmount = paymentMode === 'SPLIT' ? splitContract : paymentMethod === 'CONTRACT' ? totalMnt : 0;
-  const contractOk = contractAmount === 0 || (contractOffered && contractAmount <= (partnerPayable ?? 0) && !(paymentMode === 'SPLIT' && splitCredit > 0));
   const confirmLabel = usesQpay
     ? paymentMode === 'SPLIT'
       ? `Баталгаажуулах + QPay ${tugrik(splitQpay)}`
       : 'Захиалга баталгаажуулах + QPay'
-    : paymentMethod === 'INVOICE' && paymentMode === 'SINGLE'
-      ? 'Нэхэмжлэх гаргах'
-      : paymentMode === 'SPLIT' && splitInvoice > 0
-      ? `Баталгаажуулах + нэхэмжлэх ${tugrik(splitInvoice)}`
-      : paymentMethod === 'CREDIT' && paymentMode === 'SINGLE'
-      ? 'Дараа төлөхөөр олгох (зээл)'
-      : paymentMethod === 'CONTRACT' && paymentMode === 'SINGLE'
-      ? 'Гэрээгээр олгох (өглөгөөс хасна)'
-      : paymentMethod === 'TRANSFER' && paymentMode === 'SINGLE'
-      ? 'Захиалга үүсгэх (шилжүүлэг хүлээнэ)'
-      : `Захиалга баталгаажуулах (${paymentMode === 'SPLIT' ? 'хувааж төлөх' : paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : paymentMethod === 'CARD' ? 'Карт' : paymentMethod === 'TRANSFER' ? 'Шилжүүлэг' : 'хувааж төлөх'})`;
-  // Why the button is disabled, in words, so the cashier is never left guessing.
-  const missing: string[] = [];
-  if (!cart.length) missing.push('бараа нэмнэ үү');
-  const badPrice = cart.find((l) => l.price !== undefined && l.price.trim() !== '' && (typedPrice(l.price) === undefined || typedPrice(l.price)! < 1));
-  if (badPrice) missing.push(`«${badPrice.product.nameMn}»-ийн үнийг тоогоор бичнэ үү (1₮-өөс их)`);
-  else if (!quote) missing.push('үнэ тооцоолж байна…');
-  if (ourDelivery && (!customerName.trim() || !customerPhone.trim())) missing.push('хүргэлтэд нэр, утас бичнэ үү');
-  if (paymentMode === 'SPLIT' && !splitOk) missing.push('хуваасан дүн нийт дүнтэй тэнцэх ёстой');
-  if (usesCredit && !(creditOffered && customer)) missing.push('дараа төлөх эрхтэй харилцагч сонгоно уу');
-  if (!contractOk) missing.push('гэрээгээр олгох дүн өглөгөөс хэтэрсэн');
-  if (contractAmount > 0 && paymentMode === 'SPLIT' && splitQpay + splitTransfer + splitInvoice > 0) {
-    missing.push('гэрээгээр олгохдоо үлдсэнийг бэлэн эсвэл картаар авна');
-  }
-  if (usesInvoice && !invoiceOffered) missing.push('нэхэмжлэхийн модуль унтраалттай (Админ → Модулиуд)');
-  // The invoice asks for all that is unpaid: the rest of the split is taken there and then.
-  if (paymentMode === 'SPLIT' && splitInvoice > 0 && splitQpay + splitTransfer + splitCredit + splitContract > 0) {
-    missing.push('нэхэмжлэхтэй хуваахад үлдсэнийг бэлэн эсвэл картаар авна');
-  }
-  if (billType === 'COMPANY' && !/^[0-9A-Za-z]{7,12}$/.test(customerRegNumber.trim())) missing.push('байгууллагын РД (7–12 тэмдэгт)');
-  const canSubmit = !busy && missing.length === 0;
+    : `Захиалга баталгаажуулах (${paymentMethod === 'CASH' ? 'Бэлэн мөнгө' : 'Карт'})`;
+  const canSubmit =
+    !busy &&
+    cart.length > 0 &&
+    !!customerName &&
+    !!customerPhone &&
+    !!quote &&
+    (paymentMode === 'SINGLE' || splitOk) &&
+    (billType === 'CITIZEN' || /^[0-9A-Za-z]{7,12}$/.test(customerRegNumber.trim()));
 
   return (
     <Shell>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-xl font-bold text-amber-500">Кассчин — Шинэ захиалга</h2>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="btn-ghost text-sm" onClick={() => setLookupOpen(true)}>
-                Лавлах (F2)
-              </button>
-              <button type="button" className="btn-ghost text-sm" disabled={!cart.length} onClick={holdSale}>
-                Хүлээлгэх (F8)
-              </button>
-              {held.length > 0 && (
-                <button type="button" className="btn-primary text-sm" onClick={() => setShowHeld((v) => !v)}>
-                  Хүлээлгэсэн ({held.length})
-                </button>
-              )}
-            </div>
-          </div>
-          {features.enabled('CASH_SESSIONS') && <CashDrawerBar refreshKey={cashRefresh} />}
-          {showHeld && held.length > 0 && (
-            <ul className="divide-y divide-slate-800 rounded-xl border border-slate-700 text-sm">
-              {held.map((h) => (
-                <li key={h.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
-                  <span>
-                    <b>{h.label}</b>{' '}
-                    <span className="text-xs text-slate-400">
-                      · {h.lines.length} бараа · {new Intl.DateTimeFormat('mn-MN', { timeZone: 'Asia/Ulaanbaatar', hour: '2-digit', minute: '2-digit' }).format(new Date(h.at))}
-                    </span>
-                  </span>
-                  <span className="flex gap-2">
-                    <button type="button" className="btn-primary text-xs" onClick={() => resumeSale(h)}>
-                      Нээх
-                    </button>
-                    <button type="button" className="btn-ghost text-xs" onClick={() => dropHeld(h.id)}>
-                      Устгах
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {lookupOpen && <PosLookup products={products} onClose={() => setLookupOpen(false)} onAdd={(p) => add(p)} />}
+          <h2 className="text-xl font-bold text-amber-500">Борлуулагч — Шинэ захиалга</h2>
           {warehouses.length > 1 && (
             <div className="text-xs text-slate-400">
               {warehouseLocked ? (
@@ -697,7 +292,7 @@ export default function CheckoutPOS() {
               ) : (
                 <label className="block">
                   Агуулах / дэлгүүр (үлдэгдэл эндээс хасагдана)
-                  <select className="mt-1 block w-full sm:w-auto sm:min-w-[240px]" value={warehouseChoice} onChange={(e) => setWarehouseChoice(e.target.value)}>
+                  <select className="mt-1 block min-w-[240px]" value={warehouseChoice} onChange={(e) => setWarehouseChoice(e.target.value)}>
                     <option value="">
                       Миний / анхдагч: {warehouses.find((w) => w.id === (myWarehouseId ?? ''))?.name ?? warehouses.find((w) => w.isDefault)?.name ?? '—'}
                     </option>
@@ -713,12 +308,12 @@ export default function CheckoutPOS() {
             </div>
           )}
           <label className="block text-xs text-slate-400">
-            Нэр, тайлбар, SKU-гаар хайх
+            Search name, description, SKU
             <input
               className="mt-1 w-full"
               value={searchQuery}
               autoComplete="off"
-              placeholder="жишээ: суурь, цемент, CEM-42"
+              placeholder="e.g. foundation, цемент, CEM-42"
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </label>
@@ -730,27 +325,24 @@ export default function CheckoutPOS() {
             }}
           >
             <label className="flex-1 min-w-[220px] text-xs text-slate-400">
-              Баркод / SKU уншигч
+              Barcode / SKU scanner
               <input
                 ref={scanRef}
                 className="mt-1 w-full"
                 value={scanCode}
                 autoComplete="off"
-                placeholder="Уншуулах эсвэл SKU бичээд Enter дарна"
+                placeholder="Scan or type SKU, then Enter"
                 onChange={(e) => setScanCode(e.target.value)}
               />
             </label>
             <button type="submit" className="btn-ghost mt-5">
-              Нэмэх
+              Add
             </button>
           </form>
           {scanFlash && <p className="text-emerald-400 text-sm">{scanFlash}</p>}
           {lowStockProducts.length > 0 && (
             <div className="rounded-xl border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
-              Дуусч буй бараа: <b>{lowStockProducts.length}</b>{' '}
-              <a href="/inventory" className="underline">
-                үлдэгдэл харах
-              </a>
+              Low stock: {lowStockProducts.map((p) => `${p.nameMn} (${Number(p.stockQty)} ${p.unit})`).join(' · ')}
             </div>
           )}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -772,20 +364,17 @@ export default function CheckoutPOS() {
                         status === 'OUT_OF_STOCK' ? 'bg-red-800 text-red-100' : 'bg-amber-700 text-amber-100'
                       }`}
                     >
-                      {status === 'OUT_OF_STOCK' ? 'Дууссан' : 'Дуусч буй'}
+                      {status === 'OUT_OF_STOCK' ? 'Out' : 'Low'}
                     </span>
                   )}
                 </div>
                 <h3 className="font-semibold text-sm">{p.nameMn}</h3>
-                {(p.companions ?? []).length > 0 && (
-                  <p className="text-[11px] text-amber-300">+ {p.companions!.map((c) => c.name).join(', ')} дагалдана</p>
-                )}
                 {p.description && <p className="text-[11px] text-slate-500 mt-1 line-clamp-2">{p.description}</p>}
                 <p className="text-amber-400 font-bold mt-2">
                   {tugrik(p.priceMnt)} / {p.unit}
                 </p>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  {Number(p.weightKg)}кг · үлдэгдэл {Number(p.stockQty)}
+                  {Number(p.weightKg)}кг · stock {Number(p.stockQty)}
                 </p>
               </button>
               );
@@ -800,49 +389,26 @@ export default function CheckoutPOS() {
           {cart.map((l) => (
             <div key={l.product.id} className="space-y-1 border-b border-slate-800 pb-2">
               <div className="flex items-center gap-2 text-sm">
-                <span className="flex-1">
-                  {l.product.nameMn}
-                  {companionLines(l.product.companions, l.quantity).map((c) => (
-                    <span key={c} className="block text-[11px] text-amber-300">+ {c}</span>
-                  ))}
-                  {!mayChangePrice && linePrice.get(l.product.id) && linePrice.get(l.product.id)!.unitPrice !== l.product.priceMnt && (
-                    <span className="block text-[11px] text-emerald-300">
-                      {tugrik(linePrice.get(l.product.id)!.unitPrice)} <span className="line-through text-slate-500">{tugrik(l.product.priceMnt)}</span>
-                      {linePrice.get(l.product.id)!.priceSource === 'CUSTOMER' && <span className="text-slate-400"> · хувийн үнэ</span>}
-                    </span>
-                  )}
-                </span>
+                <span className="flex-1">{l.product.nameMn}</span>
                 <input
                   type="number"
-                  inputMode="decimal"
-                  min={0}
-                  step="any"
-                  className="w-20 bg-slate-950 border border-slate-700 rounded-lg p-1 text-base md:text-sm"
+                  min={0.001}
+                  step={1}
+                  className="w-20 bg-slate-950 border border-slate-700 rounded-lg p-1 text-sm"
                   value={l.quantity}
-                  onChange={(e) => setCart((prev) => prev.map((x) => (x.product.id === l.product.id ? { ...x, quantity: Number(e.target.value) } : x)))}
-                  // Leaving the field at 0 (or empty) removes the line instead of silently dropping it.
-                  onBlur={() => setCart((prev) => prev.filter((x) => !(x.product.id === l.product.id && !(x.quantity > 0))))}
+                  onChange={(e) =>
+                    setCart((prev) =>
+                      prev.map((x) =>
+                        x.product.id === l.product.id ? { ...x, quantity: Number(e.target.value) } : x,
+                      ),
+                    )
+                  }
                 />
-                <button
-                  type="button"
-                  aria-label="Сагснаас хасах"
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-lg text-red-400 hover:bg-slate-800"
-                  onClick={() => setCart((p) => p.filter((x) => x.product.id !== l.product.id))}
-                >
+                <button type="button" className="text-red-400" onClick={() => setCart((p) => p.filter((x) => x.product.id !== l.product.id))}>
                   ×
                 </button>
               </div>
-              {mayChangePrice && (
-                <PriceEditor
-                  line={l}
-                  quoted={linePrice.get(l.product.id)}
-                  customerName={customer?.name ?? null}
-                  onChange={(price) => setCart((prev) => prev.map((x) => (x.product.id === l.product.id ? { ...x, price } : x)))}
-                />
-              )}
-              {/* Only when this warehouse cannot cover the quantity: then say where the goods come from. */}
-              {(l.quantity > Number(l.product.stockQty) || l.sourceType === 'EXTERNAL_SUPPLIER') && (
-              <label className="flex items-center gap-2 text-[11px] text-amber-300">
+              <label className="flex items-center gap-2 text-[11px] text-slate-400">
                 <input
                   type="checkbox"
                   checked={l.sourceType === 'EXTERNAL_SUPPLIER'}
@@ -853,20 +419,19 @@ export default function CheckoutPOS() {
                           ? {
                               ...x,
                               sourceType: e.target.checked ? 'EXTERNAL_SUPPLIER' : 'INTERNAL',
-                              supplierName: e.target.checked ? x.supplierName || 'Өөр дэлгүүр' : '',
+                              supplierName: e.target.checked ? x.supplierName || 'Other store' : '',
                             }
                           : x,
                       ),
                     )
                   }
                 />
-                Үлдэгдэл хүрэхгүй ({Number(l.product.stockQty)}) — өөр газраас авна
+                External supplier / other store
               </label>
-              )}
               {l.sourceType === 'EXTERNAL_SUPPLIER' && (
                 <input
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1 text-xs"
-                  placeholder="Хаанаас авах (нийлүүлэгч / дэлгүүр)"
+                  placeholder="Supplier / store name"
                   value={l.supplierName}
                   onChange={(e) =>
                     setCart((prev) =>
@@ -878,88 +443,81 @@ export default function CheckoutPOS() {
             </div>
           ))}
 
-          {/* Delivery is opt-in: unticked = the customer collects the goods themselves. Hidden while the module is off. */}
-          {deliveryOffered && (
-          <label className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm cursor-pointer">
-            <input
-              type="checkbox"
-              checked={ourDelivery}
-              onChange={(e) => setDeliveryType(e.target.checked ? 'OUR_DELIVERY' : 'SELF_PICKUP')}
-              className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
-            />
-            <span className="font-semibold">Хүргэлт хийлгэх</span>
-          </label>
-          )}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400">Хүргэлтийн арга</label>
+            <div className="grid grid-cols-3 gap-1.5">
+              <button type="button" onClick={() => setDeliveryType('OUR_DELIVERY')} className={chipClass(deliveryType === 'OUR_DELIVERY', 'bg-amber-500 text-slate-950 border-amber-500 font-bold')}>
+                Манай хүргэлт
+              </button>
+              <button type="button" onClick={() => setDeliveryType('SELF_PICKUP')} className={chipClass(deliveryType === 'SELF_PICKUP', 'bg-amber-500 text-slate-950 border-amber-500 font-bold')}>
+                Өөрөө авах
+              </button>
+              <button type="button" onClick={() => setDeliveryType('CUSTOMER_DRIVER')} className={chipClass(deliveryType === 'CUSTOMER_DRIVER', 'bg-amber-500 text-slate-950 border-amber-500 font-bold')}>
+                Жолооч явуулах
+              </button>
+            </div>
+          </div>
 
           {ourDelivery && (
-            <div className="space-y-3 rounded-lg border border-amber-700/50 p-3">
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-400">Хүргэлтийн бүс</label>
-                <select
-                  value={zoneId}
-                  onChange={(e) => setZoneId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm text-slate-200"
-                >
-                  {zones.map((z) => (
-                    <option key={z.id} value={z.id}>
-                      {z.nameMn} ({tugrik(z.baseDeliveryFeeMnt)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {features.enabled('UNLOADING') && (
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="checkbox"
-                    id="unloading"
-                    checked={isUnloading}
-                    onChange={(e) => setIsUnloading(e.target.checked)}
-                    className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
-                  />
-                  <label htmlFor="unloading" className="text-xs text-slate-300">
-                    Буулгалт хийх (15,000₮/тн, мин 15,000₮)
-                  </label>
-                </div>
-              )}
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-slate-400">Цагийн нөхцөл</label>
-                <select
-                  value={time}
-                  onChange={(e) => setTime(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm text-slate-200"
-                >
-                  <option value="STANDARD">Энгийн</option>
-                  <option value="NIGHT">Шөнө (−10%, хөдөө биш)</option>
-                  <option value="EXPRESS">Яаралтай (+30–50%)</option>
-                </select>
-              </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400">Хүргэлтийн бүс</label>
+              <select
+                value={zoneId}
+                onChange={(e) => setZoneId(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-slate-200"
+              >
+                {zones.map((z) => (
+                  <option key={z.id} value={z.id}>
+                    {z.nameMn} ({tugrik(z.baseDeliveryFeeMnt)})
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 
-          {features.enabled('CUSTOMERS') && <CustomerPicker value={customer} onChange={pickCustomer} allowCreate />}
+          {ourDelivery && (
+            <div className="flex items-center space-x-2 pt-1">
+              <input
+                type="checkbox"
+                id="unloading"
+                checked={isUnloading}
+                onChange={(e) => setIsUnloading(e.target.checked)}
+                className="rounded bg-slate-950 border-slate-700 text-amber-500 focus:ring-0"
+              />
+              <label htmlFor="unloading" className="text-xs text-slate-300">
+                Буулгалт хийх (15,000₮/тн, мин 15,000₮)
+              </label>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400">Цагийн нөхцөл</label>
+            <select
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-slate-200"
+            >
+              <option value="STANDARD">Энгийн</option>
+              <option value="NIGHT">Шөнө (−10%, хөдөө биш)</option>
+              <option value="EXPRESS">Яаралтай (+30–50%)</option>
+            </select>
+          </div>
+
           <input
-            placeholder="Харилцагчийн нэр (заавал биш)"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
+            placeholder="Харилцагчийн нэр"
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
             value={customerName}
             onChange={(e) => setCustomerName(e.target.value)}
           />
           <input
-            placeholder="Утас (заавал биш)"
-            type="tel"
-            inputMode="tel"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
+            placeholder="Утас"
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
             value={customerPhone}
             onChange={(e) => setCustomerPhone(e.target.value)}
           />
 
-          {(features.enabled('EBARIMT') || billType === 'COMPANY' || usesInvoice) && (
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400">
-              {features.enabled('EBARIMT') ? 'И-Баримт' : 'Худалдан авагч (нэхэмжлэхэд)'}
-              {usesInvoice && <span className="font-normal"> — заавал биш, дараа нь сольж болно</span>}
-            </label>
+            <label className="text-xs font-semibold text-slate-400">И-Баримт</label>
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
@@ -979,17 +537,16 @@ export default function CheckoutPOS() {
             {billType === 'COMPANY' && (
               <input
                 placeholder="Байгууллагын РД"
-                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                 value={customerRegNumber}
                 onChange={(e) => setCustomerRegNumber(e.target.value.trim())}
               />
             )}
           </div>
-          )}
           {ourDelivery && (
             <input
               placeholder="Хүргэлтийн хаяг"
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
+              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
             />
@@ -1005,14 +562,9 @@ export default function CheckoutPOS() {
                 type="button"
                 onClick={() => {
                   setPaymentMode('SPLIT');
-                  setCashManual(false);
                   setSplitCash(totalMnt);
                   setSplitCard(0);
                   setSplitQpay(0);
-                  setSplitCredit(0);
-                  setSplitTransfer(0);
-                  setSplitContract(0);
-                  setSplitInvoice(0);
                 }}
                 className={chipClass(paymentMode === 'SPLIT', 'bg-slate-100 text-slate-950 border-slate-100 font-bold')}
               >
@@ -1030,53 +582,6 @@ export default function CheckoutPOS() {
                 <button type="button" onClick={() => setPaymentMethod('CARD')} className={chipClass(paymentMethod === 'CARD', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}>
                   Карт (POS)
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('TRANSFER')}
-                  className={`col-span-3 ${chipClass(paymentMethod === 'TRANSFER', 'bg-indigo-600 text-white border-indigo-500 font-semibold')}`}
-                >
-                  Банкны шилжүүлэг — мөнгө орсны дараа «Мөнгө орсон» дарж батална
-                </button>
-                {invoiceOffered && (
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('INVOICE')}
-                    className={`col-span-3 ${chipClass(paymentMethod === 'INVOICE', 'bg-sky-600 text-white border-sky-400 font-semibold')}`}
-                  >
-                    Нэхэмжлэх (дараа шилжүүлгээр)
-                  </button>
-                )}
-                {paymentMethod === 'INVOICE' && (
-                  <p className="col-span-3 rounded-lg border border-sky-800 bg-sky-950/30 px-2 py-1.5 text-[11px] text-sky-100">
-                    Авагчийг дараа нь нэмж болно; бараа мөнгө орсны дараа олгогдоно.
-                    {!customer && <span className="block text-slate-400">Авагч сонгоогүй бол нэхэмжлэх дээр «Төлөгч» хоосон мөртэй хэвлэгдэнэ.</span>}
-                  </p>
-                )}
-                {creditOffered && (
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('CREDIT')}
-                    className={`col-span-3 ${chipClass(paymentMethod === 'CREDIT', 'bg-amber-600 text-white border-amber-500 font-semibold')}`}
-                  >
-                    Дараа төлөх (зээлээр олгох)
-                  </button>
-                )}
-                {contractOffered && (
-                  <button
-                    type="button"
-                    disabled={totalMnt > (partnerPayable ?? 0)}
-                    onClick={() => setPaymentMethod('CONTRACT')}
-                    className={`col-span-3 disabled:opacity-40 ${chipClass(paymentMethod === 'CONTRACT', 'bg-emerald-700 text-white border-emerald-500 font-semibold')}`}
-                  >
-                    Гэрээгээр олгох — бидний өглөгөөс хасна ({tugrik(partnerPayable ?? 0)})
-                  </button>
-                )}
-                {contractOffered && totalMnt > (partnerPayable ?? 0) && (
-                  <p className="col-span-3 text-[11px] text-slate-400">Дүн өглөгөөс их байна — «Хувааж төлөх»-өөр үлдэгдлийг өөр хэлбэрээр авна.</p>
-                )}
-                {customer && !customer.creditAllowed && features.enabled('CREDIT_SALES') && (
-                  <p className="col-span-3 text-[11px] text-slate-500">Энэ харилцагчид дараа төлөх эрх олгогдоогүй (Харилцагчид → менежер).</p>
-                )}
               </div>
             ) : (
               <div className="space-y-2 text-xs">
@@ -1084,122 +589,32 @@ export default function CheckoutPOS() {
                   Бэлэн мөнгө
                   <input
                     type="number"
-                    inputMode="numeric"
                     min={0}
-                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
+                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitCash}
-                    onChange={(e) => {
-                      setCashManual(true);
-                      setSplitCash(Math.max(0, Math.round(Number(e.target.value) || 0)));
-                    }}
+                    onChange={(e) => setSplitCash(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
                 <label className="block text-slate-400">
                   Карт (POS)
                   <input
                     type="number"
-                    inputMode="numeric"
                     min={0}
-                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
+                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitCard}
-                    onChange={(e) => other(setSplitCard)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    onChange={(e) => setSplitCard(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
                 <label className="block text-slate-400">
-                  <span className="flex justify-between">
-                    QPay (зөвхөн энэ дүнгээр QR)
-                    {splitCash > 0 && (
-                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitQpay, splitQpay)}>
-                        үлдсэнийг энд
-                      </button>
-                    )}
-                  </span>
+                  QPay (зөвхөн энэ дүнгээр QR)
                   <input
                     type="number"
-                    inputMode="numeric"
                     min={0}
-                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
+                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm"
                     value={splitQpay}
-                    onChange={(e) => other(setSplitQpay)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                    onChange={(e) => setSplitQpay(Math.max(0, Math.round(Number(e.target.value) || 0)))}
                   />
                 </label>
-                <label className="block text-slate-400">
-                  <span className="flex justify-between">
-                    Банкны шилжүүлэг (орсны дараа батална)
-                    {splitCash > 0 && (
-                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitTransfer, splitTransfer)}>
-                        үлдсэнийг энд
-                      </button>
-                    )}
-                  </span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={0}
-                    className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
-                    value={splitTransfer}
-                    onChange={(e) => other(setSplitTransfer)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-                  />
-                </label>
-                {creditOffered && (
-                  <label className="block text-slate-400">
-                    <span className="flex justify-between">
-                    Дараа төлөх (зээл)
-                    {splitCash > 0 && (
-                      <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitCredit, splitCredit)}>
-                        үлдсэнийг энд
-                      </button>
-                    )}
-                  </span>
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
-                      value={splitCredit}
-                      onChange={(e) => other(setSplitCredit)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-                    />
-                  </label>
-                )}
-                {invoiceOffered && (
-                  <label className="block text-slate-400">
-                    <span className="flex flex-wrap justify-between gap-x-2">
-                      Нэхэмжлэх (дараа шилжүүлгээр)
-                      {splitCash > 0 && (
-                        <button type="button" className="text-amber-brand hover:underline" onClick={restTo(setSplitInvoice, splitInvoice)}>
-                          үлдсэнийг энд
-                        </button>
-                      )}
-                    </span>
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
-                      value={splitInvoice}
-                      onChange={(e) => other(setSplitInvoice)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-                    />
-                    {splitInvoice > 0 && (
-                      <span className="mt-1 block text-[11px] text-sky-200">
-                        Энэ дүнгээр нэхэмжлэх гарна; бараа мөнгө орсны дараа олгогдоно. Үлдсэнийг бэлэн эсвэл картаар авна. Авагчийг дараа нь нэмж болно.
-                      </span>
-                    )}
-                  </label>
-                )}
-                {contractOffered && (
-                  <label className="block text-slate-400">
-                    Гэрээгээр — өглөгөөс хасна (≤ {tugrik(partnerPayable ?? 0)})
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      max={partnerPayable ?? 0}
-                      className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-base md:text-sm"
-                      value={splitContract}
-                      onChange={(e) => other(setSplitContract)(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-                    />
-                  </label>
-                )}
                 <p className={splitOk ? 'text-emerald-400' : 'text-amber-400'}>
                   Нийлбэр {tugrik(splitSum)} / {tugrik(totalMnt)}
                   {splitOk ? ' — зөв' : ` — зөрүү ${tugrik(totalMnt - splitSum)}`}
@@ -1211,18 +626,10 @@ export default function CheckoutPOS() {
           <div className="bg-slate-950 p-3 rounded-xl space-y-1 text-xs border border-slate-800/60">
             {b ? (
               <>
-                {deliveryOffered && ourDelivery && b.assignedVehicle && (
-                  <div className="flex justify-between text-slate-400">
-                    <span>Машин:</span>
-                    <span>{VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</span>
-                  </div>
-                )}
-                {quote?.priceList && (
-                  <div className="flex justify-between text-emerald-300">
-                    <span>Үнийн жагсаалт:</span>
-                    <span>{quote.priceList}</span>
-                  </div>
-                )}
+                <div className="flex justify-between text-slate-400">
+                  <span>Хэмжээ / ангилал:</span>
+                  <span>{VEHICLE_LABEL[b.assignedVehicle] ?? b.assignedVehicle}</span>
+                </div>
                 <div className="flex justify-between text-slate-400">
                   <span>Барааны үнэ:</span>
                   <span>{tugrik(b.subtotalMnt)}</span>
@@ -1232,12 +639,12 @@ export default function CheckoutPOS() {
                     <span>Хүргэлт ({selectedZone?.nameMn}):</span>
                     <span>{tugrik(b.deliveryFeeMnt)}</span>
                   </div>
-                ) : deliveryOffered ? (
+                ) : (
                   <div className="flex justify-between text-emerald-400 font-medium">
-                    <span>Өөрөө авах:</span>
-                    <span>0₮</span>
+                    <span>{deliveryType === 'SELF_PICKUP' ? 'Өөрөө авах' : 'Жолооч явуулах'}:</span>
+                    <span>0₮ (Хүргэлт тэглэгдсэн)</span>
                   </div>
-                ) : null}
+                )}
                 {ourDelivery && isUnloading && (
                   <div className="flex justify-between text-slate-400">
                     <span>Буулгалт:</span>
@@ -1261,22 +668,6 @@ export default function CheckoutPOS() {
           </div>
 
           {error && <p className="text-red-400 text-sm whitespace-pre-wrap">{error}</p>}
-          {invoiceFail && (
-            <div className="space-y-2 rounded-lg border border-amber-600 bg-amber-950/40 p-3 text-sm text-amber-100">
-              <p>
-                <b>{invoiceFail.orderNumber}</b> захиалга үүссэн. {invoiceFail.message}
-              </p>
-              <p className="text-[11px] text-amber-200/80">Дахин бүү үүсгээрэй — захиалга аль хэдийн бий.</p>
-              <div className="flex flex-wrap gap-2">
-                <a href={`/orders/${invoiceFail.id}?new=1`} className="btn-primary text-sm">
-                  Захиалга нээж нэхэмжлэх үүсгэх
-                </a>
-                <button type="button" className="btn-ghost text-sm" onClick={() => setInvoiceFail(null)}>
-                  Хаах
-                </button>
-              </div>
-            </div>
-          )}
 
           <button
             type="button"
@@ -1286,7 +677,6 @@ export default function CheckoutPOS() {
           >
             {busy ? 'Илгээж байна…' : confirmLabel}
           </button>
-          {!busy && missing.length > 0 && cart.length > 0 && <p className="text-center text-[11px] text-amber-300">{missing.join(' · ')}</p>}
         </div>
       </div>
     </Shell>
